@@ -1069,6 +1069,18 @@ class PermissionTests(Drive):
 
     # -- search
 
+    def test_a_search_request_whose_pattern_member_holds_a_path_is_asked_never_allowed_by_vbear(self):
+        inside = self.touch(self.work, "a.txt")
+        for key in ("Pattern", "Glob", "IncludePath", "includes", "FileGlob", "ExcludeFolder", "Query"):
+            self.assertEqual(self.permission("search", {"Path": inside, key: "*.py"}, [{"path": inside}])["action"], "allow", key)
+            for bad in ("/etc/*", "../x", "~/x", "a/b", "{a,../b}"):
+                req = self.permission("search", {"Path": inside, key: bad}, [{"path": inside}])
+                self.assertEqual(req["action"], "ask", (key, bad))
+                req = self.permission("search", {key: [bad]}, [])
+                self.assertNotEqual(req["action"], "allow", (key, bad))
+        req = self.permission("read", {"Path": inside, "IncludePath": "/etc/hosts"}, [{"path": inside}])
+        self.assertEqual(req["action"], "ask")
+
     def test_a_search_inside_is_asked_instead_when_the_work_folder_has_a_link_to_the_outside(self):
         inside = self.touch(self.work, "a.txt")
         raw = {"Path": inside, "Query": "made-up"}
@@ -1304,6 +1316,13 @@ class ViolationTests(Drive):
             self.assertEqual(self.search({"Query": "made-up", key: "*.py"}), [], key)
             for bad in (self.work, "/etc/*", "../x", "a/b"):
                 self.assertEqual(len(self.search({"Query": "made-up", key: bad})), 1, (key, bad))
+
+    def test_a_read_that_runs_unasked_with_a_pattern_member_that_holds_a_path_is_a_violation(self):
+        inside = self.touch(self.work, "a.txt")
+        for kind in ("read", "search"):
+            self.assertEqual(self.violates(vars={"KIND": kind, "RAW_INPUT": {"Path": inside, "IncludePath": "*.py"}, "LOCATIONS": [{"path": inside}]}), [], kind)
+            got = self.violates(vars={"KIND": kind, "RAW_INPUT": {"Path": inside, "IncludePath": "/etc/*"}, "LOCATIONS": [{"path": inside}]})
+            self.assertEqual(len(got), 1, kind)
 
     def test_a_search_is_a_violation_when_the_work_folder_has_a_link_to_the_outside_even_with_a_path_inside(self):
         os.symlink(self.out, os.path.join(self.work, "out-link"))

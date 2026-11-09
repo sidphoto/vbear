@@ -2209,7 +2209,7 @@ card"); what it already fixes, and what `tests/test_agy_chat_protocol.py` and ru
 - **The chat stops (a violation) when** a command, a file change, a network use or any other tool ran and VBear had not answered "allow once"
   (or the call changed after the yes: any member of its raw input but a short list of describing ones, or `BypassSandbox`, or the kind of tool), a read ran outside
   the folders without a request, a search ran without a request unless every string in it is a bare name, the work folder has no link to the
-  outside and every place it names is an absolute path with no `~ { * ? [` inside the folders (a member named like a pattern is never a place; the rule of a Claude chat's Glob and Grep), the mode is not `default`, a message is of another
+  outside and every place it names is an absolute path with no `~ { * ? [` inside the folders (a member named like a pattern is never a place, and a string in one that holds `/`, `..` or `~` makes a read or a search a card, never VBear's own yes; the rule of a Claude chat's Glob and Grep), the mode is not `default`, a message is of another
   session, or the model could not be set. The tracker reads nothing after that.
 - **Nothing about the person is kept**: not the plan name, the sign-in methods, the thoughts or the names of the commands and skills.
 

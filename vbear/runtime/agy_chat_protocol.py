@@ -459,6 +459,16 @@ def _raw_paths(raw, kind=None) -> list[str]:
     return out
 
 
+def _pattern_names_a_path(raw, kind) -> bool:
+    """Whether a read or a search holds, in a member that is not read as a place (a pattern, a query, a member named like a pattern
+    even if its name also says path), a string that is more than a bare name: ``/``, ``..`` or ``~``. VBear's own yes covers a bare
+    name only."""
+    if not isinstance(raw, dict):
+        return False
+    return any(not _is_place_key(key, kind) and not all(not cp._pattern_names_a_path(t) for t in _strings_of(value))
+               for key, value in raw.items())
+
+
 def _unreadable_member(raw, kind) -> bool:
     """Whether a file call holds a member that is not on the short list and whose value is neither a string, a list of strings nor a
     plain scalar: it might hold a place VBear cannot read, so the call is refused."""
@@ -873,11 +883,8 @@ class AgyTracker:
         string that is not a place is a bare name (no ``/``, ``..`` or ``~``), every place it names (a member named like a path, and
         the locations) is an absolute path with no ``~``, ``{``, ``*``, ``?`` or ``[`` and is inside the folders, and the work folder
         has no link to the outside. A member named like a pattern is always a pattern, never a place."""
-        raw = rec["raw"]
-        for key, value in raw.items():
-            if not _is_place_key(key, "search"):
-                if not all(not cp._pattern_names_a_path(text) for text in _strings_of(value)):
-                    return "AGY 沒有問就搜尋，而搜尋的內容帶有路徑（/、.. 或 ~），可能讀到工作資料夾以外"
+        if _pattern_names_a_path(rec["raw"], "search"):
+            return "AGY 沒有問就搜尋，而搜尋的內容帶有路徑（/、.. 或 ~），可能讀到工作資料夾以外"
         for place in rec["paths"]:
             if not os.path.isabs(place) or any(c in place for c in "~{*?["):
                 return "AGY 沒有問就搜尋，而搜尋的地方不是一個明確的絕對路徑，可能在工作資料夾以外"
@@ -902,6 +909,8 @@ class AgyTracker:
         if kind == "search":
             return self._search_problem(rec)
         if kind == "read":
+            if _pattern_names_a_path(rec["raw"], "read"):
+                return "AGY 沒有問就讀檔，而讀的內容帶有路徑（/、.. 或 ~），可能讀到工作資料夾以外"
             if not rec["paths"]:
                 return "AGY 沒有問就讀檔，而且看不出讀的是哪個檔案"
             if judge_read(rec["paths"], self.workdir, self.shared).action == "allow":
@@ -975,6 +984,8 @@ class AgyTracker:
             return self._decide_file(rec, raw, extra)
         if category == "read":
             verdict = judge_read(rec["paths"], self.workdir, self.shared)
+            if verdict.action == "allow" and _pattern_names_a_path(raw, kind):
+                return "ask", "搜尋或讀取的內容帶有路徑（/、.. 或 ~），可能讀到資料夾以外，要你允許", extra
             if verdict.action == "allow" and kind == "search" and cp._outward_link(self.workdir):
                 return "ask", "員工的工作資料夾裡有指向資料夾以外的連結，搜尋可能讀到外面的檔案，要你允許", extra
             return verdict.action, verdict.reason, extra
