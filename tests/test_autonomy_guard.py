@@ -50,8 +50,11 @@ Never, whatever the person ticked in 「自己動手」:
      person's own templates, added by P45-2 and P45-3; the behaviour is tested in tests/test_templates_apply.py.)
 
   14. (P46, ADR 0012) an AGY chat asks every time, always runs in AGY's sandbox, and reads and changes nothing of the person's AGY settings:
-     14a, 14b, 14c here (the protocol module's answers, its argv and settings, and ``BypassSandbox``); 14d, 14g, 14h are added by P46-3 and
-     14e, 14f by P46-5. The behaviour is tested in tests/test_agy_chat_protocol.py.
+     14a, 14b, 14c (P46-1: the protocol module's answers, its argv and settings, and ``BypassSandbox``; 14b also holds the AGY settings the
+     chat environment writes and the launch records to the protocol's one table); 14d, 14g, 14h (P46-3: the six variables of the process
+     environment, nothing of the person's own AGY folders read or changed by a whole fake chat, no ``session/set_mode``,
+     ``session/set_config_option`` or ``session/load`` and a model only from the table); 14e, 14f are added by P46-5. The behaviour is
+     tested in tests/test_agy_chat_protocol.py and tests/test_p46_agy_chat_daemon.py.
 
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
 ``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py``, ``vbear/skillbook*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
@@ -63,9 +66,13 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import unittest
 from pathlib import Path
+from unittest import mock
+
+from vbear.runtime import cli_versions
 
 PACKAGE = Path(__file__).resolve().parents[1] / "vbear"
 PATTERNS = ("chief*.py", "dispatch*.py", "group*.py", "autonomy.py", "memory*.py", "runtime/memory*.py", "shared*.py", "runtime/shared*.py",
@@ -1591,8 +1598,28 @@ def banned_flag_uses(source: str, label: str = "<source>") -> list[str]:
     return [f"{label}:{n}: names {flag}" for n, line in enumerate(source.splitlines(), 1) for flag in AGY_BANNED_FLAGS if flag in line]
 
 
+AGY_ACCOUNT_PREFIXES = ("ANTIGRAVITY_", "GEMINI_", "GOOGLE_")      # variables of the person's account or keys: never named in code
+AGY_BANNED_METHODS = ("session/set_mode", "session/set_config_option", "session/load")
+
+
+def account_variable_uses(source: str, label: str = "<source>") -> list[str]:
+    """Every string in code (not a docstring) that starts with the name of a variable of the person's AGY or Google account."""
+    tree = ast.parse(source, filename=label)
+    docs = _docstring_ids(tree)
+    return [f"{label}:{n.lineno}: names {n.value}" for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docs
+            and any(n.value.startswith(prefix) for prefix in AGY_ACCOUNT_PREFIXES)]
+
+
+def banned_method_uses(source: str, label: str = "<source>") -> list[str]:
+    """Every line (code, comment or docstring) that names a message the AGY chat never writes. ``session/set_model`` is not
+    ``session/set_mode``: the name ends there."""
+    return [f"{label}:{i}: names {method}" for i, line in enumerate(source.splitlines(), 1) for method in AGY_BANNED_METHODS
+            if re.search(re.escape(method) + r"(?![A-Za-z0-9_])", line)]
+
+
 class AgyChatRules(unittest.TestCase):
-    """P46-1, rules 14a-14c."""
+    """P46-1, rules 14a-14c; P46-3, rules 14b (the one table), 14d and 14h."""
 
     def agy_protocol(self):
         from vbear.runtime import agy_chat_protocol as acp
@@ -1709,6 +1736,209 @@ class AgyChatRules(unittest.TestCase):
                 "sessionId": fx.SESSION, "options": [{"optionId": "allow", "kind": "allow_once"}, {"optionId": "deny", "kind": "reject_once"}],
                 "toolCall": {"toolCallId": "c-1", "title": "T", "kind": "execute", "status": "pending", "rawInput": raw}}})
             self.assertEqual([d["action"] for k, d in out if k == "permission_request"], ["ask"], raw)
+
+    def test_14b_the_settings_the_chat_environment_writes_and_the_launch_records_are_the_one_table(self):
+        from vbear.runtime import agent_sessions, agy_chat_env
+        acp = self.agy_protocol()
+        newest = acp.VERSIONS[tuple(acp.VERSIONS)[-1]]
+        self.assertIs(agy_chat_env.SETTINGS, newest.settings)
+        self.assertEqual(agy_chat_env.SETTINGS_BYTES, acp.settings_bytes(newest))
+        for version, consts in acp.VERSIONS.items():
+            recorded = agent_sessions.agy_chat_settings(version, "/s/agy-chat-home")
+            self.assertEqual(recorded["settings"], consts.settings)
+            self.assertEqual((recorded["model"], recorded["sandbox"], recorded["argv"]),
+                             (consts.model_id, True, acp.argv_for(consts, "/s/agy-chat-home")))
+        # no file but the protocol module spells a value of the settings out
+        for path in agy_files(AGY_PATTERNS):
+            if path.name == "agy_chat_protocol.py":
+                continue
+            text = path.read_text(encoding="utf-8")
+            # (the session reads ``toolPermission`` out of the table for the record's permission_mode: a key read, not a value spelled out)
+            for word in ("request-review", "enableTerminalSandbox", "allowNonWorkspaceAccess", "useG1Credits"):
+                code = [n.value for n in ast.walk(ast.parse(text)) if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                        and n.value == word]
+                self.assertEqual(code, [], f"{path.name} spells {word} out")
+
+    # 14d: the environment of the process is the six variables of the table and nothing of the account, however polluted the daemon's is
+    def test_14d_the_environment_is_exactly_the_six_variables_whatever_the_source_holds(self):
+        from vbear.runtime import agent_sessions
+        acp = self.agy_protocol()
+        polluted = {"PATH": "/usr/bin", "USER": "someone", "LOGNAME": "someone", "LANG": "C", "TMPDIR": "/var/tmp/x", "HOME": "/real/home",
+                    "ANTIGRAVITY_PERM_GRANTS": "must-not-pass", "GEMINI_API_KEY": "must-not-pass", "GOOGLE_API_KEY": "must-not-pass",
+                    "GOOGLE_APPLICATION_CREDENTIALS": "must-not-pass", "GOOGLE_CLOUD_PROJECT": "must-not-pass", "OPENAI_API_KEY": "x",
+                    "ANTHROPIC_API_KEY": "x", "TERM": "xterm", "SSH_AUTH_SOCK": "/x", "CODEX_HOME": "/x"}
+        for version, consts in acp.VERSIONS.items():
+            self.assertEqual(consts.env_keys, ("PATH", "USER", "LOGNAME", "LANG", "TMPDIR", "HOME"))
+            got = agent_sessions.agy_chat_env({"cli_version": version}, polluted)
+            self.assertEqual(sorted(got), sorted(consts.env_keys))
+            self.assertEqual(got, {k: polluted[k] for k in consts.env_keys})
+            self.assertNotIn("must-not-pass", json.dumps(got))
+
+    def test_14d_no_agy_file_names_a_variable_of_the_account_in_code(self):
+        problems = []
+        for path in agy_files(AGY_BANNED_PATTERNS):
+            problems += account_variable_uses(path.read_text(encoding="utf-8"), str(path.relative_to(PACKAGE)))
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_14d_the_scan_fires_on_small_made_up_sources(self):
+        for source in ('KEYS = ["ANTIGRAVITY_PERM_GRANTS"]\n', 'env["GEMINI_API_KEY"] = os.environ["GEMINI_API_KEY"]\n',
+                       'X = {"GOOGLE_API_KEY": 1}\n', 'def f(env):\n    env.pop("GOOGLE_APPLICATION_CREDENTIALS")\n'):
+            self.assertTrue(account_variable_uses(source), source)
+        for source in ('"""Says ANTIGRAVITY_* and GEMINI_* in prose."""\nX = 1\n', 'KEYS = ("PATH", "USER", "LOGNAME", "LANG", "TMPDIR", "HOME")\n'):
+            self.assertEqual(account_variable_uses(source), [], source)
+
+    # 14h: nothing writes a message that changes the mode, the settings of the session or loads one, and the model comes only from the table
+    def test_14h_no_agy_file_names_a_message_that_changes_the_mode_or_the_config_or_loads_a_session(self):
+        problems = []
+        files = agy_files(AGY_BANNED_PATTERNS)
+        self.assertIn("agy_chat_session.py", [p.name for p in files])
+        for path in files:
+            problems += banned_method_uses(path.read_text(encoding="utf-8"), str(path.relative_to(PACKAGE)))
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_14h_the_scan_fires_on_small_made_up_sources(self):
+        for method in AGY_BANNED_METHODS:
+            self.assertTrue(banned_method_uses(f'LINE = {{"method": "{method}"}}\n'), method)
+            self.assertTrue(banned_method_uses(f"# {method} would switch it\n"), method)
+        self.assertEqual(banned_method_uses('LINE = {"method": "session/set_model"}\n# session/set_model after every start\n'), [])
+        self.assertEqual(banned_method_uses('X = "session/loaded"\n'), [])
+
+    def test_14h_the_protocol_has_a_function_for_each_message_it_writes_and_for_no_other(self):
+        acp = self.agy_protocol()
+        names = sorted(n for n in dir(acp) if n.endswith("_line") and not n.startswith("_") and callable(getattr(acp, n)))
+        self.assertEqual(names, ["answer_line", "cancel_line", "error_line", "initialize_line", "prompt_line", "session_new_line",
+                                 "session_resume_line", "set_model_line"])
+
+    def test_14h_the_only_methods_written_are_the_known_ones_and_the_model_is_the_tables(self):
+        acp = self.agy_protocol()
+        consts = acp.VERSIONS["1.5.3"]
+        sid = "00000000-0000-4000-8000-0000000000a1"
+        options = [{"optionId": "a", "kind": "allow_once"}, {"optionId": "d", "kind": "reject_once"}]
+        lines = [acp.initialize_line(1), acp.session_new_line(2, cwd="/w"), acp.session_resume_line(3, sid, cwd="/w"),
+                 acp.set_model_line(4, sid, consts), acp.prompt_line(5, sid, "hi"), acp.cancel_line(sid)]
+        methods = [json.loads(x)["method"] for x in lines]
+        self.assertEqual(methods, ["initialize", "session/new", "session/resume", "session/set_model", "session/prompt", "session/cancel"])
+        self.assertEqual(json.loads(acp.set_model_line(4, sid, consts))["params"]["modelId"], consts.model_id)
+        self.assertNotIn("method", json.loads(acp.answer_line(6, options, "allow")))              # an answer, not a request
+        import inspect
+        self.assertEqual(list(inspect.signature(acp.set_model_line).parameters), ["request_id", "session_id", "consts"])
+
+
+# 14g: a whole fake chat reads and changes nothing of the person's own AGY folders; 14d end to end
+from tests.test_p46_agy_chat_daemon import AgyCase, file_call, permission      # noqa: E402
+
+
+class AgyChatHomeIsLeftAlone(AgyCase):
+    DECOYS = (".gemini/antigravity-cli/settings.json", ".gemini/GEMINI.md", ".gemini/config/hooks.json",
+              ".agents/skills/decoy-skill/SKILL.md", ".agents/skills/decoy-skill/run.sh", ".agents/workflows/decoy.md",
+              ".agents/agents.json")
+
+    def snapshot(self):
+        out = {}
+        for root, dirs, files in os.walk(self.home):
+            for name in dirs + files:
+                full = Path(root) / name
+                if name.startswith("fake-agy.json"):
+                    continue
+                st = os.lstat(full)
+                out[str(full.relative_to(self.home))] = (st.st_mode, st.st_size, st.st_mtime_ns, st.st_ino)
+        return out
+
+    def test_14g_a_whole_chat_with_an_allow_a_deny_and_the_shared_folder_leaves_the_persons_agy_folders_alone(self):
+        decoys = []
+        for rel in self.DECOYS:
+            path = self.home / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("decoy " + rel)
+            decoys.append(path)
+        os.chmod(self.home / ".agents" / "skills" / "decoy-skill" / "run.sh", 0o755)
+        for path in decoys:                                    # nothing may open one: a try would fail, and is seen below
+            path.chmod(0o000)
+        before = self.snapshot()
+        opened = []
+        real_open, real_listdir, real_scandir = os.open, os.listdir, os.scandir
+
+        def under_decoys(path) -> bool:
+            try:
+                text = os.fspath(path)
+            except TypeError:
+                return False
+            return str(self.home / ".gemini") in text or str(self.home / ".agents") in text
+
+        def watch_open(path, *args, **kwargs):
+            if under_decoys(path):
+                opened.append(("open", os.fspath(path)))
+            return real_open(path, *args, **kwargs)
+
+        def watch_listdir(path=".", *args, **kwargs):
+            if under_decoys(path):
+                opened.append(("listdir", os.fspath(path)))
+            return real_listdir(path, *args, **kwargs)
+
+        def watch_scandir(path=".", *args, **kwargs):
+            if under_decoys(path):
+                opened.append(("scandir", os.fspath(path)))
+            return real_scandir(path, *args, **kwargs)
+
+        with mock.patch("os.open", watch_open), mock.patch("os.listdir", watch_listdir), mock.patch("os.scandir", watch_scandir), \
+                mock.patch("builtins.open", side_effect=self.refuse_decoys(open)):
+            with mock.patch.object(cli_versions, "shared_verified", return_value=True):
+                self.configure("permission", permission(**file_call()), "permission")
+                first = self.open_chat("emp-1")
+                self.assertTrue(self.send(first, shared=True)["ok"])
+                self.assertTrue(self.answer(first, self.wait_card(first), "allow")["ok"])
+                self.wait_turn(first, 1)
+                self.rpc("chat_close", chat_id=first)
+                self.wait_gone(first)
+                second = self.open_chat("emp-2")
+                self.assertTrue(self.send(second)["ok"])
+                self.assertTrue(self.answer(second, self.wait_card(second), "deny")["ok"])
+                self.wait_turn(second, 1)
+        self.assertEqual(opened, [])
+        for path in decoys:
+            path.chmod(0o000)                                   # unchanged
+        self.assertEqual(self.snapshot(), before, "nothing in the persons HOME was made, changed or removed")
+        self.assertEqual(len(self.starts()), 2)
+
+    def refuse_decoys(self, real):
+        def guarded(file, *args, **kwargs):
+            text = os.fspath(file) if isinstance(file, (str, bytes, os.PathLike)) else ""
+            if str(self.home / ".gemini") in text or str(self.home / ".agents") in text:
+                raise AssertionError(f"opened {text}")
+            return real(file, *args, **kwargs)
+        return guarded
+
+    def test_14g_the_hooks_name_is_only_looked_at(self):
+        hooks = self.home / ".agents" / "hooks.json"
+        hooks.parent.mkdir()
+        hooks.write_text("{}")
+        before = (hooks.stat().st_mtime_ns, hooks.read_bytes())
+        self.configure("text")
+        chat_id = self.open_chat()
+        with mock.patch("builtins.open", side_effect=self.refuse_decoys(open)):
+            self.assertEqual(self.send(chat_id)["error"]["code"], "agy_hooks")
+        self.assertEqual((hooks.stat().st_mtime_ns, hooks.read_bytes()), before)
+        self.assertEqual(self.fake_log(), [])
+
+    def test_14d_a_daemon_that_holds_the_variables_of_the_account_passes_none_of_them_on(self):
+        polluted = {"ANTIGRAVITY_PERM_GRANTS": "must-not-pass", "GEMINI_API_KEY": "must-not-pass", "GOOGLE_API_KEY": "must-not-pass",
+                    "GOOGLE_APPLICATION_CREDENTIALS": "must-not-pass", "OPENAI_API_KEY": "must-not-pass"}
+        self.configure("text")
+        chat_id = self.open_chat()
+        with mock.patch.dict(os.environ, polluted):
+            self.assertTrue(self.send(chat_id)["ok"])
+            self.wait_turn(chat_id, 1)
+        self.assertEqual(sorted(self.starts()[0]["env_keys"]), sorted(["PATH", "USER", "LOGNAME", "LANG", "TMPDIR", "HOME"]))
+
+    def test_14h_a_whole_fake_chat_writes_only_the_known_methods(self):
+        self.configure("permission")
+        chat_id = self.open_chat()
+        self.assertTrue(self.send(chat_id)["ok"])
+        self.wait_card(chat_id)
+        self.assertTrue(self.rpc("chat_stop", chat_id=chat_id)["result"]["stopped"])
+        self.wait_turn(chat_id, 1)
+        self.assertEqual(self.methods().count("session/prompt"), 1)
+        self.assertLessEqual(set(self.methods()), {"initialize", "session/new", "session/set_model", "session/prompt", "session/cancel"})
 
 
 if __name__ == "__main__":
