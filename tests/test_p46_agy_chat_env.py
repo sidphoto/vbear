@@ -203,7 +203,7 @@ class ChatHomeTests(FolderCase):
         self.make_home()
         names = ["GEMINI.md", "AGENTS.md", "gemini.md", "Agents.MD",
                  "config/hooks.json", "config/skills", "config/workflows", "config/global_workflows", "config/plugins",
-                 "config/projects", "config/Hooks.json"]
+                 "config/Hooks.json"]
         for name in names:
             for kind in ("file", "dir", "link"):
                 with self.subTest(name=name, kind=kind):
@@ -219,6 +219,108 @@ class ChatHomeTests(FolderCase):
                     else:
                         path.unlink()
         self.assertEqual(env.check_chat_home(self.state), self.chat_home, "clean again")
+
+    def test_what_agy_makes_there_by_itself_is_accepted_and_every_other_name_is_refused_by_name(self):
+        self.make_home()
+        for name in ("config/projects", "config/config.json", "config/mcp_config.json", "antigravity-cli/conversations",
+                     "antigravity-cli/logs/x.log"):
+            path = self.chat_home / name
+            path.parent.mkdir(exist_ok=True, parents=True, mode=0o700)
+            path.mkdir() if not name.endswith((".json", ".log")) else path.write_text("{}" if name.endswith(".json") else "x")
+        (self.chat_home / "config" / "projects" / "p1").mkdir()
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home)
+        for where in ("", "config"):
+            for kind in ("file", "dir"):
+                with self.subTest(where=where, kind=kind):
+                    path = self.chat_home / where / "made-up-item"
+                    path.write_text("x") if kind == "file" else path.mkdir()
+                    why = self.refused(env.check_chat_home, self.state, code="foreign_settings")
+                    self.assertIn("made-up-item", why)
+                    self.assertNotIn(str(self.tmp), why)
+                    path.unlink() if kind == "file" else path.rmdir()
+        extra = [self.chat_home / "stranger-a", self.chat_home / "stranger-b"]
+        for path in extra:
+            path.write_text("x")
+        why = self.refused(env.check_chat_home, self.state, code="foreign_settings")
+        self.assertIn("stranger-a、stranger-b", why, "all the names are said, so one run shows them all")
+        self.assertNotEqual(env.home_state(self.state)[0], "ok")
+        for path in extra:
+            path.unlink()
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home)
+
+    def test_the_projects_folder_is_looked_into_empty_project_folders_pass_and_nothing_else_does(self):
+        self.make_home()
+        projects = self.chat_home / "config" / "projects"
+        projects.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home, "no project folder at all")
+        (projects / "p-0001").mkdir()
+        (projects / "p-0002").mkdir()
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home, "project folders with nothing in them")
+        bad = {
+            "a name nobody knows": "p-0001/notes.txt",
+            "a file where a project folder belongs": "stray-file",
+            "hooks": "p-0001/hooks.json",
+            "hooks in other letters": "p-0001/HOOKS.JSON",
+            "rules": "p-0001/rules",
+            "a rules file": "p-0001/rules.md",
+            "workflows": "p-0002/workflows",
+            "global workflows": "p-0002/global_workflows",
+            "skills deep down": "p-0001/a/b/skills",
+            "settings": "p-0001/settings.json",
+            "a gemini file deep down": "p-0001/a/GEMINI.md",
+            "an agents file": "p-0002/AGENTS.md",
+            "an agent folder": "p-0002/.agents",
+            "plugins": "p-0001/plugins",
+        }
+        for what, name in bad.items():
+            for kind in ("file", "dir"):
+                if what == "a file where a project folder belongs" and kind == "dir":
+                    continue                                  # an empty folder is a project folder
+                with self.subTest(what=what, kind=kind):
+                    path = projects / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    if kind == "file":
+                        path.write_text("x")
+                    else:
+                        path.mkdir(exist_ok=True)
+                    why = self.refused(env.check_chat_home, self.state, code="foreign_settings")
+                    self.assertIn(Path(name).name.casefold(), why.casefold())
+                    self.assertNotIn(str(self.tmp), why, "the sentence does not print a path")
+                    self.assertIn("projects/", why)
+                    shutil.rmtree(path) if path.is_dir() else path.unlink()
+                    for left in sorted(projects.rglob("*"), key=lambda q: -len(q.parts)):
+                        if left.name in ("a", "b") and left.is_dir() and not any(left.iterdir()):
+                            left.rmdir()
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home, "clean again")
+
+    def test_a_link_in_the_projects_folder_and_a_projects_folder_that_is_a_link_or_a_file_are_refused(self):
+        self.make_home()
+        projects = self.chat_home / "config" / "projects"
+        projects.mkdir(parents=True, exist_ok=True, mode=0o700)
+        (projects / "p-0001").symlink_to(self.tmp)
+        self.refused(env.check_chat_home, self.state, code="foreign_settings")
+        (projects / "p-0001").unlink()
+        (projects / "p-0001").mkdir()
+        (projects / "p-0001" / "ln").symlink_to(self.tmp)
+        self.refused(env.check_chat_home, self.state, code="foreign_settings")
+        shutil.rmtree(projects)
+        projects.symlink_to(self.tmp)
+        self.refused(env.check_chat_home, self.state, code="foreign_settings")
+        projects.unlink()
+        projects.write_text("a file")
+        self.refused(env.check_chat_home, self.state, code="foreign_settings")
+
+    def test_a_projects_folder_that_is_too_deep_or_too_full_is_refused(self):
+        self.make_home()
+        projects = self.chat_home / "config" / "projects"
+        deep = projects / "p-0001" / "d1" / "d2" / "d3" / "d4" / "d5"
+        deep.mkdir(parents=True, mode=0o700)
+        self.refused(env.check_chat_home, self.state, code="foreign_settings")
+        shutil.rmtree(projects)
+        projects.mkdir(mode=0o700)
+        for i in range(env.PROJECTS_MAX_ENTRIES + 1):
+            (projects / f"p-{i:05d}").mkdir()
+        self.refused(env.check_chat_home, self.state, code="foreign_settings")
 
     def test_a_config_folder_that_is_a_link_or_a_file_is_refused(self):
         self.make_home()

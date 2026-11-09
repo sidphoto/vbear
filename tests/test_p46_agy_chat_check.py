@@ -33,19 +33,22 @@ ALL_CHECKS = ("admin_policy", "no_home_hooks", "initialize", "session_id_uuid", 
 
 class CheckCase(unittest.TestCase):
     policy = None
+    in_home = False                    # the state folder (and the fake AGY) are under the person's HOME, as on a real machine
 
     def setUp(self):
         self.tmp = Path(os.path.realpath(tempfile.mkdtemp(prefix="vba-", dir="/tmp")))
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.addCleanup(leftover.assert_clean, self.tmp)        # runs after the daemon is stopped and before the folder goes
-        self.state = self.tmp / "st"
-        self.state.mkdir(mode=0o700)
         self.home = self.tmp / "home"
         self.home.mkdir()
+        self.state = (self.home if self.in_home else self.tmp) / "st"
+        self.state.mkdir(mode=0o700)
         self.tmpdir = self.tmp / "tmpdir"
         self.tmpdir.mkdir()
         self.out = self.tmp / "out"
         self.out.mkdir()
+        self.addCleanup(setattr, tempfile, "tempdir", tempfile.tempdir)        # gettempdir() caches the TMPDIR of this test
+        tempfile.tempdir = None
         env = mock.patch.dict(os.environ, {"VBEAR_HOME": str(self.state), "HOME": str(self.home), "TMPDIR": str(self.tmpdir),
                                            "VBEAR_RUNTIME_AUTOSTART": "0"})
         env.start()
@@ -64,7 +67,7 @@ class CheckCase(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
         self.conf_path = self.home / "fake-agy.json"
-        self.binary = Path(fake.write_launcher(self.tmp / "agy", self.conf_path))
+        self.binary = Path(fake.write_launcher((self.home if self.in_home else self.tmp) / "agy", self.conf_path))
         self.fake()
 
     def fake(self, flags=None, **conf):
@@ -230,6 +233,76 @@ class PassTests(CheckCase):
         starts = [r for r in self.fake_log() if r["event"] == "start"]
         self.assertTrue(all(f"{self.state}/agc-" in s["cwd"] for s in starts), [s["cwd"] for s in starts])
         self.assertEqual(seen, [str(self.state)])
+
+
+class RealMachineShapeTests(CheckCase):
+    """What the first real run showed (the shapes only, with made-up values): AGY makes config/projects in its settings folder, prints
+    three kinds of update the table did not know, and the state folder, the fake and the logs are under the person's home."""
+
+    in_home = True
+
+    def test_with_everything_under_home_the_home_path_is_not_account_data_and_the_report_says_tilde(self):
+        code, report = self.check()
+        self.assertEqual((code, report["passed"], report.get("error")), (0, True, None), report.get("checks"))
+        text = (self.out / "report.json").read_text() + self.printed
+        self.assertNotIn(str(self.home), text)
+        self.assertTrue(report["binary"].startswith("~/"), report["binary"])
+        self.assertTrue(report["checks"]["no_account_data"]["pass"])
+
+    def test_what_agy_makes_by_itself_is_accepted_and_the_new_kinds_are_not_anomalies(self):
+        code, report = self.check()
+        self.assertEqual(code, 0, report.get("error"))
+        self.assertIn("config/projects", report["observations"]["home_items"])
+        self.assertEqual(report["anomalies"], ["violation"], "only the link step ends with one, on purpose")
+        self.assertEqual(report["observations"]["link_read"], "violation_stopped")
+        for kind in ("config_option_update", "session_info_update", "user_message_chunk"):
+            self.assertIn(kind, report["observations"]["protocol"]["updates"])
+        self.assertTrue(report["checks"]["home_clean"]["pass"])
+        self.assertTrue(report["checks"]["records_clean"]["pass"])
+
+    def test_an_item_nobody_knows_in_the_settings_folder_fails_home_clean_by_name(self):
+        code, report = self.check({"home_stranger": True})
+        self.assert_failed(code, report, "home_clean")
+        self.assertIn("stranger-item", report["checks"]["home_clean"]["reason"])
+
+    def test_a_hooks_file_hidden_inside_a_project_folder_fails_home_clean_by_where_it_is(self):
+        code, report = self.check({"project_hook": True})
+        self.assert_failed(code, report, "home_clean")
+        self.assertIn("projects/p-0001/hooks.json", report["checks"]["home_clean"]["reason"])
+
+    def test_tidy_writes_the_home_path_as_tilde_everywhere_in_nested_values(self):
+        got = cc.tidy({"a": "/h/me/x", "b": ["/h/me", {"c": "no /h/m"}], "n": 3}, "/h/me")
+        self.assertEqual(got, {"a": "~/x", "b": ["~", {"c": "no /h/m"}], "n": 3})
+        self.assertEqual(cc.tidy("/x", "/"), "/x", "a home of one character is left alone")
+
+    def test_one_leak_takes_out_only_its_own_part_and_the_report_says_which_kind(self):
+        code, report = self.check({"email_in_reply": True})
+        self.assert_failed(code, report, "no_account_data")
+        self.assertEqual(report["checks"]["no_account_data"]["found"], ["email"])
+        self.assertIn("protocol", report["observations"], "the evidence that was clean stays")
+        self.assertIn("turns", report)
+        self.assertIn("帳號資料的類別：email", self.printed)
+        self.assertNotIn("person@example.org", (self.out / "report.json").read_text() + self.printed)
+
+    def test_the_sentences_vbear_wrote_and_what_agy_called_are_in_the_report_and_in_words(self):
+        code, report = self.check({"ls_unasked": True})
+        self.assert_failed(code, report, "ls_asks")
+        self.assertTrue(report["error_messages"], report.keys())
+        self.assertIn("VBear 紀錄的錯誤：" + report["error_messages"][0], self.printed)
+        self.assertIn("violation", report["anomalies"])
+        self.assertTrue(any(c["tool"] for c in report["calls"]))
+        self.assertIn("tool_call", report["record_kinds"])
+        ls = report["observations"]["ls_ask"]
+        self.assertEqual(ls["cards"], 0)
+        self.assertTrue(ls["calls"])
+        self.assertIn("ls -a 那個回合看到的：卡片 0 張", self.printed)
+
+    def test_when_agy_asks_before_ls_the_observation_says_so(self):
+        code, report = self.check()
+        self.assertEqual(code, 0, report.get("error"))
+        ls = report["observations"]["ls_ask"]
+        self.assertEqual((ls["cards"], ls["turn_ended"], ls["ran_without_a_card"], ls["errors"]), (1, "result", False, []))
+        self.assertNotIn("ls -a 那個回合", self.printed)
 
 
 class RefusalTests(CheckCase):

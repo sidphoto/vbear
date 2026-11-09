@@ -32,6 +32,8 @@ The configuration is the JSON file named by $FAKE_AGY_CONFIG (``write_launcher``
   cancel_keeps_running the command goes on after session/cancel (and the process group's end)
   forgets              the code word is not remembered after a resume
   home_item            the --gemini-dir folder gets a hooks file when the process that answered resume_ask ends
+  home_stranger        the --gemini-dir folder gets an item nobody knows (at the end of the process that answered resume_ask)
+  project_hook         a hooks file appears inside config/projects/p-0001 (at the end of the process that answered resume_ask)
   auth_error           session/new is answered with "Authentication required"
   add_dir_ignored      --add-dir does not make the shared folder writable for a command
   only_shared          outside_edit_escapes works only when the shared folder is on
@@ -176,6 +178,10 @@ class Agent:
                     self.dispatch(msg)
         except Eof:
             pass
+        if self.flags.get("project_hook") and self.gemini and self.last_step == "resume_ask":
+            (Path(self.gemini) / "config" / "projects" / "p-0001" / "hooks.json").write_text("{}")
+        if self.flags.get("home_stranger") and self.gemini and self.last_step == "resume_ask":
+            (Path(self.gemini) / "stranger-item").write_text("x")
         if self.flags.get("home_item") and self.gemini and self.last_step == "resume_ask":
             (Path(self.gemini) / "config").mkdir(parents=True, exist_ok=True)
             (Path(self.gemini) / "config" / "hooks.json").write_text("{}")
@@ -208,6 +214,7 @@ class Agent:
         (base / "config").mkdir(parents=True, exist_ok=True)
         (base / "config" / "config.json").write_text('{"plugins": ["swarm"]}')
         (base / "config" / "mcp_config.json").write_text("{}")
+        (base / "config" / "projects" / "p-0001").mkdir(parents=True, exist_ok=True)       # a real AGY 1.5.3 makes this by itself
         if method == "session/new":
             self.session = "not-a-uuid" if self.flags.get("session_id_not_uuid") else str(uuid.uuid4())
             self.sessions_dir()
@@ -218,6 +225,9 @@ class Agent:
             result = {"models": MODELS, "modes": MODES, "configOptions": []}
         self.write({"jsonrpc": "2.0", "id": rid, "result": result})
         self.update(sessionUpdate="available_commands_update", availableCommands=[{"name": n, "description": "made-up"} for n in SKILLS])
+        # kinds a real AGY 1.5.3 prints that the first version of the table did not know (shapes made up; nothing here is real data)
+        self.update(sessionUpdate="config_option_update", configOptions=[{"id": "model", "currentValue": "made-up-model"}])
+        self.update(sessionUpdate="session_info_update", title="Made-up title", updatedAt="2026-01-01T00:00:00Z")
 
     # -- one request of the agent, and what comes of the answer
 
@@ -403,6 +413,7 @@ class Agent:
         step = (re.match(r"\[vbear-check:(\w+)\]", text) or [None, None])[1]
         self.last_step = step or self.last_step
         change = re.match(r"請把 (\S+) 寫成下面的內容：(.*)", text, re.S)
+        self.update(sessionUpdate="user_message_chunk", content={"type": "text", "text": text[:60]})     # the echo of the message
         self.update(sessionUpdate="agent_thought_chunk", content={"type": "text", "text": "(made-up thought)"})
         reply = self.act(step, text, change)
         if self.flags.get("settings_changed") and self.turns == 0 and self.gemini:
