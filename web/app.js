@@ -12681,6 +12681,13 @@ function codexChatReady(res) {
   const r = rows.find((t) => t && typeof t === "object" && t.id === "codex");
   return !!r && r.ready === true && !!r.chat_login && typeof r.chat_login === "object" && r.chat_login.state === "logged_in";
 }
+// True when the start-up status says the AGY that chats is ready: installed, and this version has passed the chat check
+// (the row's `chat.verified`, P46-5). AGY has no login of its own for chat, so whether the person marked it as logged in does not matter.
+function agyChatReady(res) {
+  const rows = res && typeof res === "object" && Array.isArray(res.tools) ? res.tools : [];
+  const r = rows.find((t) => t && typeof t === "object" && t.id === "agy");
+  return !!r && r.installed === true && !!r.chat && typeof r.chat === "object" && r.chat.verified === true;
+}
 // ---------- end of the Claude Code note ---------------------------------------------------------------------------------
 
 // ---------- the first-time page (第一次打開 VBear, v0.12) -----------------------------------------------------------------
@@ -13287,8 +13294,9 @@ const CHAT_SUPPORT_WORD = {
   policy: ["被管理員政策擋住", "b-bad"], unknown: ["讀不到 Claude Code 的版本", "b-warn"],
 };
 const CHAT_TOOL_TEXT = { Bash: "執行指令（Bash）", Edit: "修改檔案（Edit）", Write: "寫入檔案（Write）", Read: "讀檔（Read）", Grep: "搜尋內容（Grep）", Glob: "找檔名（Glob）",
-  command: "執行指令", file_change: "修改檔案" };       // the last two are a Codex chat's
-const CHAT_TOOL_NAME = { claude: "Claude Code", codex: "Codex", "claude-chat": "Claude Code", "codex-chat": "Codex" };
+  command: "執行指令", file_change: "修改檔案",       // the first two are a Codex chat's (an AGY chat has them too)
+  read: "讀取檔案", other: "做其他的事" };            // the last two are an AGY chat's (P46-5): a read outside the work folder, and anything else it asks
+const CHAT_TOOL_NAME = { claude: "Claude Code", codex: "Codex", agy: "AGY", "claude-chat": "Claude Code", "codex-chat": "Codex", "agy-chat": "AGY" };
 const CHAT_CODEX_WORD = {
   ready: ["可以聊天", "b-ok"], not_installed: ["還沒安裝 Codex", "b-warn"], unverified: ["還沒通過聊天驗證", "b-warn"], policy: ["被管理員政策擋住", "b-bad"],
   folder: ["聊天用的 Codex 資料夾不能用", "b-bad"], version_unreadable: ["讀不到 Codex 的版本", "b-warn"], not_logged_in: ["聊天用的 Codex 還沒登入", "b-warn"],
@@ -13296,6 +13304,12 @@ const CHAT_CODEX_WORD = {
 const CHAT_CODEX_NOTE = "員工只能寫自己的工作資料夾；每個指令都會先問你（連只讀檔的也問），每次改檔也問，沒有「以後都允許」。Codex 的沙盒只擋「寫」，不擋「讀」："
   + "指令可以讀到你電腦上工作資料夾以外的檔案，所以每個指令你都要看清楚才按允許。Codex 不回報金額，每則回覆的花費是 VBear 依 token 數的估計，不是帳單，Codex 用的是你的 ChatGPT 方案。";
 const CHAT_CODEX_DELETE_NOTE = "　Codex 自己會在 VBear 狀態資料夾裡的 codex-chat-home（sessions）留一份對話副本，刪除這個聊天不會刪掉它；要清掉它，要自己到那個資料夾處理。";
+// AGY (P46-5): what the card of a chat with an AGY employee says that the Codex one does not.
+const CHAT_AGY_SANDBOX_WARNING = "允許後，這個指令在 AGY 的沙盒裡執行：不能連網，只能寫工作資料夾（和暫存資料夾）。只允許你看得懂、確定沒問題的指令。";
+const CHAT_AGY_ASK_AGAIN = "VBear 會先拒絕原本的；這一回合結束後，把你改的內容當成下一則訊息送出，AGY 會再問你一次，你要再看過、再按一次允許，才會執行。";
+const CHAT_AGY_DECISION_MODIFY = "你拒絕了原本的；這一回合結束後，會把你改的內容當成下一則訊息送出";
+const CHAT_AGY_READ_WARNING = "員工想讀工作資料夾以外的檔案，讀到的內容會送到 Google（AGY 是 Google 做的）。只允許你確定可以給它看的檔案。";
+const CHAT_AGY_READ_NOTE = "這張卡沒有可以改的內容，只能允許或拒絕。";
 const CHAT_CODEX_ACTION = { listFiles: "列出檔案", read: "讀檔", search: "搜尋", unknown: "其他" };
 const CHAT_CHANGE_KIND = { add: "新增", update: "修改", delete: "刪除" };
 const CHAT_FIELD_TEXT = { command: "指令", file_path: "檔案", content: "要寫的內容", old_string: "原本的字串", new_string: "改成", path: "路徑", pattern: "搜尋", description: "說明" };
@@ -13312,9 +13326,16 @@ const CHAT_INTRO = [
 // ---- small, pure helpers (tested) ----
 
 function chatMoney(v) { return typeof v === "string" && /^[0-9]+(\.[0-9]+)?$/.test(v) ? `US$${v}` : "金額不明"; }
-function chatTurnCost(rec) {
+function chatTurnCost(rec, engine) {
   const money = chatMoney(rec.cost_usd);
   if (rec.reason === "not_sent") return "這則訊息沒有送出，沒有花錢。";
+  if (engine === "agy-chat") {          // AGY says its use only when a turn ends: an estimate by VBear's rule, or the turn's limit when it said nothing
+    if (rec.estimate === true) {
+      const tokens = Number.isInteger(rec.tokens) && rec.tokens >= 0 ? `約 ${rec.tokens.toLocaleString("en-US")} 個 token；` : "";
+      return `這回合估計 ${money}（${tokens}AGY 不回報金額，這是 VBear 依 token 數估算、算進每天上限的數字，不是帳單；用的是你的 Google 方案）。`;
+    }
+    return `這回合按上限 ${money} 計（AGY 沒有回報用量）。`;
+  }
   // a Codex chat's turn end carries `estimate`: money from the token count by VBear's own rule, or the turn's limit when there was no count
   if (rec.estimate === true) {
     const tokens = Number.isInteger(rec.tokens) && rec.tokens >= 0 ? `約 ${rec.tokens.toLocaleString("en-US")} 個 token；` : "";
@@ -13368,6 +13389,7 @@ function chatInputRows(input) {
 function chatLine(rec, opts) {
   if (!rec || typeof rec !== "object" || typeof rec.kind !== "string") return null;
   const codex = !!opts && opts.engine === "codex-chat";
+  const agy = !!opts && opts.engine === "agy-chat";
   const remember = opts && typeof opts.remember === "function" ? opts.remember : null;       // P42-3: 「記住」 beside a spoken line
   const saveSkill = opts && typeof opts.saveSkill === "function" ? opts.saveSkill : null;   // P44-1: 「存成技能」 beside it
   const text = (x) => (typeof x === "string" ? x : "");
@@ -13395,7 +13417,7 @@ function chatLine(rec, opts) {
         el("code", null, text(rec.text)), rec.truncated === true ? el("span", { class: "small muted" }, "（只保存前面一段）") : null);
     case "auto_allowed":
       return el("li", { class: "chat-note small muted", "data-chat": "auto", "data-seq": String(rec.seq) },
-        `VBear 自己允許了 ${text(rec.tool)}：${text(rec.reason)}`);
+        `VBear 自己允許了 ${agy && cardHas(CHAT_TOOL_TEXT, rec.tool) ? CHAT_TOOL_TEXT[rec.tool] : text(rec.tool)}：${text(rec.reason)}`);
     case "denied":
       return el("li", { class: "chat-note", "data-chat": "denied", "data-seq": String(rec.seq) },
         badge("已拒絕", "b-bad"), " ", `${cardHas(CHAT_TOOL_TEXT, rec.tool) ? CHAT_TOOL_TEXT[rec.tool] : text(rec.tool)}：${text(rec.reason)}`,
@@ -13405,12 +13427,12 @@ function chatLine(rec, opts) {
         badge("問你", "b-warn"), " ", `員工想${cardHas(CHAT_TOOL_TEXT, rec.tool) ? CHAT_TOOL_TEXT[rec.tool] : "用 " + text(rec.tool)}`);
     case "card_decision":
       return el("li", { class: "chat-note", "data-chat": "decision", "data-seq": String(rec.seq), "data-card-id": text(rec.card_id) },
-        codex && rec.decision === "modify" ? CHAT_DECISION_CODEX_MODIFY : cardHas(CHAT_DECISION, rec.decision) ? CHAT_DECISION[rec.decision] : "這張卡片的結果不明",
+        agy && rec.decision === "modify" ? CHAT_AGY_DECISION_MODIFY : codex && rec.decision === "modify" ? CHAT_DECISION_CODEX_MODIFY : cardHas(CHAT_DECISION, rec.decision) ? CHAT_DECISION[rec.decision] : "這張卡片的結果不明",
         rec.decision === "modify" && typeof rec.value === "string" ? el("code", null, ` ${rec.value}`) : null);
     case "turn_ended": {
       const why = cardHas(CHAT_TURN_END, rec.reason) ? CHAT_TURN_END[rec.reason] : "這回合因不明原因結束";
       return el("li", { class: "chat-cost small muted", "data-chat": "cost", "data-seq": String(rec.seq) },
-        [why, chatTurnCost(rec)].filter(Boolean).join("　"));
+        [why, chatTurnCost(rec, opts && opts.engine)].filter(Boolean).join("　"));
     }
     case "process_started":
       return el("li", { class: "chat-sys small muted", "data-chat": "process", "data-seq": String(rec.seq) },
@@ -13466,14 +13488,23 @@ function chatCodexRows(card) {
   return rows;
 }
 
+// The rows of an AGY read card: every path it asks to read, one per line, as text.
+function chatReadRows(card) {
+  const input = card.input && typeof card.input === "object" && !Array.isArray(card.input) ? card.input : {};
+  const paths = Array.isArray(input.paths) ? input.paths.filter((x) => typeof x === "string" && x) : [];
+  return paths.length ? [["要讀的檔案（在工作資料夾以外）", paths.join("\n")]] : [];
+}
+
 function chatCardNode(card, opts) {
   const o = opts || {};
   const codex = card.tool === "command" || card.tool === "file_change";
+  const agy = o.engine === "agy-chat";
+  const reading = card.tool === "read";          // an AGY card: files outside the work folder; nothing in it can be changed
   const tool = cardHas(CHAT_TOOL_TEXT, card.tool) ? CHAT_TOOL_TEXT[card.tool] : `工具 ${card.tool}`;
-  const rows = codex ? chatCodexRows(card) : chatInputRows(card.input);
+  const rows = codex ? chatCodexRows(card) : reading ? chatReadRows(card) : chatInputRows(card.input);
   const left = Number.isFinite(card.expires_in) ? Math.max(0, Math.round(card.expires_in)) : null;
   const busy = o.busy === true;
-  const editable = typeof card.editable === "string" && card.editable ? card.editable : null;
+  const editable = !reading && typeof card.editable === "string" && card.editable ? card.editable : null;
   const editing = editable && o.edit && o.edit.open === true;
   const label = codex ? "改內容再問" : `改${cardHas(CHAT_FIELD_TEXT, editable) ? CHAT_FIELD_TEXT[editable] : editable}`;
   const area = editing ? el("textarea", { rows: "4", "data-chat": "edit", "aria-label": label,
@@ -13488,8 +13519,10 @@ function chatCardNode(card, opts) {
     el("dl", { class: "chat-card-rows" }, rows.map(([k, v]) => [el("dt", null, k), el("dd", null, el("pre", { class: "chat-pre" }, v))])),
     editing && codex && card.tool === "file_change" ? el("p", { class: "small", "data-chat": "edit-note" }, CHAT_CODEX_EDIT_FILE) : null,
     area,
-    codex && (editing || editable) ? el("p", { class: "small muted", "data-chat": "ask-again" }, CHAT_ASK_AGAIN) : null,
-    card.tool === "command" ? el("p", { class: "small", "data-chat": "sandbox-warning", role: "note" }, CHAT_CODEX_SANDBOX_WARNING) : null,
+    codex && (editing || editable) ? el("p", { class: "small muted", "data-chat": "ask-again" }, agy ? CHAT_AGY_ASK_AGAIN : CHAT_ASK_AGAIN) : null,
+    card.tool === "command" ? el("p", { class: "small", "data-chat": "sandbox-warning", role: "note" }, agy ? CHAT_AGY_SANDBOX_WARNING : CHAT_CODEX_SANDBOX_WARNING) : null,
+    reading ? el("p", { class: "small", "data-chat": "read-warning", role: "note" }, CHAT_AGY_READ_WARNING) : null,
+    reading ? el("p", { class: "small muted", "data-chat": "read-note" }, CHAT_AGY_READ_NOTE) : null,
     el("p", { class: "small muted" }, `不按的話，${left === null ? "5 分鐘後" : `約 ${left} 秒後`}會過期，視為拒絕（沒有執行）。按下允許的當下，VBear 會再檢查一次。`),
     el("div", { class: "row chat-card-actions" },
       editing
@@ -13562,6 +13595,49 @@ function chatCodexSupportNode(codex, verifyUi) {
   return el("div", { class: "chat-support card", "data-chat": "codex-support", "data-state": String(c.state) }, lines);
 }
 
+// The same notice for AGY (P46-5): its state, the way out of each state that is not ready, and for a version not yet checked the
+// check that says what it costs first (the person's own Google plan). AGY has no login of its own here: the chat uses the person's AGY
+// as it is, so there is no button to log in. A state caused by the person's own AGY settings (hooks, administrator policy) is only said.
+const CHAT_AGY_WORD = {
+  ready: ["可以聊天", "b-ok"], not_installed: ["還沒安裝 AGY", "b-warn"], unsupported: ["VBear 還不認得這個 AGY 版本", "b-bad"],
+  unverified: ["還沒通過聊天驗證", "b-warn"], policy: ["被管理員政策擋住", "b-bad"], hooks: ["你的 AGY 設定讓聊天不能用", "b-bad"],
+  folder: ["聊天用的 AGY 資料夾不能用", "b-bad"], version_unreadable: ["讀不到 AGY 的版本", "b-warn"],
+};
+const CHAT_AGY_HOOKS_NOTE = "你自己的 AGY 設了會在聊天時自動執行的 hooks，VBear 不能保證每個指令都先問你，所以聊天先不開。VBear 不會幫你改它；要用 AGY 聊天，請先自己把那些 hooks 拿掉。";
+const CHAT_AGY_SKILLS_NOTE = "AGY 員工會用到你自己裝的 AGY 技能。";
+const CHAT_AGY_VERIFY_COST = "驗證會用 AGY 真的跑一段對話：約 14 次很短的呼叫，用你自己的 Google 方案，不另外收費，要幾分鐘，對話內容會送到 Google。"
+  + "它會試：員工回話、每個指令都先問你、你拒絕或改內容再問、改檔要看 diff、資料夾外的讀寫被擋住、停止、接續舊對話。全部通過，才會記下這個版本。";
+function chatAgySupportNode(agy, verifyUi) {
+  const c = agy && typeof agy === "object" ? agy : null;
+  if (!c) return notice("warn", "讀不到 AGY 聊天的支援狀態。");
+  const word = typeof c.state === "string" && cardHas(CHAT_AGY_WORD, c.state) ? CHAT_AGY_WORD[c.state] : ["狀態不明", "b-mute"];
+  const v = verifyUi || {};
+  const status = c.verify && typeof c.verify === "object" ? c.verify : null;
+  const running = (status && status.running === true) || v.pending === true;
+  const lines = [el("p", { class: "small" }, badge(word[0], word[1]), " ", typeof c.version === "string" && c.version ? `AGY ${c.version}` : "AGY")];
+  if (c.state !== "ready" && typeof c.why === "string" && c.why) lines.push(el("p", { class: "small", "data-chat": "support-message" }, c.why));
+  if (c.state === "hooks") lines.push(el("p", { class: "small", "data-chat": "hooks-note" }, CHAT_AGY_HOOKS_NOTE));
+  const toSetup = el("a", { class: "btn small", href: "#/setup", "data-chat": "setup-go" }, "到開始設定");
+  if (c.state === "ready") {
+    if (typeof c.money === "string" && c.money) lines.push(el("p", { class: "small muted", "data-chat": "money" }, c.money));
+    lines.push(el("p", { class: "small muted", "data-chat": "skills-note" }, CHAT_AGY_SKILLS_NOTE));
+  }
+  if (c.state === "not_installed" || c.state === "folder") lines.push(el("div", { class: "row" }, toSetup));
+  if (c.state === "unverified") {
+    lines.push(el("p", { class: "small muted", "data-chat": "verify-cost" }, CHAT_AGY_VERIFY_COST));
+    if (running) lines.push(el("p", { class: "small", "data-chat": "verifying", role: "status" }, "驗證進行中，通常要幾分鐘…"));
+    else if (v.confirm === true) lines.push(el("div", { class: "row" },
+      el("button", { type: "button", class: "btn primary small", "data-chat": "verify-go", on: { click: () => v.go && v.go() } }, "確認驗證（會用掉一點 Google 方案的用量）"),
+      el("button", { type: "button", class: "btn small", "data-chat": "verify-cancel", on: { click: () => v.cancel && v.cancel() } }, "不驗證了")));
+    else lines.push(el("div", { class: "row" },
+      el("button", { type: "button", class: "btn small", "data-chat": "verify", on: { click: () => v.ask && v.ask() } }, "驗證聊天")));
+  }
+  if (status && status.running !== true && typeof status.message === "string" && status.message && c.state !== "ready") {
+    lines.push(el("p", { class: "small", "data-chat": "verify-result" }, status.message));
+  }
+  return el("div", { class: "chat-support card", "data-chat": "agy-support", "data-state": String(c.state) }, lines);
+}
+
 function chatLimitsText(limits, ledger) {
   const l = limits && typeof limits === "object" ? limits : null;
   const spent = ledger && typeof ledger === "object" && /^[0-9.]+$/.test(String(ledger.spent_usd)) ? `今天已花 US$${ledger.spent_usd}（聊天、會議和組隊會議合計），每日上限 US$${ledger.daily_usd}。` : "讀不到今天的花費。";
@@ -13597,6 +13673,7 @@ async function viewChat(id, params) {
   const main = claim(token);
   const verifyUi = { confirm: false, pending: false };
   const codexUi = { confirm: false, pending: false };
+  const agyUi = { confirm: false, pending: false };
   let cur = data;
   const names = () => new Map((cur.cards || []).map((c) => [c.profile_id || c.id, c.name]));
   const supportBox = el("div", { class: "chat-support-box" });
@@ -13611,16 +13688,21 @@ async function viewChat(id, params) {
   const drawSupport = () => {
     const sup = cur.support && typeof cur.support === "object" ? cur.support : null;
     const codex = sup && sup.codex && typeof sup.codex === "object" ? sup.codex : null;
+    const agy = sup && sup.agy && typeof sup.agy === "object" ? sup.agy : null;
     const engine = chosenCard() ? chosenCard().engine : null;
     const kids = [];
     const claudeNode = () => chatSupportNode(sup, verifyUi);
     const codexNode = () => chatCodexSupportNode(codex, codexUi);
+    const agyNode = () => chatAgySupportNode(agy, agyUi);
     if (engine === "codex-chat") kids.push(codexNode());
+    else if (engine === "agy-chat") kids.push(agyNode());
     else if (engine === "claude-chat") kids.push(claudeNode());
     else {
       const codexThere = !!codex && codex.state !== "not_installed";
-      if (!(codexThere && sup && sup.state === "unknown" && !sup.detected)) kids.push(claudeNode());
+      const agyThere = !!agy && agy.state !== "not_installed";
+      if (!((codexThere || agyThere) && sup && sup.state === "unknown" && !sup.detected)) kids.push(claudeNode());
       if (codexThere) kids.push(codexNode());
+      if (agyThere) kids.push(agyNode());
     }
     setKids(supportBox, kids);
   };
@@ -13633,7 +13715,9 @@ async function viewChat(id, params) {
     sel.value = cards.some((c) => c.id === chosen) ? chosen : "";
     const card = cards.find((c) => c.id === sel.value);
     const codexCard = !!card && card.engine === "codex-chat";
-    const ok = codexCard ? !!cur.support && !!cur.support.codex && cur.support.codex.state === "ready" : !!cur.support && cur.support.state === "verified";
+    const agyCard = !!card && card.engine === "agy-chat";
+    const ok = agyCard ? !!cur.support && !!cur.support.agy && cur.support.agy.state === "ready"
+      : codexCard ? !!cur.support && !!cur.support.codex && cur.support.codex.state === "ready" : !!cur.support && cur.support.state === "verified";
     const lamp = cur.ledger && cur.ledger.lamp === "red";
     const go = el("button", { type: "button", class: "btn primary", "data-chat": "open", disabled: !card || card.can_chat !== true || !ok || lamp,
       on: { click: async (e) => {
@@ -13655,7 +13739,7 @@ async function viewChat(id, params) {
     setKids(formBox, el("section", { class: "section" }, sectionHead("開新聊天", "開聊天本身不花錢，送出訊息才花。"),
       el("div", { class: "row" }, sel, go, groupBtn),
       card && card.can_chat !== true ? notice("warn", card.reason || "這張角色卡不能聊天。") : null,
-      !ok ? el("p", { class: "small muted" }, codexCard ? "聊天用的 Codex 準備好之前（原因在上面），不能開始聊天。" : "這個 Claude Code 版本通過聊天驗證之前，不能開始聊天。") : null,
+      !ok ? el("p", { class: "small muted" }, agyCard ? "AGY 準備好之前（原因在上面），不能開始聊天。" : codexCard ? "聊天用的 Codex 準備好之前（原因在上面），不能開始聊天。" : "這個 Claude Code 版本通過聊天驗證之前，不能開始聊天。") : null,
       lamp ? el("p", { class: "small muted" }, "今天的額度用完了，不能開始聊天。") : null,
       card && card.can_chat === true && card.instructions === true ? el("p", { class: "small muted" }, "這張卡有你自己寫的指示，會帶進聊天。") :
         card && card.can_chat === true ? el("p", { class: "small muted" }, "這張卡沒有你自己寫的指示，聊天不會帶任何指示。") : null));
@@ -13692,19 +13776,29 @@ async function viewChat(id, params) {
     catch (e) { codexUi.pending = false; toast(e.message); }
     await refresh();
   };
+  agyUi.ask = () => { agyUi.confirm = true; draw(); };
+  agyUi.cancel = () => { agyUi.confirm = false; draw(); };
+  agyUi.go = async () => {
+    agyUi.pending = true; agyUi.confirm = false; draw();
+    const version = cur.support && cur.support.agy && cur.support.agy.version;
+    try { await api.post("/api/chat-support/verify", { engine: "agy", version: version || undefined }); }
+    catch (e) { agyUi.pending = false; toast(e.message); }
+    await refresh();
+  };
   const refresh = async () => {
     try { cur = await api.get("/api/chats"); } catch (e) { return; }
     groupRows = await readGroups();
     if (cur.support && cur.support.verify && cur.support.verify.running !== true) verifyUi.pending = false;
     if (cur.support && cur.support.codex && cur.support.codex.verify && cur.support.codex.verify.running !== true) codexUi.pending = false;
+    if (cur.support && cur.support.agy && cur.support.agy.verify && cur.support.agy.verify.running !== true) agyUi.pending = false;
     if (token === seq) draw();
   };
   draw();
   const intro = chatIntroNode();
   setKids(main, el("h1", null, "跟員工聊天"),
     el("p", { class: "lede" }, "和一位員工（角色卡）一對一聊天。員工想動手時，會先問你。"),
-    needsClaudeSlot(token, "聊天需要 Claude Code 或 Codex：工具是 Claude Code 的員工用 Claude Code，工具是 Codex 的員工用 Codex（Codex 要先在「開始設定」登入聊天用的那一份）。",
-      (res) => !codexChatReady(res)),
+    needsClaudeSlot(token, "聊天需要 Claude Code、Codex 或 AGY：工具是 Claude Code 的員工用 Claude Code，工具是 Codex 的員工用 Codex（Codex 要先在「開始設定」登入聊天用的那一份），工具是 AGY 的員工用 AGY（AGY 要先通過聊天驗證）。",
+      (res) => !codexChatReady(res) && !agyChatReady(res)),
     intro, supportBox, ledgerBox, formBox,
     el("section", { class: "section" }, sectionHead("聊天紀錄", "每 5 秒更新"), listBox));
   chatTick = refresh;
@@ -13814,7 +13908,7 @@ async function viewChatDetail(token, id) {
     const cards = live && Array.isArray(live.cards) ? live.cards : [];
     for (const card of cards) {
       if (!edits.has(card.card_id)) edits.set(card.card_id, { open: false, text: undefined });
-      kids.push(chatCardNode(card, { busy: answering.has(card.card_id), edit: edits.get(card.card_id), redraw: drawLive, onAnswer: answer }));
+      kids.push(chatCardNode(card, { engine: engineOf(), busy: answering.has(card.card_id), edit: edits.get(card.card_id), redraw: drawLive, onAnswer: answer }));
     }
     const active = document.activeElement;
     const hadFocus = !!active && liveBox.contains(active) && String(active.tagName || active.tag || "").toUpperCase() === "TEXTAREA";
@@ -14642,7 +14736,7 @@ async function viewGroup(id) {
         if (!card || typeof card.card_id !== "string") continue;
         if (!edits.has(card.card_id)) edits.set(card.card_id, { open: false, text: undefined });
         kids.push(el("div", { class: "group-card", "data-group": "card-box", "data-profile-id": text0(cur.profile_id) },
-          chatCardNode(card, { who: name, busy: answering.has(card.card_id), edit: edits.get(card.card_id), redraw: drawLive, onAnswer: answerCard })));
+          chatCardNode(card, { who: name, engine: who && who.tool === "agy" ? "agy-chat" : who && who.tool === "codex" ? "codex-chat" : null, busy: answering.has(card.card_id), edit: edits.get(card.card_id), redraw: drawLive, onAnswer: answerCard })));
       }
     }
     const active = document.activeElement;
@@ -19480,6 +19574,9 @@ if (typeof module !== "undefined" && module.exports) {
     chatPlanUsageText,
     chatToolName,
     codexChatReady,
+    agyChatReady,
+    chatAgySupportNode,
+    CHAT_AGY_WORD,
     chatTurnCost,
     chatMoney,
     chatStateWord,
