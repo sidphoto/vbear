@@ -51,7 +51,8 @@ RETRY_FOR_S = 180.0                   # ... for this long, then that employee is
 SKIP_CODES = ("no_card", "card_disabled", "card_tool_unsupported", "card_tool_changed", "unverified", "unsupported_version",
               "not_logged_in", "codex_home", "claude_version", "codex_version", "invalid_binary", "invalid_model", "invalid_workdir",
               "damaged", "manual_review", "full", "admin_policy", "drift", "version_changed", "verifying", "unsafe_path",
-              "scratch_path_too_long", "manifest_invalid", "unsupported_sandbox", "commit_not_enforceable", "unsupported_python")
+              "scratch_path_too_long", "manifest_invalid", "unsupported_sandbox", "commit_not_enforceable", "unsupported_python",
+              "agy_version", "agy_home", "agy_hooks", "agy_workdir")
 
 
 def plan_until(usage: dict) -> float | None:

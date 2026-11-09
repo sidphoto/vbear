@@ -67,7 +67,22 @@ MESSAGE_MAX = 30 * 1024              # under the chat's 32 KiB for one message
 MARK_BEGIN, MARK_END = "BEGIN_UNTRUSTED_JSON_STRING", "END_UNTRUSTED_JSON_STRING"
 PERSON = "用的人"
 GONE = "（已不在名單的員工）"
-TOOL_NAME = {"claude": "Claude Code", "codex": "Codex"}
+TOOL_NAME = {"claude": "Claude Code", "codex": "Codex", "agy": "AGY"}
+# The company behind each AI tool that chats: a group's words go to every company of its members (P46-5 added Google).
+TOOL_COMPANY = {"claude": "Anthropic", "codex": "OpenAI", "agy": "Google"}
+
+
+def _join(words: list) -> str:
+    return "、".join(words[:-1]) + " 和 " + words[-1] if len(words) > 2 else " 和 ".join(words)
+
+
+def mixed_note(tools) -> list:
+    """What a group says about where its words go when its members' AI tools belong to two companies or more: one sentence naming
+    the tools and the companies, in the order Claude Code, Codex, AGY; no sentence for one company."""
+    named = [t for t in TOOL_NAME if t in set(tools)]
+    if len(named) < 2:
+        return []
+    return [f"群組裡有 {_join([TOOL_NAME[t] for t in named])} 的員工，群組裡的對話會同時送給 {_join([TOOL_COMPANY[t] for t in named])}。"]
 
 ERRORS = {
     "bad_request": "請求不符格式",
@@ -798,9 +813,7 @@ class Groups:
                     pass                   # a chat that stays is an ordinary chat in the list; it costs nothing
             raise
         tools = {cards[pid]["tool"] for pid in ids}
-        notes = []
-        if {"claude", "codex"} <= tools:
-            notes.append("群組裡有 Claude Code 和 Codex 的員工，群組裡的對話會同時送給 Anthropic 和 OpenAI。")
+        notes = mixed_note(tools)
         return {"group": self._row(gid, cards), "notes": notes}
 
     @staticmethod
@@ -1078,9 +1091,7 @@ class Groups:
                         pass               # a chat that stays is an ordinary chat in the list; it costs nothing
             raise
         tools = {cards[m["profile_id"]]["tool"] for m in active(load(gid)) if m["profile_id"] in cards}
-        notes = []
-        if {"claude", "codex"} <= tools:
-            notes.append("群組裡有 Claude Code 和 Codex 的員工，群組裡的對話會同時送給 Anthropic 和 OpenAI。")
+        notes = mixed_note(tools)
         return {"group": self._row(gid, cards), "notes": notes}
 
     def rename(self, gid: str, body) -> dict:

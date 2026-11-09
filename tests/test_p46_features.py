@@ -9,8 +9,12 @@ import json
 import unittest
 from unittest import mock
 
-from tests.test_p46_agy_chat_api import ApiCase
-from vbear import ai_tool_status, memory, shared_folder
+import sys
+
+from tests.group_fixtures import GroupBase
+from tests.test_p46_agy_chat_api import ApiCase, READY
+from vbear.runtime import chat_store as cs
+from vbear import agent_profiles as ap, ai_tool_status, chat_service, groups, memory, shared_folder
 from vbear.runtime import cli_versions
 
 
@@ -133,6 +137,68 @@ class SharedFolderForAgyTests(ApiCase):
                         if c["profile_id"] == self.emp)
             self.assertFalse(mine["on"], "whatever the file says")
             self.assertIsNone(mine["verified"])
+
+
+class GroupsWithAgyTests(GroupBase):
+    """ADR 0007: an AGY card is a member like any other (two or three, mixed); the notes name the companies the words go to."""
+
+    def setUp(self):
+        super().setUp()
+        self.service.agy = lambda: dict(READY)
+        self.service.agy_binary = lambda: (sys.executable, "1.5.3")
+        self.agy_hand = ap.save_profile(None, {"name": "虛構AGY員工", "position": "social", "model": {"tool": "agy"}})["id"]
+        self.agy_two = ap.save_profile(None, {"name": "虛構AGY員工二", "position": "accountant", "model": {"tool": "agy"}})["id"]
+
+    def test_an_agy_card_joins_and_gets_an_agy_chat(self):
+        got = self.make_group(self.writer, self.agy_hand)
+        self.assertEqual([m["name"] for m in got["group"]["members"]], ["文案小編", "虛構AGY員工"])
+        self.assertEqual(groups.TOOL_NAME["agy"], "AGY")
+        mine = next(m for m in got["group"]["members"] if m["name"] == "虛構AGY員工")
+        self.assertEqual(mine["tool"], "agy")
+        self.assertEqual(cs.load(self.service.base, self.chat_ids(got["group"]["id"])[self.agy_hand])["engine"], "agy-chat")
+
+    def test_claude_and_agy_name_anthropic_and_google(self):
+        notes = self.make_group(self.writer, self.agy_hand)["notes"]
+        self.assertEqual(len(notes), 1)
+        self.assertIn("Claude Code 和 AGY", notes[0])
+        self.assertIn("Anthropic 和 Google", notes[0])
+        self.assertNotIn("OpenAI", notes[0])
+
+    def test_all_three_companies_are_named(self):
+        notes = self.make_group(self.writer, self.codex_hand, self.agy_hand)["notes"]
+        self.assertEqual(len(notes), 1)
+        for word in ("Claude Code", "Codex", "AGY", "Anthropic", "OpenAI", "Google"):
+            self.assertIn(word, notes[0])
+
+    def test_codex_and_agy_name_openai_and_google(self):
+        notes = self.make_group(self.codex_hand, self.agy_hand)["notes"]
+        self.assertIn("OpenAI 和 Google", notes[0])
+        self.assertNotIn("Anthropic", notes[0])
+
+    def test_one_company_says_nothing(self):
+        self.assertEqual(self.make_group(self.agy_hand, self.agy_two)["notes"], [])
+        self.assertEqual(self.make_group(self.writer, self.accountant)["notes"], [])
+
+    def test_claude_and_codex_keep_the_old_sentence_to_the_letter(self):
+        self.assertEqual(self.make_group(self.writer, self.codex_hand)["notes"],
+                         ["群組裡有 Claude Code 和 Codex 的員工，群組裡的對話會同時送給 Anthropic 和 OpenAI。"])
+
+    def test_an_agy_member_joining_says_where_the_words_go(self):
+        gid = self.make_group(self.writer, self.accountant)["group"]["id"]
+        got = self.groups.members(gid, {"add": [self.agy_hand]})
+        self.assertEqual(len(got["notes"]), 1)
+        self.assertIn("Google", got["notes"][0])
+
+    def test_the_codes_that_are_about_one_agy_employee_skip_her_and_the_rest_go_on(self):
+        from vbear import group_runner
+        for code in ("agy_version", "agy_home", "agy_hooks", "agy_workdir"):
+            self.assertIn(code, group_runner.SKIP_CODES)
+            self.assertIn(code, chat_service.CODE_TEXT)
+
+    def test_a_skipped_agy_employee_is_named_by_her_tool(self):
+        text = groups.skip_text("agy_hooks", "虛構AGY員工", groups.TOOL_NAME["agy"])
+        self.assertIn("虛構AGY員工這次沒有回答", text)
+        self.assertIn("hooks", text)
 
 
 if __name__ == "__main__":
