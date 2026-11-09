@@ -11,13 +11,14 @@ from unittest import mock
 
 import sys
 
+from tests import templates_apply_fixtures as tfx
 from tests.group_fixtures import GroupBase
 from tests.test_memory_suggest import Base as MemorySuggestBase
 from tests.test_skillbook_suggest import Base as SkillSuggestBase
 from tests.test_chief_runner import Base as ChiefBase, card as chief_card, plan as chief_plan
 from tests.test_p46_agy_chat_api import ApiCase, READY
 from vbear.runtime import chat_store as cs
-from vbear import agent_profiles as ap, ai_tool_status, first_ceo, chat_service, chief, chief_runner, dispatch, groups, memory, memory_suggest, shared_folder, skillbook_suggest
+from vbear import agent_profiles as ap, ai_tool_status, first_ceo, chat_service, chief, chief_runner, dispatch, groups, memory, memory_suggest, shared_folder, skillbook_suggest, templates, templates_apply
 from vbear.runtime import cli_versions
 
 
@@ -345,6 +346,77 @@ class SkillSuggestForAgyTests(SkillSuggestBase):
         self.assertEqual(self.board().preview(self.chat([("user", "你好")], engine="codex-chat"), self.sources())["notice"],
                          "這是和 Codex 員工的對話，也會送給 Anthropic（Claude Code）整理。")
         self.assertIsNone(self.board().preview(self.chat_id, self.sources())["notice"])
+
+
+class TemplatesWithAgyTests(unittest.TestCase):
+    """ADR 0011: AGY is the third tool a template can be applied with; the default stays Claude Code, then Codex."""
+
+    @staticmethod
+    def row(tool, ready=True, state="ready", **more):
+        row = {"id": tool, "ready": ready, "state": state, "installed": state != "not_installed"}
+        row.update(more)
+        return row
+
+    def view(self, **rows):
+        return templates.tools_view([self.row(k, **v) for k, v in rows.items()])
+
+    def test_agy_is_a_tool_of_an_apply_and_of_its_record(self):
+        self.assertEqual(templates.TOOLS, ("claude", "codex", "agy"))
+        self.assertEqual(templates_apply.TOOLS, ("claude", "codex", "agy"))
+
+    def test_agy_is_ready_when_the_start_up_page_says_so_and_says_if_its_chat_was_checked(self):
+        ok = self.view(agy={"chat": {"verified": True}})["agy"]
+        self.assertEqual((ok["ready"], ok["chat_verified"]), (True, True))
+        todo = self.view(agy={"chat": {"verified": False}})["agy"]
+        self.assertEqual((todo["ready"], todo["chat_verified"]), (True, False), "ready, but its chat still has to be checked")
+        for rows, word in (({"agy": dict(ready=False, state="not_installed")}, "找不到 AGY"), ({"agy": dict(ready=False, state="not_logged_in")}, "還沒登入")):
+            got = self.view(**rows)["agy"]
+            self.assertFalse(got["ready"])
+            self.assertIn(word, got["why"])
+        self.assertIn("AGY", templates.tools_view([])["agy"]["why"])
+
+    def test_the_default_is_claude_code_then_codex_and_only_then_agy(self):
+        agy = {"chat": {"verified": True}}
+        self.assertEqual(self.view(claude={}, codex={"chat_login": {"state": "logged_in"}}, agy=agy)["default"], "claude")
+        self.assertEqual(self.view(claude=dict(ready=False, state="not_logged_in"), codex={"chat_login": {"state": "logged_in"}}, agy=agy)["default"], "codex")
+        self.assertEqual(self.view(claude=dict(ready=False, state="not_logged_in"), codex=dict(ready=False, state="not_installed"), agy=agy)["default"], "agy")
+        self.assertEqual(self.view(claude=dict(ready=False, state="not_installed"), codex=dict(ready=False, state="not_installed"),
+                                   agy=dict(ready=False, state="not_installed"))["default"], "claude")
+
+    def test_the_old_two_are_what_they_were(self):
+        got = self.view(claude={}, codex={"chat_login": {"state": "logged_in"}})
+        self.assertEqual((got["claude"], got["codex"]), ({"ready": True, "why": ""}, {"ready": True, "why": ""}))
+
+    def test_a_card_for_agy_is_safe_with_no_model_and_nothing_else_switched_on(self):
+        card = next(iter(tfx.BUILTIN.values()))["cards"][0]
+        body = templates.card_body(card, "agy")
+        self.assertEqual((body["launch_mode"], body["model"], body["equipped_skill_ids"]), ("safe", {"tool": "agy", "model_id": ""}, []))
+        self.assertEqual(body["permission_intents"], templates.agent_profiles.VERIFIED_INTENTS)
+        self.assertNotIn("enabled", body)
+        with self.assertRaises(ValueError):
+            templates.card_body(card, "grok")
+
+
+class ApplyWithAgyTests(tfx.ApplyBase):
+    def test_everything_of_the_four_with_agy_makes_safe_agy_cards_and_leaves_memory_and_the_shared_folder_as_they_were(self):
+        status, out = self.apply(self.everything_of("agy"))
+        self.assertEqual(status, 201, out)
+        self.assertEqual((out["apply"]["state"], out["apply"]["tool"]), ("done", "agy"))
+        cards = self.stored_cards()
+        self.assertEqual(len(cards), 12)
+        for card in cards.values():
+            self.assertEqual(card["model"], {"tool": "agy", "model_id": ""}, "AGY has one model, none is named")
+            self.assertEqual((card["launch_mode"], card["equipped_skill_ids"]), ("safe", []))
+            self.assertIsNot(card.get("enabled"), False)
+        self.assertTrue(all(r["enabled"] is False for r in self.stored_routines().values()))
+        self.assert_watched_unchanged()
+        self.assert_no_ai_no_chat_no_ledger()
+        self.assertEqual([a["tool"] for a in self.applies()], ["agy"], "the record keeps the tool")
+
+    def test_a_tool_that_is_not_one_of_the_three_is_refused_and_nothing_is_made(self):
+        status, out = self.apply(self.everything_of("grok"))
+        self.assertEqual(status, 400, out)
+        self.nothing_made()
 
 
 if __name__ == "__main__":

@@ -53,7 +53,7 @@ class Cards:
             tool = (p.get("model") or {}).get("tool")
             enabled = p.get("enabled") is not False
             out.append({"id": p["id"], "name": p["name"], "position": p.get("position"), "tool": tool, "engine": tool, "enabled": enabled,
-                        "can_chat": enabled and tool in ("claude", "codex")})
+                        "can_chat": enabled and tool in ("claude", "codex", "agy")})
         return out
 
     def __getattr__(self, name):
