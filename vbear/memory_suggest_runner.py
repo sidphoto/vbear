@@ -37,6 +37,8 @@ CENT = Decimal("0.01")
 DISCLOSURE = ("開始後，你和這位員工最近的對話（最多 20 則、12 KiB）與你目前的記憶，會用你的 Claude 帳號送到 Anthropic（由本機的 Claude Code 送出）。"
               "VBear 不會把任何文字送到其他地方。每次呼叫前，VBear 都會確認這個版本的 Claude Code 沒有任何工具、沒有 MCP；確認不了就不送。")
 CODEX_NOTICE = "這是和 Codex 員工的對話，也會送給 Anthropic（Claude Code）整理。"
+AGY_NOTICE = "這是和 AGY 員工的對話，也會送給 Anthropic（Claude Code）整理。"
+ENGINE_NOTICE = {"codex-chat": CODEX_NOTICE, "agy-chat": AGY_NOTICE}
 SAVE_NOTE = "整理只是提議：每一條都不會自己存，你勾選、可以改字，按「存進記憶」才會存。"
 
 
@@ -187,7 +189,7 @@ class MemorySuggestRunner(HeadlessBoard):
                "messages": ctx.read["count"], "omitted_messages": ctx.read["omitted"], "bytes": ctx.read["bytes"],
                "memory_lines": len(ctx.memory_lines), "cap_usd": mt.fmt(cap),
                "day_left_usd": mt.fmt(max(ctx.daily_usd - day, Decimal(0))), "today": today, "sends_to": ms.SENDS_TO,
-               "engine": ctx.engine, "notice": CODEX_NOTICE if ctx.engine == "codex-chat" else None, "save_note": SAVE_NOTE,
+               "engine": ctx.engine, "notice": ENGINE_NOTICE.get(ctx.engine), "save_note": SAVE_NOTE,
                "cli": {"version": version, "verified": version is not None}, "disclosure": DISCLOSURE, "cost_note": COST_NOTE}
         if not blockers:
             out["preview_id"] = self._keep({"kind": "new", "chat_id": chat_id, "read_sha": ctx.read["sha256"],

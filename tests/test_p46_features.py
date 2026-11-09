@@ -12,10 +12,12 @@ from unittest import mock
 import sys
 
 from tests.group_fixtures import GroupBase
+from tests.test_memory_suggest import Base as MemorySuggestBase
+from tests.test_skillbook_suggest import Base as SkillSuggestBase
 from tests.test_chief_runner import Base as ChiefBase, card as chief_card, plan as chief_plan
 from tests.test_p46_agy_chat_api import ApiCase, READY
 from vbear.runtime import chat_store as cs
-from vbear import agent_profiles as ap, ai_tool_status, first_ceo, chat_service, chief, chief_runner, dispatch, groups, memory, shared_folder
+from vbear import agent_profiles as ap, ai_tool_status, first_ceo, chat_service, chief, chief_runner, dispatch, groups, memory, memory_suggest, shared_folder, skillbook_suggest
 from vbear.runtime import cli_versions
 
 
@@ -302,6 +304,47 @@ class FirstCeoWithAgyTests(unittest.TestCase):
         plan = first_ceo.plan([], self.rows(codex=True))
         self.assertEqual((plan["tool"], plan["chat_ready"]), ("codex", False))
         self.assertIn("聊天用的 Codex", plan["chat_note"])
+
+
+NOTICE_AGY = "這是和 AGY 員工的對話，也會送給 Anthropic（Claude Code）整理。"
+
+
+class MemorySuggestForAgyTests(MemorySuggestBase):
+    """ADR 0008: the chat with an AGY employee can be tidied into memory lines by Claude Code, and the page is told so."""
+
+    def test_an_agy_chat_is_an_engine_the_suggestion_reads(self):
+        self.assertIn("agy-chat", memory_suggest.ENGINES)
+
+    def test_the_preview_says_the_chat_goes_to_anthropic_too_in_the_words_of_agy(self):
+        chat_id = self.chat([("user", "你好")], engine="agy-chat")
+        preview = self.board().preview(chat_id, self.sources())
+        self.assertTrue(preview["ok"], preview["blockers"])
+        self.assertEqual((preview["engine"], preview["sends_to"], preview["notice"]), ("agy-chat", "Anthropic", NOTICE_AGY))
+
+    def test_the_codex_and_claude_words_did_not_move(self):
+        self.assertEqual(self.board().preview(self.chat([("user", "你好")], engine="codex-chat"), self.sources())["notice"],
+                         "這是和 Codex 員工的對話，也會送給 Anthropic（Claude Code）整理。")
+        self.assertIsNone(self.board().preview(self.chat_id, self.sources())["notice"])
+
+    def test_a_suggestion_made_from_an_agy_chat_is_kept_and_read_back(self):
+        chat_id = self.chat([("user", "我的店叫小熊皂坊"), ("employee", "好，我記得了")], engine="agy-chat")
+        rec = self.run_one(self.board(), chat_id)
+        self.assertEqual(rec["engine"], "agy-chat")
+        self.assertIn(rec["id"], memory_suggest.record_ids())
+
+
+class SkillSuggestForAgyTests(SkillSuggestBase):
+    def test_an_agy_chat_is_an_engine_the_suggestion_reads(self):
+        self.assertIn("agy-chat", skillbook_suggest.ENGINES)
+
+    def test_the_preview_says_the_chat_goes_to_anthropic_too_in_the_words_of_agy(self):
+        preview = self.board().preview(self.chat([("user", "你好")], engine="agy-chat"), self.sources())
+        self.assertEqual((preview["engine"], preview["sends_to"], preview["notice"]), ("agy-chat", "Anthropic", NOTICE_AGY))
+
+    def test_the_codex_and_claude_words_did_not_move(self):
+        self.assertEqual(self.board().preview(self.chat([("user", "你好")], engine="codex-chat"), self.sources())["notice"],
+                         "這是和 Codex 員工的對話，也會送給 Anthropic（Claude Code）整理。")
+        self.assertIsNone(self.board().preview(self.chat_id, self.sources())["notice"])
 
 
 if __name__ == "__main__":
