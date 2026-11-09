@@ -265,6 +265,11 @@ class RealMachineShapeTests(CheckCase):
         self.assert_failed(code, report, "home_clean")
         self.assertIn("stranger-item", report["checks"]["home_clean"]["reason"])
 
+    def test_a_hooks_file_hidden_inside_a_project_folder_fails_home_clean_by_where_it_is(self):
+        code, report = self.check({"project_hook": True})
+        self.assert_failed(code, report, "home_clean")
+        self.assertIn("projects/p-0001/hooks.json", report["checks"]["home_clean"]["reason"])
+
     def test_tidy_writes_the_home_path_as_tilde_everywhere_in_nested_values(self):
         got = cc.tidy({"a": "/h/me/x", "b": ["/h/me", {"c": "no /h/m"}], "n": 3}, "/h/me")
         self.assertEqual(got, {"a": "~/x", "b": ["~", {"c": "no /h/m"}], "n": 3})

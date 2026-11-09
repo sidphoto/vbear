@@ -57,6 +57,11 @@ FORBIDDEN_CONFIG = tuple(n.split("/", 1)[1] for n in _NEWEST.home_forbidden if n
 # The names AGY makes there itself (the same table): at the top of the folder and in its config folder. Any other name is refused.
 CREATED_TOP = tuple(n for n in _NEWEST.home_created if "/" not in n)
 CREATED_CONFIG = tuple(n.split("/", 1)[1] for n in _NEWEST.home_created if n.startswith(CONFIG_DIR + "/"))
+PROJECTS_NAME = "projects"
+PROJECT_ENTRIES = _NEWEST.project_entries
+FORBIDDEN_ANYWHERE = _NEWEST.forbidden_anywhere
+PROJECTS_MAX_DEPTH = 4                         # project folder = depth 1
+PROJECTS_MAX_ENTRIES = 200
 MCP_CONFIG_NAME = "mcp_config.json"
 MCP_CONFIG_MAX = 64 << 10
 
@@ -120,6 +125,73 @@ def _refuse_strangers(names, known) -> None:
     strangers = sorted(n for n in names if n.casefold() not in allowed)
     if strangers:
         raise _foreign("、".join(strangers[:5]))
+
+
+def _check_projects(cfd) -> None:
+    """``config/projects``, when it is there: a plain folder; in it only plain folders, and in those only the names of
+    ``PROJECT_ENTRIES`` (none are known yet, so they must be empty). A name that is a hook, rule, workflow, skill, plugin, setting
+    or instruction file is refused at any depth, in any letters (and named first); so is a link, a file where a folder belongs,
+    anything deeper than ``PROJECTS_MAX_DEPTH`` and anything past ``PROJECTS_MAX_ENTRIES`` names. Only names are looked at; the
+    sentence says where in ``projects`` (``p/a/b``), never a path of the disk."""
+    try:
+        os.lstat(PROJECTS_NAME, dir_fd=cfd)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise _foreign(PROJECTS_NAME) from exc
+    found: list[tuple[str, int, int]] = []             # (where in projects, depth, mode)
+    stack: list[tuple[int, tuple]] = []
+    try:
+        stack.append((os.open(PROJECTS_NAME, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=cfd), ()))
+    except OSError as exc:
+        raise _foreign(PROJECTS_NAME) from exc
+    too_much = None
+    try:
+        while stack:
+            fd, parts = stack.pop()
+            try:
+                try:
+                    with os.scandir(fd) as it:
+                        entries = list(it)
+                    for entry in entries:
+                        where = "/".join((*parts, entry.name))
+                        st = entry.stat(follow_symlinks=False)
+                        found.append((where, len(parts), st.st_mode))
+                        if len(found) > PROJECTS_MAX_ENTRIES:
+                            too_much = where
+                            raise StopIteration
+                        if stat.S_ISDIR(st.st_mode):
+                            if len(parts) + 1 >= PROJECTS_MAX_DEPTH:
+                                too_much = where
+                                raise StopIteration
+                            stack.append((os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                                                  dir_fd=fd), (*parts, entry.name)))
+                except StopIteration:
+                    break
+                except OSError as exc:
+                    raise AgyRefused("foreign_settings", f"無法列出 AGY 的 projects 資料夾（{exc.strerror or type(exc).__name__}），"
+                                     "所以不使用聊天用的 AGY 設定資料夾") from exc
+            finally:
+                os.close(fd)
+    finally:
+        for fd, _ in stack:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+    for where, depth, mode in found:                    # the forbidden names first, at any depth
+        name = where.rsplit("/", 1)[-1]
+        if name.casefold().split(".", 1)[0] in FORBIDDEN_ANYWHERE or name.casefold() in ("gemini.md", "agents.md"):
+            raise _foreign("projects/" + where)
+    if too_much is not None:
+        raise _foreign("projects/" + too_much)
+    known = {n.casefold() for n in PROJECT_ENTRIES}
+    for where, depth, mode in found:
+        name = where.rsplit("/", 1)[-1]
+        if depth == 0 and not stat.S_ISDIR(mode):
+            raise _foreign("projects/" + where)         # a project is a folder (a link or a file is not)
+        if depth >= 1 and (name.casefold() not in known or not (stat.S_ISREG(mode) or stat.S_ISDIR(mode))):
+            raise _foreign("projects/" + where)
 
 
 def _names(fd) -> list[str]:
@@ -261,6 +333,7 @@ def check_chat_home(base, *, size: bool = True, home=None) -> Path:
                     if name.casefold() in inner:
                         raise _foreign(name)
                 _refuse_strangers(_names(cfd), CREATED_CONFIG)
+                _check_projects(cfd)
                 _check_mcp_config(cfd)
             finally:
                 os.close(cfd)

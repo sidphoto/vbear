@@ -33,6 +33,7 @@ The configuration is the JSON file named by $FAKE_AGY_CONFIG (``write_launcher``
   forgets              the code word is not remembered after a resume
   home_item            the --gemini-dir folder gets a hooks file when the process that answered resume_ask ends
   home_stranger        the --gemini-dir folder gets an item nobody knows (at the end of the process that answered resume_ask)
+  project_hook         a hooks file appears inside config/projects/p-0001 (at the end of the process that answered resume_ask)
   auth_error           session/new is answered with "Authentication required"
   add_dir_ignored      --add-dir does not make the shared folder writable for a command
   only_shared          outside_edit_escapes works only when the shared folder is on
@@ -177,6 +178,8 @@ class Agent:
                     self.dispatch(msg)
         except Eof:
             pass
+        if self.flags.get("project_hook") and self.gemini and self.last_step == "resume_ask":
+            (Path(self.gemini) / "config" / "projects" / "p-0001" / "hooks.json").write_text("{}")
         if self.flags.get("home_stranger") and self.gemini and self.last_step == "resume_ask":
             (Path(self.gemini) / "stranger-item").write_text("x")
         if self.flags.get("home_item") and self.gemini and self.last_step == "resume_ask":

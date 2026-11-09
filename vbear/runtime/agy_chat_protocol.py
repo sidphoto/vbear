@@ -81,6 +81,8 @@ class AgyConstants:
     usage_sum_fields: tuple             # totalTokens is the sum of these (measured)
     home_forbidden: tuple               # paths in the chat's settings folder that VBear never writes and that must not be there
     home_created: tuple                 # the only other paths AGY makes there by itself (seen in a real run); anything else is refused
+    project_entries: tuple              # the names AGY is known to make inside a folder of config/projects (none known yet)
+    forbidden_anywhere: tuple           # a name (up to its first dot, any case) that is refused at any depth of config/projects
     workdir_forbidden: tuple            # names at the top of a work folder that AGY would read as settings or rules
 
     def settings_copy(self) -> dict:
@@ -112,6 +114,11 @@ VERSIONS = {
         # AGY 1.5.3 makes these in a fresh --gemini-dir (the first real run found config/projects among them). Names only are
         # looked at, and a name that is in neither list is a name something else put there.
         home_created=("antigravity-cli", "config", "config/config.json", "config/mcp_config.json", "config/projects"),
+        # Inside config/projects only empty folders pass until a real run shows what AGY makes there (it is the one place where a
+        # foreign hook, rule or skill could hide): a name to add goes here, and nowhere else.
+        project_entries=(),
+        forbidden_anywhere=("hooks", "rules", "workflows", "global_workflows", "skills", "plugins", "settings", "gemini", "agents",
+                            "agent", "mcp_config"),
         workdir_forbidden=(".agents", ".agent", ".gemini", "GEMINI.md", "AGENTS.md")),
 }
 

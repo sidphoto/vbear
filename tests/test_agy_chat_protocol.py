@@ -82,6 +82,9 @@ class ConstantsTests(unittest.TestCase):
         self.assertEqual(c.home_created, ("antigravity-cli", "config", "config/config.json", "config/mcp_config.json",
                                           "config/projects"))
         self.assertTrue(set(c.home_created).isdisjoint(c.home_forbidden))
+        self.assertEqual(c.project_entries, (), "nothing is known to be made inside a project folder yet (a real run must show it)")
+        self.assertEqual(c.forbidden_anywhere, ("hooks", "rules", "workflows", "global_workflows", "skills", "plugins", "settings",
+                                                "gemini", "agents", "agent", "mcp_config"))
         self.assertEqual(c.workdir_forbidden, (".agents", ".agent", ".gemini", "GEMINI.md", "AGENTS.md"))
 
     def test_argv_is_the_fixed_tail_and_nothing_else(self):
