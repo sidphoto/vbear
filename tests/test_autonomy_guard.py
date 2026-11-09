@@ -49,6 +49,10 @@ Never, whatever the person ticked in 「自己動手」:
      templates are named in vbear/server.py and nowhere else in the package. (13d, 13e: the write functions of the applies and of the
      person's own templates, added by P45-2 and P45-3; the behaviour is tested in tests/test_templates_apply.py.)
 
+  14. (P46, ADR 0012) an AGY chat asks every time, always runs in AGY's sandbox, and reads and changes nothing of the person's AGY settings:
+     14a, 14b, 14c here (the protocol module's answers, its argv and settings, and ``BypassSandbox``); 14d, 14g, 14h are added by P46-3 and
+     14e, 14f by P46-5. The behaviour is tested in tests/test_agy_chat_protocol.py.
+
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
 ``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py``, ``vbear/skillbook*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
 staff, of dispatch, of groups and of memory (the suggestions, P42-4) are held to it the day they are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
@@ -58,6 +62,7 @@ so the scan cannot go quiet.
 from __future__ import annotations
 
 import ast
+import json
 import re
 import unittest
 from pathlib import Path
@@ -1543,6 +1548,167 @@ class KeepAwakeRules(unittest.TestCase):
         }
         for why, source in bad.items():
             self.assertTrue(argv_problems(source), why)
+
+
+# 14. (P46, ADR 0012) the AGY chat: every request asked, only "allow once" or "reject once" ever answered, argv and settings fixed
+AGY_PATTERNS = ("agy*.py", "runtime/agy*.py")
+AGY_BANNED_PATTERNS = AGY_PATTERNS + ("runtime/agent_sessions.py",)
+AGY_NEVER_CHOSEN = ("allow_always", "reject_always")
+AGY_NEVER_CHOSEN_HOME = "NEVER_CHOSEN_OPTION_KINDS"        # the one constant in which the two words of a kind VBear never chooses may stand
+AGY_BANNED_FLAGS = ("--dangerously-skip-permissions", "--login", "--app-data-dir", "--process-per-session",
+                    "--include-default-customizations")
+
+
+def agy_files(patterns=AGY_PATTERNS) -> list[Path]:
+    return sorted({p for pattern in patterns for p in PACKAGE.glob(pattern)})
+
+
+def _docstring_ids(tree) -> set:
+    return {id(n.body[0].value) for n in ast.walk(tree) if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and n.body and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)}
+
+
+def never_chosen_uses(source: str, label: str = "<source>") -> list[str]:
+    """Every string in code that holds the name of a kind of option VBear never chooses (``allow_always``, ``reject_always``), except in the
+    one constant that names them (and docstrings): the words may not be a value to send."""
+    tree = ast.parse(source, filename=label)
+    docs = _docstring_ids(tree)
+    allowed: set = set()
+    for node in ast.walk(tree):
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
+        if any(isinstance(t, ast.Name) and t.id == AGY_NEVER_CHOSEN_HOME for t in targets):
+            allowed |= {id(n) for n in ast.walk(node)}
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docs and id(node) not in allowed \
+                and any(word in node.value for word in AGY_NEVER_CHOSEN):
+            found.append(f"{label}:{node.lineno}: holds a kind of option VBear never chooses")
+    return found
+
+
+def banned_flag_uses(source: str, label: str = "<source>") -> list[str]:
+    """Every line (code, comment or docstring) that names a switch the AGY chat never passes."""
+    return [f"{label}:{n}: names {flag}" for n, line in enumerate(source.splitlines(), 1) for flag in AGY_BANNED_FLAGS if flag in line]
+
+
+class AgyChatRules(unittest.TestCase):
+    """P46-1, rules 14a-14c."""
+
+    def agy_protocol(self):
+        from vbear.runtime import agy_chat_protocol as acp
+        return acp
+
+    def test_the_protocol_module_is_scanned(self):
+        self.assertIn("agy_chat_protocol.py", [p.name for p in agy_files()])
+
+    # 14a: only "allow once" and "reject once" are ever answered
+    def test_14a_no_agy_module_holds_an_always_kind_outside_the_one_constant(self):
+        problems = []
+        for path in agy_files():
+            problems += never_chosen_uses(path.read_text(encoding="utf-8"), str(path.relative_to(PACKAGE)))
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_14a_the_constant_that_names_them_exists_and_is_not_among_the_kinds_chosen(self):
+        acp = self.agy_protocol()
+        self.assertEqual(acp.NEVER_CHOSEN_OPTION_KINDS, frozenset(AGY_NEVER_CHOSEN))
+        tree = ast.parse((PACKAGE / "runtime" / "agy_chat_protocol.py").read_text(encoding="utf-8"))
+        named = [n for n in ast.walk(tree) if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == AGY_NEVER_CHOSEN_HOME
+                                                                                for t in n.targets)]
+        self.assertEqual(len(named), 1)
+        for consts in acp.VERSIONS.values():
+            self.assertTrue(set(AGY_NEVER_CHOSEN).isdisjoint({consts.allow_option_kind, consts.reject_option_kind}))
+
+    def test_14a_the_scan_fires_on_small_made_up_sources(self):
+        for source in ('KIND = "allow_always"\n', 'def f():\n    return {"optionId": "x", "kind": "reject_always"}\n',
+                       'CHOICES = ("allow_once", "allow_always")\n', 'X = f"{1}allow_always"\n',
+                       'OTHER = frozenset({"allow_always"})\n'):
+            self.assertTrue(never_chosen_uses(source), source)
+        for source in ('NEVER_CHOSEN_OPTION_KINDS = frozenset({"allow_always", "reject_always"})\n',
+                       'NEVER_CHOSEN_OPTION_KINDS: frozenset = frozenset({"allow_always"})\n',
+                       '"""Mentions allow_always in prose."""\ndef f():\n    """And reject_always here."""\n    return 1\n',
+                       'KIND = "allow_once"\n'):
+            self.assertEqual(never_chosen_uses(source), [], source)
+
+    def test_14a_answers_only_ever_select_allow_once_or_reject_once(self):
+        acp = self.agy_protocol()
+        mixed = [{"optionId": "a-always", "kind": "allow_always"}, {"optionId": "allow", "kind": "allow_once"},
+                 {"optionId": "r-always", "kind": "reject_always"}, {"optionId": "deny", "kind": "reject_once"},
+                 {"optionId": "other", "kind": "something_else"}]
+        for options in (mixed, mixed[::-1], mixed[:1] + mixed[2:3], mixed[::2]):
+            for decision in ("allow", "deny", "cancelled"):
+                try:
+                    line = json.loads(acp.answer_line(1, options, decision))
+                except ValueError:
+                    continue                                   # an "allow" it cannot give is an error, never another option
+                chosen = line["result"]["outcome"].get("optionId")
+                self.assertIn(chosen, (None, "allow", "deny"), (options, decision))
+        for decision in ("allow_always", "reject_always", "accept", "allow_once", "reject_once"):
+            with self.assertRaises(ValueError, msg=decision):
+                acp.answer_line(1, mixed, decision)
+        self.assertEqual(acp.DECISIONS, ("allow", "deny", "cancelled"))
+
+    # 14b: the argv, the switches that are never passed, and the settings
+    def test_14b_the_argv_tail_is_the_fixed_one(self):
+        acp = self.agy_protocol()
+        for consts in acp.VERSIONS.values():
+            self.assertEqual(acp.argv_for(consts, "/s/agy-chat-home"),
+                             ["acp", "--gemini-dir", "/s/agy-chat-home", "--sandbox", "--disable-telemetry"])
+            self.assertEqual(acp.argv_for(consts, "/s/agy-chat-home", shared="/s/shared"),
+                             ["acp", "--gemini-dir", "/s/agy-chat-home", "--sandbox", "--disable-telemetry", "--add-dir", "/s/shared"])
+
+    def test_14b_no_file_that_builds_the_command_names_a_switch_that_is_never_passed(self):
+        problems = []
+        files = agy_files(AGY_BANNED_PATTERNS)
+        self.assertIn("agent_sessions.py", [p.name for p in files])
+        for path in files:
+            problems += banned_flag_uses(path.read_text(encoding="utf-8"), str(path.relative_to(PACKAGE)))
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_14b_the_scan_fires_on_small_made_up_sources(self):
+        for flag in AGY_BANNED_FLAGS:
+            self.assertTrue(banned_flag_uses(f'ARGV = ["acp", "{flag}"]\n'), flag)
+            self.assertTrue(banned_flag_uses(f"# add {flag} to go faster\n"), flag)
+        self.assertEqual(banned_flag_uses('ARGV = ["acp", "--sandbox", "--disable-telemetry", "--add-dir"]\n'), [])
+
+    def test_14b_the_settings_are_exactly_the_five_keys_and_values_of_the_design(self):
+        acp = self.agy_protocol()
+        for consts in acp.VERSIONS.values():
+            settings = consts.settings
+            self.assertEqual(sorted(settings), ["allowNonWorkspaceAccess", "enableTerminalSandbox", "permissions", "toolPermission",
+                                                "useG1Credits"])
+            self.assertEqual(settings["toolPermission"], "request-review")
+            self.assertIs(settings["enableTerminalSandbox"], True)
+            self.assertIs(settings["allowNonWorkspaceAccess"], False)
+            self.assertIs(settings["useG1Credits"], False)
+            self.assertEqual(settings["permissions"], {"allow": [], "ask": [], "deny": []})
+            self.assertEqual(json.loads(acp.settings_bytes(consts)), settings)
+
+    # 14c: BypassSandbox is refused by VBear, with no card
+    def test_14c_a_request_with_bypass_sandbox_is_refused_with_no_card_for_true_a_string_and_a_number(self):
+        from tests import agy_chat_fixtures as fx
+        acp = self.agy_protocol()
+        consts = acp.VERSIONS["1.5.3"]
+        for value in (True, "true", 1):
+            tracker = acp.AgyTracker(consts, workdir="/made/up/work", session_id=fx.SESSION)
+            out = tracker.on_message({"jsonrpc": "2.0", "id": 4, "method": "session/request_permission", "params": {
+                "sessionId": fx.SESSION, "options": [{"optionId": "allow", "kind": "allow_once"}, {"optionId": "deny", "kind": "reject_once"}],
+                "toolCall": {"toolCallId": "c-1", "title": "T", "kind": "execute", "status": "pending",
+                             "rawInput": {"BypassSandbox": value, "CommandLine": "echo x"}}}})
+            request = [d for k, d in out if k == "permission_request"]
+            self.assertEqual(len(request), 1, value)
+            self.assertEqual((request[0]["action"], request[0]["bypass"]), ("deny", True), value)
+            with self.assertRaises(ValueError):
+                tracker.answered(4, "allow")                   # there is no way to allow it
+
+    def test_14c_a_request_without_it_is_asked_and_one_with_false_is_too(self):
+        from tests import agy_chat_fixtures as fx
+        acp = self.agy_protocol()
+        for raw in ({"CommandLine": "echo x"}, {"CommandLine": "echo x", "BypassSandbox": False}):
+            tracker = acp.AgyTracker(acp.VERSIONS["1.5.3"], workdir="/made/up/work", session_id=fx.SESSION)
+            out = tracker.on_message({"jsonrpc": "2.0", "id": 4, "method": "session/request_permission", "params": {
+                "sessionId": fx.SESSION, "options": [{"optionId": "allow", "kind": "allow_once"}, {"optionId": "deny", "kind": "reject_once"}],
+                "toolCall": {"toolCallId": "c-1", "title": "T", "kind": "execute", "status": "pending", "rawInput": raw}}})
+            self.assertEqual([d["action"] for k, d in out if k == "permission_request"], ["ask"], raw)
 
 
 if __name__ == "__main__":
