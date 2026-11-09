@@ -2201,7 +2201,7 @@ def make_handler(console: Console):
             """GET /api/routines: every routine with its next time and its last 10 runs, the settings, today's money, and the reminders
             that wait. Reads only; a record that cannot be read is said so and nothing is guessed."""
             runner = console.routine_runner()
-            now = time.time()
+            now = runner.clock()
             routines, problem = routines_mod.read_routines()
             runs, runs_problem = routines_mod.read_runs()
             settings, settings_problem = routines_mod.read_settings()

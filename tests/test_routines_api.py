@@ -43,6 +43,16 @@ class RoutinesApiBase(unittest.TestCase):
         self.writer, self.accountant = card("文案小編", "social"), card("會計師", "accountant")
         self.off = card("停用員工", "social", enabled=False)
         self.now = [MONDAY_0759]
+        # The routine store stamps created_at/enabled_at with the wall clock; tie only time.time to the test clock so these
+        # tests do not depend on today's date (monotonic and sleep stay real).
+        import time as real_time
+        import types as _types
+        from unittest import mock as _mock
+        from vbear import routines as _routines
+        _clock = _types.SimpleNamespace(time=lambda: self.now[0], monotonic=real_time.monotonic, sleep=real_time.sleep)
+        _patch = _mock.patch.object(_routines, "time", _clock)
+        _patch.start()
+        self.addCleanup(_patch.stop)
         self.daemon = FakeDaemon(clock=lambda: self.now[0])
         self.service = chat_service.ChatService(self.daemon, claude=lambda: (sys.executable, "2.1.318", ""), codex=lambda: dict(HEAD),
                                                 codex_binary=lambda: (sys.executable, "0.163.0"))
