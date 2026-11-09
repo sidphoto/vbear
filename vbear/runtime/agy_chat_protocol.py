@@ -416,11 +416,31 @@ def _str_paths(items, key: str | None = None) -> list[str]:
     return out
 
 
+_PATH_KEY_WORDS = ("path", "dest", "target", "source", "src", "dst", "file", "folder", "dir")
+
+
+def _raw_paths(raw) -> list[str]:
+    """Every path the raw input of a tool call names, without repeats: ``Path`` first, then the other members whose name says they
+    hold a place (path, destination, target, source, new path, file, folder... in any case; a member that holds a file's content does
+    not count) in the order of their names. A value is a string or a list of strings."""
+    if not isinstance(raw, dict):
+        return []
+    out = []
+    keys = sorted((k for k in raw if isinstance(k, str) and k != "Path"), key=str.casefold)
+    for key in (["Path"] if "Path" in raw else []) + keys:
+        folded = key.casefold()
+        if key != "Path" and (any(w in folded for w in ("content", "text")) or not any(w in folded for w in _PATH_KEY_WORDS)):
+            continue
+        value = raw[key]
+        for item in value if isinstance(value, list) else [value]:
+            if isinstance(item, str) and item and item not in out:
+                out.append(item)
+    return out
+
+
 def _paths_of(raw, locations) -> list[str]:
     """Every path a tool call names, in the order of the raw input first and the locations after, without repeats."""
-    out = []
-    if isinstance(raw, dict) and isinstance(raw.get("Path"), str) and raw["Path"]:
-        out.append(raw["Path"])
+    out = _raw_paths(raw)
     for path in _str_paths(locations, "path"):
         if path not in out:
             out.append(path)
@@ -462,6 +482,22 @@ def _file_content(raw, diffs) -> str | None:
     if given is None or (shown is not None and len(shown.encode("utf-8", "replace")) > len(given.encode("utf-8", "replace"))):
         return shown
     return given
+
+
+# Members of a tool call's raw input that only describe it: a change in them after a yes is not a different call.
+_DESCRIBING = frozenset({"description", "explanation", "reason", "summary", "comment", "title"})
+
+
+def _strings_of(value):
+    """Every string in a value of JSON, nested ones included."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _strings_of(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _strings_of(item)
 
 
 _STOP_REASONS = frozenset({"end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled"})
@@ -787,21 +823,45 @@ class AgyTracker:
 
     @staticmethod
     def _signature(rec):
-        """What a yes was given to: the command of an ``execute``, the paths of anything else."""
-        raw = rec["raw"]
-        return ("command", raw.get("CommandLine")) if rec["kind"] == "execute" else ("paths", tuple(rec["paths"]))
+        """What a yes was given to: everything the raw input says but a short list of fields that only describe (so a field added or
+        changed after the yes is a different call), and the paths."""
+        raw = {k: v for k, v in rec["raw"].items() if not (isinstance(k, str) and k.casefold() in _DESCRIBING)}
+        return (json.dumps(raw, sort_keys=True, default=repr), tuple(rec["paths"]))
+
+    @staticmethod
+    def _bypasses(raw) -> bool:
+        return any(isinstance(k, str) and k.casefold() == "bypasssandbox" and v is not False for k, v in raw.items())
+
+    def _search_problem(self, rec) -> str | None:
+        """Why a search that ran without a request is a violation, or None (the way a Claude chat lets a Glob or a Grep pass): every
+        string it holds is a bare name (no ``/``, ``..`` or ``~``), the work folder has no link to the outside, and what path it names
+        is inside the folders (a member that names a place is judged as a path, not as a pattern)."""
+        places = set(_raw_paths(rec["raw"]))
+        if not all(not cp._pattern_names_a_path(text) for text in _strings_of(rec["raw"]) if text not in places):
+            return "AGY 沒有問就搜尋，而搜尋的內容帶有路徑（/、.. 或 ~），可能讀到工作資料夾以外"
+        if cp._outward_link(self.workdir):
+            return "AGY 沒有問就搜尋，而工作資料夾裡有指向外面的連結"
+        if rec["paths"] and judge_read(rec["paths"], self.workdir, self.shared).action != "allow":
+            return "AGY 沒有經過 VBear 的允許就搜尋了工作資料夾以外的地方"
+        return None
 
     def _running_problem(self, rec) -> str | None:
-        """Why a call that is running is a violation, or None. A read or a search needs no yes of VBear's when it stays in the work
-        folder (and the shared folder the employee has); anything else needs the "allow once" VBear answered."""
-        if rec["approved"] and rec["asked"] is not None and self._signature(rec) != rec["asked"]:
-            return "AGY 做的和你允許時看到的不同"
+        """Why a call that is running (or that was allowed and changed) is a violation, or None. A read needs no yes of VBear's when it
+        stays in the work folder (and the shared folder the employee has); so does a search that passes ``_search_problem``; anything else
+        needs the "allow once" VBear answered, and what runs must be what was allowed."""
+        if rec["approved"]:
+            if self._bypasses(rec["raw"]):
+                return "AGY 在你允許之後要求在沙盒外執行"
+            if rec["asked"] is not None and self._signature(rec) != rec["asked"]:
+                return "AGY 做的和你允許時看到的不同"
         if rec["status"] in _RUNNING_FREE or rec["approved"]:
             return None
         kind = rec["kind"]
-        if kind in ("read", "search"):
+        if kind == "search":
+            return self._search_problem(rec)
+        if kind == "read":
             if not rec["paths"]:
-                return None if kind == "search" else "AGY 沒有問就讀檔，而且看不出讀的是哪個檔案"
+                return "AGY 沒有問就讀檔，而且看不出讀的是哪個檔案"
             if judge_read(rec["paths"], self.workdir, self.shared).action == "allow":
                 return None
             return "AGY 沒有經過 VBear 的允許就讀了工作資料夾以外的檔案"
@@ -873,21 +933,26 @@ class AgyTracker:
             return self._decide_file(rec, raw, extra)
         if category == "read":
             verdict = judge_read(rec["paths"], self.workdir, self.shared)
+            if verdict.action == "allow" and kind == "search" and cp._outward_link(self.workdir):
+                return "ask", "員工的工作資料夾裡有指向資料夾以外的連結，搜尋可能讀到外面的檔案，要你允許", extra
             return verdict.action, verdict.reason, extra
         return "deny", "VBear 不開放這種工具", extra
 
     def _decide_file(self, rec, raw: dict, extra: dict):
         diffs = extra["diffs"]
         raw_path = raw.get("Path")
+        paths = _raw_paths(raw)                         # every place the call names: a move names two
         located = _str_paths(rec["locations"], "path")
         if not (isinstance(raw_path, str) and raw_path):
             return "deny", "看不到這次要修改的檔案路徑", extra
-        extra["paths"] = [raw_path]
+        extra["paths"] = paths
         if not located or len(located) != len(rec["locations"]):
             return "deny", "看不到這次要修改的檔案路徑", extra
-        if {raw_path} != set(located) or any(d["path"] != raw_path for d in diffs):
+        if raw_path not in located or not set(located) <= set(paths) or any(d["path"] not in paths for d in diffs):
             return "deny", "請求裡幾個地方寫的檔案路徑不一致", extra
         kind = rec["kind"]
+        if kind == "move" and len(paths) < 2:
+            return "deny", "看不到要把檔案移到哪裡，不能允許", extra
         if kind == "edit":
             if diffs:
                 extra["operation"] = "add" if diffs[0]["old_text"] is None else "modify"
@@ -895,7 +960,7 @@ class AgyTracker:
                 extra["operation"] = "modify" if os.path.lexists(raw_path) else "add"
         else:
             extra["operation"] = {"delete": "delete", "move": "move"}[kind]
-        verdict = judge_file_change([raw_path], _file_content(raw, diffs), self.workdir, self.shared)
+        verdict = judge_file_change(paths, _file_content(raw, diffs), self.workdir, self.shared)
         return verdict.action, verdict.reason, extra
 
     def _on_permission(self, rid, params: dict):

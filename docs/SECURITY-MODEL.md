@@ -2200,12 +2200,15 @@ card"); what it already fixes, and what `tests/test_agy_chat_protocol.py` and ru
   constant and are never a value to send.
 - **A request to run outside the sandbox (`BypassSandbox`, any value but `false`) is refused by VBear with no card.** So is anything that
   reaches the network, and any kind of tool VBear has no card for.
-- **File tools are judged by VBear** (they are not in AGY's sandbox): inside the work folder (or the shared folder the employee has), links
+- **File tools are judged by VBear** (they are not in AGY's sandbox), every place the call names (a move names where it goes; a move with no
+  destination is refused): inside the work folder (or the shared folder the employee has), links
   followed, none of `.git`, `.agents`, `.agent`, `.gemini`, `.codex`, `.claude` or a `GEMINI.md` / `AGENTS.md` at any depth, no file with another
   hard link, and a card that fits; otherwise refused with no card. A read inside the folders is VBear's own yes; outside, a card that says the
   content goes to Google.
 - **The chat stops (a violation) when** a command, a file change, a network use or any other tool ran and VBear had not answered "allow once"
-  (or what ran is not what was allowed), a read ran outside the folders without a request, the mode is not `default`, a message is of another
+  (or the call changed after the yes: any member of its raw input but a short list of describing ones, or `BypassSandbox`), a read ran outside
+  the folders without a request, a search ran without a request unless every string in it is a bare name, the work folder has no link to the
+  outside and any path it names is inside the folders (the rule of a Claude chat's Glob and Grep), the mode is not `default`, a message is of another
   session, or the model could not be set. The tracker reads nothing after that.
 - **Nothing about the person is kept**: not the plan name, the sign-in methods, the thoughts or the names of the commands and skills.
 

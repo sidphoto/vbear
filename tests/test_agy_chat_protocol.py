@@ -942,8 +942,9 @@ class PermissionTests(Drive):
         self.assertEqual(req["operation"], "modify")
         req = self.permission("delete", {"Path": path}, [{"path": path}])
         self.assertEqual((req["action"], req["operation"]), ("ask", "delete"))
-        req = self.permission("move", {"Path": path}, [{"path": path}])
-        self.assertEqual((req["action"], req["operation"]), ("ask", "move"))
+        dest = os.path.join(self.work, "moved.txt")
+        req = self.permission("move", {"Path": path, "Destination": dest}, [{"path": path}])
+        self.assertEqual((req["action"], req["operation"], req["paths"]), ("ask", "move", [path, dest]))
 
     def test_outside_the_work_folder_and_the_settings_names_are_refused_with_no_card(self):
         self.touch(self.work, "real.txt")
@@ -998,6 +999,65 @@ class PermissionTests(Drive):
         self.drive("permission", vars, shared=True).start()
         self.prompt()
         self.assertEqual(self.requests()[-1]["action"], "deny")
+
+
+    # -- calls with more than one path (a move names where it goes)
+
+    def test_a_move_is_judged_by_where_it_comes_from_and_where_it_goes(self):
+        src = self.touch(self.work, "a.txt")
+        for key in ("Destination", "DestinationPath", "destination", "TargetPath", "target", "NewPath", "new_path", "Dest", "dst"):
+            inside = os.path.join(self.work, "moved.txt")
+            req = self.permission("move", {"Path": src, key: inside}, [{"path": src}, {"path": inside}])
+            self.assertEqual((req["action"], req["paths"]), ("ask", [src, inside]), key)
+            for bad in (os.path.join(self.out, "x.txt"), os.path.join(self.work, ".git", "x"), os.path.join(self.work, ".agents", "x"),
+                        os.path.join(self.work, "GEMINI.md"), "/etc/made-up.txt", "relative.txt"):
+                req = self.permission("move", {"Path": src, key: bad}, [{"path": src}])
+                self.assertEqual(req["action"], "deny", (key, bad))
+
+    def test_a_move_through_a_link_to_the_outside_is_refused(self):
+        src = self.touch(self.work, "a.txt")
+        os.symlink(self.out, os.path.join(self.work, "out-link"))
+        req = self.permission("move", {"Path": src, "Destination": os.path.join(self.work, "out-link", "x.txt")}, [{"path": src}])
+        self.assertEqual(req["action"], "deny")
+
+    def test_a_move_that_names_no_destination_is_refused(self):
+        src = self.touch(self.work, "a.txt")
+        for raw in ({"Path": src}, {"Path": src, "Destination": ""}, {"Path": src, "Destination": 5}, {"Path": src, "Destination": src},
+                    {"Path": src, "Content": "somewhere/else"}):
+            req = self.permission("move", raw, [{"path": src}])
+            self.assertEqual(req["action"], "deny", raw)
+
+    def test_any_other_path_a_file_call_names_is_judged_too(self):
+        a = os.path.join(self.work, "a.txt")
+        for kind in ("edit", "delete"):
+            req = self.permission(kind, {"Path": a, "Content": "x", "SourcePath": os.path.join(self.out, "o.txt")}, [{"path": a}])
+            self.assertEqual(req["action"], "deny", kind)
+        req = self.permission("edit", {"Path": a, "Content": "see /etc/hosts and ../x"}, [{"path": a}])
+        self.assertEqual(req["action"], "ask")                          # what is written is not a path
+
+    def test_the_locations_may_name_both_ends_of_a_move_but_nothing_else(self):
+        src = self.touch(self.work, "a.txt")
+        dest = os.path.join(self.work, "b.txt")
+        stray = os.path.join(self.work, "c.txt")
+        self.assertEqual(self.permission("move", {"Path": src, "Destination": dest}, [{"path": src}, {"path": dest}])["action"], "ask")
+        self.assertEqual(self.permission("move", {"Path": src, "Destination": dest}, [{"path": src}, {"path": stray}])["action"], "deny")
+        self.assertEqual(self.permission("move", {"Path": src, "Destination": dest}, [{"path": dest}])["action"], "deny")
+
+    def test_the_paths_of_a_read_are_judged_as_a_whole(self):
+        inside, outside = self.touch(self.work, "a.txt"), self.touch(self.out, "o.txt")
+        req = self.permission("read", {"Path": inside, "OtherPath": outside}, [{"path": inside}])
+        self.assertEqual(req["action"], "ask")
+
+    # -- search
+
+    def test_a_search_inside_is_asked_instead_when_the_work_folder_has_a_link_to_the_outside(self):
+        inside = self.touch(self.work, "a.txt")
+        raw = {"Path": inside, "Query": "made-up"}
+        self.assertEqual(self.permission("search", raw, [{"path": inside}])["action"], "allow")
+        os.symlink(self.out, os.path.join(self.work, "out-link"))
+        req = self.permission("search", raw, [{"path": inside}])
+        self.assertEqual(req["action"], "ask")
+        self.assertEqual(self.permission("read", {"Path": inside}, [{"path": inside}])["action"], "allow")     # a read names its file
 
     # -- reads, the net, and kinds that are not known
 
@@ -1117,8 +1177,94 @@ class ViolationTests(Drive):
         self.t.answered(req["request_id"], "allow")
         out = self.t.on_message({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": SESSION, "update": {
             "sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "in_progress",
-            "rawInput": {"CommandLine": "ls -a", "Cwd": "/made/up"}, "title": "Running"}}})
+            "rawInput": {"CommandLine": "ls -a", "Description": "lists the folder"}, "title": "Running"}}})
         self.assertEqual(out, [])
+
+
+    # -- what a yes covers
+
+    def update(self, **fields):
+        return self.t.on_message({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": SESSION, "update": {
+            "sessionUpdate": "tool_call_update", "toolCallId": "call-1", **fields}}})
+
+    def test_a_move_that_goes_somewhere_else_after_the_yes_is_a_violation(self):
+        src = self.touch(self.work, "a.txt")
+        dest = os.path.join(self.work, "b.txt")
+        req = self.permission("move", {"Path": src, "Destination": dest}, [{"path": src}])
+        self.t.answered(req["request_id"], "allow")
+        self.assertEqual(self.update(status="in_progress", rawInput={"Path": src, "Destination": dest}), [])
+        out = self.update(status="in_progress", rawInput={"Path": src, "Destination": os.path.join(self.out, "b.txt")})
+        self.assertEqual([k for k, _ in out], ["violation"])
+
+    def test_bypass_sandbox_appearing_after_the_yes_is_a_violation_in_any_case_and_for_any_value_but_false(self):
+        for key in ("BypassSandbox", "bypasssandbox", "BYPASSSANDBOX"):
+            for value in (True, "true", 1, None, "false", 0):
+                req = self.permission("execute", {"CommandLine": "ls -a"})
+                self.t.answered(req["request_id"], "allow")
+                out = self.update(status="in_progress", rawInput={"CommandLine": "ls -a", key: value})
+                self.assertEqual([k for k, _ in out], ["violation"], (key, value))
+                self.assertIn("沙盒", out[0][1]["message"])
+
+    def test_bypass_sandbox_after_the_yes_is_a_violation_even_in_an_update_that_is_not_running_yet(self):
+        req = self.permission("execute", {"CommandLine": "ls -a"})
+        self.t.answered(req["request_id"], "allow")
+        out = self.update(status="pending", rawInput={"CommandLine": "ls -a", "BypassSandbox": True})
+        self.assertEqual([k for k, _ in out], ["violation"])
+
+    def test_bypass_sandbox_false_after_the_yes_is_the_same_call_only_if_it_was_there_before(self):
+        req = self.permission("execute", {"CommandLine": "ls -a", "BypassSandbox": False})
+        self.t.answered(req["request_id"], "allow")
+        self.assertEqual(self.update(status="in_progress", rawInput={"CommandLine": "ls -a", "BypassSandbox": False}), [])
+
+    def test_a_new_field_after_the_yes_is_a_violation_unless_it_is_on_the_short_harmless_list(self):
+        for extra in ({"Cwd": "/made/up"}, {"Env": {"A": "1"}}, {"Timeout": 5}, {"Content": "x"}, {"SandboxMode": "off"}):
+            req = self.permission("execute", {"CommandLine": "ls -a"})
+            self.t.answered(req["request_id"], "allow")
+            out = self.update(status="in_progress", rawInput={"CommandLine": "ls -a", **extra})
+            self.assertEqual([k for k, _ in out], ["violation"], extra)
+        for extra in ({"Description": "lists"}, {"explanation": "x"}, {"Reason": "y"}, {"Summary": "z"}, {"Comment": "c"}, {"Title": "t"}):
+            req = self.permission("execute", {"CommandLine": "ls -a"})
+            self.t.answered(req["request_id"], "allow")
+            self.assertEqual(self.update(status="in_progress", rawInput={"CommandLine": "ls -a", **extra}), [], extra)
+
+    def test_a_field_that_changes_value_after_the_yes_is_a_violation(self):
+        req = self.permission("execute", {"CommandLine": "ls -a", "Cwd": "/made/up/one"})
+        self.t.answered(req["request_id"], "allow")
+        out = self.update(status="in_progress", rawInput={"CommandLine": "ls -a", "Cwd": "/made/up/two"})
+        self.assertEqual([k for k, _ in out], ["violation"])
+
+    def test_an_update_without_a_raw_input_keeps_what_was_allowed(self):
+        req = self.permission("execute", {"CommandLine": "ls -a"})
+        self.t.answered(req["request_id"], "allow")
+        self.assertEqual(self.update(status="in_progress"), [])
+
+    # -- a search that runs by itself
+
+    def search(self, raw, locations=None, first="in_progress"):
+        return self.violates(vars={"KIND": "search", "FIRST": first, "RAW_INPUT": raw, "LOCATIONS": locations or []})
+
+    def test_a_search_with_no_path_is_fine_only_when_every_string_is_a_bare_name_and_there_is_no_link_to_the_outside(self):
+        self.assertEqual(self.search({"Query": "made-up", "Glob": "*.py"}), [])
+        self.assertEqual(self.search({"Query": "made-up", "Limit": 5, "CaseSensitive": True, "Extra": None}), [])
+
+    def test_a_search_whose_strings_hold_a_slash_dots_or_a_tilde_is_a_violation(self):
+        for raw in ({"Query": "x", "Glob": "/etc/*"}, {"Query": "x", "Glob": "../*"}, {"Query": "x", "Glob": "~/*"},
+                    {"Query": "a/b"}, {"Query": "x", "Directories": ["ok", "../up"]}, {"Query": "x", "Nested": {"Where": "/etc"}},
+                    {"Query": ""}, {"Query": "x", "Glob": ""}):
+            got = self.search(raw)
+            self.assertEqual(len(got), 1, raw)
+
+    def test_a_search_is_a_violation_when_the_work_folder_has_a_link_to_the_outside_even_with_a_path_inside(self):
+        os.symlink(self.out, os.path.join(self.work, "out-link"))
+        self.assertEqual(len(self.search({"Query": "made-up"})), 1)
+        inside = self.touch(self.work, "a.txt")
+        self.assertEqual(len(self.search({"Path": inside, "Query": "made-up"}, [{"path": inside}])), 1)
+
+    def test_a_read_is_not_stopped_by_a_link_that_it_does_not_follow(self):
+        os.symlink(self.out, os.path.join(self.work, "out-link"))
+        inside = self.touch(self.work, "a.txt")
+        got = self.violates(vars={"KIND": "read", "RAW_INPUT": {"Path": inside}, "LOCATIONS": [{"path": inside}]})
+        self.assertEqual(got, [])
 
     def test_an_update_of_a_call_never_seen_that_runs_is_a_violation(self):
         self.drive("text").start()
