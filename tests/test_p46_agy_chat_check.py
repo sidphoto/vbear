@@ -381,8 +381,8 @@ class AskProbeTests(CheckCase):
         code, report = self.check({"ls_unasked": True})
         self.assert_failed(code, report, "ls_asks")
         at = report["observations"]["protocol"]["violation_at"]
-        self.assertTrue(at and at[0]["after"] == ["tool_call_update", "completed", "execute"], at)
-        self.assertIn("沒有經過 VBear 的允許", at[0]["message"])
+        self.assertTrue(at and at[0]["after"] == ["tool_call_update", "in_progress", "execute"], at)     # (pending, then in_progress: not the order)
+        self.assertIn("順序", at[0]["message"])
 
 
 class RefusalTests(CheckCase):

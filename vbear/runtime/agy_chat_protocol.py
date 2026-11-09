@@ -125,8 +125,10 @@ VERSIONS = {
         # Inside config/projects only empty folders pass until a real run shows what AGY makes there (it is the one place where a
         # foreign hook, rule or skill could hide): a name to add goes here, and nowhere else.
         project_entries=(),
-        # AGY 1.5.3 (the third real run): a call of these kinds arrives as tool_call in_progress, then tool_call_update pending, then the
-        # request for permission, and only after a yes does it run. In_progress without a yes is an announcement, not an execution.
+        # AGY 1.5.3 (the third real run): a call of these kinds arrives as tool_call in_progress, then tool_call_update pending, then
+        # session/request_permission, and only after a yes does it run; after a no it says in_progress once more and ends failed or
+        # cancelled. Exactly this order (``_order_problem``) is the only one that is not a violation; the first in_progress is only an
+        # announcement. Any other order, status, output before a yes, or a call left announced at the end of a turn is a violation.
         announced_kinds=("execute", "edit", "delete", "move"),
         # AGY's own built-in skills and plugin (names only, from the third real run; the check's ``builtin_names`` observation lists
         # what a real AGY 1.5.3 has, to complete this list). Named like a skill or plugin, so they are listed exactly, never by pattern.
@@ -540,11 +542,28 @@ def _output_of(content) -> str | None:
 
 
 def _has_output(data: dict) -> bool:
-    """A command's own output in a message about it: text in its content, or a text value in its raw output (an exit code is not output)."""
+    """Output of a command in a message about it: text in its content, a text value in its raw output, or an exit code."""
     if _output_of(data.get("content")):
         return True
     raw = data.get("rawOutput")
-    return isinstance(raw, dict) and any(isinstance(v, str) and v.strip() for v in raw.values())
+    if raw is None:
+        return False
+    if not isinstance(raw, dict):
+        return bool(raw) or raw == 0                      # a bare value is output too
+    for key, value in raw.items():
+        if isinstance(value, str) and value.strip():
+            return True
+        if isinstance(key, str) and key.casefold().replace("_", "") in ("exitcode", "code", "returncode") \
+                and value is not None:
+            return True
+        if isinstance(value, (dict, list)) and value:
+            return True
+    return False
+
+
+def _did(kind) -> str:
+    return "執行了指令" if kind == "execute" else "修改了檔案" if kind in ("edit", "delete", "move") else \
+        "連了網" if kind == "fetch" else "用了工具"
 
 
 def _clean_options(options) -> list[dict]:
@@ -584,7 +603,6 @@ def _strings_of(value):
 
 _STOP_REASONS = frozenset({"end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled"})
 _RUNNING_FREE = (None, "pending", "failed")           # a call in one of these statuses has not run (or did not)
-_ANNOUNCED_FREE = (None, "pending", "in_progress", "failed", "cancelled")   # the same for a call of an ``announced_kinds`` kind
 _REFUSAL_END = ("failed", "cancelled")                 # how a call that was refused has to end
 _CATEGORY = {"execute": "command", "edit": "file_change", "delete": "file_change", "move": "file_change", "read": "read",
              "search": "read"}
@@ -669,7 +687,7 @@ class AgyTracker:
         call = self.calls.get(rec["call_id"])
         if call is not None:
             call["approved"] = decision == "allow"
-            call["answered"] = decision
+            call["phase"] = "allowed" if decision == "allow" else "refused"
 
     def open_requests(self) -> list:
         """The agent's requests that have no answer yet (the session answers them as cancelled when it stops a turn)."""
@@ -791,12 +809,12 @@ class AgyTracker:
         reason = result.get("stopReason")
         tokens, problem = self._usage(result.get("usage"))
         open_calls = sum(1 for c in self.calls.values() if not c["done"])
-        left = [c for c in self.calls.values() if c["kind"] in self.c.announced_kinds and not c["done"] and not c["approved"]
-                and c["status"] not in _REFUSAL_END]
+        left = [c for c in self.calls.values() if c["kind"] in self.c.announced_kinds and not c["approved"]
+                and c["phase"] in (None, "announced", "pending")]
         self.calls.clear()
         self.requests.clear()
-        if left:                                         # announced and then neither asked nor finished (or refused and not ended)
-            out.append(("anomaly", {"event_type": "call_left_announced", "fields": []}))
+        if left:                                         # announced and never asked: the turn ends with a call nobody judged
+            return self._violation("AGY 沒有經過 VBear 的允許就宣告了指令或修改，而且沒問就結束了這個回合")
         out.append(("turn_completed", {"stop_reason": reason if reason in _STOP_REASONS else "?", "tokens": tokens,
                                        "usage_problem": problem, "open_calls": open_calls}))
         return out
@@ -886,8 +904,7 @@ class AgyTracker:
             return None, None, False
         new = cid not in self.calls
         rec = self.calls.setdefault(cid, {"kind": None, "status": None, "raw": {}, "paths": [], "locations": [], "content": [],
-                                          "title": "", "done": False, "approved": False, "asked": None, "output": False,
-                                          "requested": False, "answered": None})
+                                          "title": "", "done": False, "approved": False, "asked": None, "phase": None})
         if isinstance(data.get("kind"), str):
             rec["kind"] = data["kind"]
         if isinstance(data.get("status"), str):
@@ -901,8 +918,6 @@ class AgyTracker:
         if isinstance(data.get("content"), list):
             rec["content"] = data["content"]
         rec["paths"] = _paths_of(rec["raw"], rec["locations"], rec["kind"])
-        if rec["kind"] == "execute" and _has_output(data):
-            rec["output"] = True
         return cid, rec, new
 
     def _summary(self, rec) -> str:
@@ -955,17 +970,9 @@ class AgyTracker:
                 return "AGY 在你允許之後要求在沙盒外執行"
             if rec["asked"] is not None and self._signature(rec) != rec["asked"]:
                 return "AGY 做的和你允許時看到的不同"
-        kind = rec["kind"]
-        status = rec["status"]
-        if kind in self.c.announced_kinds and not rec["approved"]:
-            # an announcement (in_progress, before or after a request, and after a refusal) is not an execution; what is: completed,
-            # or output of the command before it ended as failed or cancelled
-            if rec["output"] and status not in _REFUSAL_END:
-                status = "completed"
-            elif status in _ANNOUNCED_FREE:
-                return None
-        if status in _RUNNING_FREE or rec["approved"]:
+        if rec["status"] in _RUNNING_FREE or rec["approved"]:
             return None
+        kind = rec["kind"]
         if kind == "search":
             return self._search_problem(rec)
         if kind == "read":
@@ -976,9 +983,38 @@ class AgyTracker:
             if judge_read(rec["paths"], self.workdir, self.shared).action == "allow":
                 return None
             return "AGY 沒有經過 VBear 的允許就讀了工作資料夾以外的檔案"
-        what = "執行了指令" if kind == "execute" else "修改了檔案" if kind in ("edit", "delete", "move") else \
-            "連了網" if kind == "fetch" else "用了工具"
-        return f"AGY 沒有經過 VBear 的允許就{what}"
+        return f"AGY 沒有經過 VBear 的允許就{_did(kind)}"
+
+    def _order_problem(self, rec, event: str, data: dict) -> str | None:
+        """For a call of an ``announced_kinds`` kind that has no yes (yet): why this message is a violation, or None. The only order
+        that is not one: ``tool_call`` in_progress (the announcement), ``tool_call_update`` pending, ``session/request_permission``,
+        the answer; after a yes the call runs (``_running_problem`` then judges what runs); after a no ``tool_call_update`` in_progress
+        (optional, once), then failed or cancelled. No message but the announcement may carry output (text in its content or raw output,
+        or an exit code), and no call may complete or fail without having been asked."""
+        phase = rec["phase"]
+        status = data.get("status") if isinstance(data.get("status"), str) else None
+        what = _did(rec["kind"])
+        if event == "request":
+            if phase in ("pending", "allowed"):
+                rec["phase"] = "requested"
+                return None
+            return "AGY 傳來的訊息順序和 VBear 知道的不同（沒有先宣告、或問了不只一次），沒有經過 VBear 的允許就繼續，所以不繼續"
+        if event == "call":
+            if phase is None and status == "in_progress":
+                rec["phase"] = "announced"
+                return None
+            return "AGY 傳來的訊息順序和 VBear 知道的不同（工具呼叫不是以 in_progress 宣告開始，或宣告了兩次），所以不繼續"
+        if _has_output(data):
+            return f"AGY 沒有經過 VBear 的允許就{what}（還沒被允許就有輸出）"
+        if status in ("completed", "failed", "cancelled") and phase in (None, "announced", "pending"):
+            return f"AGY 沒有經過 VBear 的允許就{what}（沒有被問就{status}）"
+        step = {("announced", "pending"): "pending", ("refused", "in_progress"): "refused_running",
+                ("refused", "failed"): "ended", ("refused", "cancelled"): "ended",
+                ("refused_running", "failed"): "ended", ("refused_running", "cancelled"): "ended"}.get((phase, status))
+        if step is None:
+            return "AGY 傳來的訊息順序和 VBear 知道的不同（多出來的、順序不對的或看不懂的狀態），沒有經過 VBear 的允許就繼續，所以不繼續"
+        rec["phase"] = step
+        return None
 
     def _tool_update(self, update: dict, label: str):
         cid, rec, new = self._merge(update)
@@ -987,7 +1023,10 @@ class AgyTracker:
         out = self._flush_reply() if new else []
         if new:
             out.append(self._tool_fact(cid, rec))
-        problem = self._running_problem(rec)
+        if rec["kind"] in self.c.announced_kinds and not rec["approved"]:
+            problem = self._order_problem(rec, "call" if label == "tool_call" else "update", update)
+        else:
+            problem = self._running_problem(rec)
         if problem:
             return self._violation(problem)
         if rec["status"] in ("completed", "failed") and not rec["done"]:
@@ -1095,8 +1134,11 @@ class AgyTracker:
         if new:
             out += self._flush_reply()
             out.append(self._tool_fact(cid, rec))
+        if rec["kind"] in self.c.announced_kinds:
+            problem = self._order_problem(rec, "request", tool)
+            if problem:
+                return self._violation(problem, request_id=rid)
         rec["approved"] = False                         # an older yes does not cover what this request asks
-        rec["requested"], rec["answered"] = True, None
         raw = rec["raw"]                                # a request carries only what changed: the rest was said by the tool call
         action, why, extra = self._decide(rec, raw, options)
         kind = rec["kind"]
