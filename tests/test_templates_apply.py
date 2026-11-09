@@ -127,7 +127,7 @@ class TheRecord(Home):
         good = {"id": "ta-0123456789ab", "at": 1.0, "tool": "claude", "state": "done", "undone_at": None,
                 "items": [{"kind": "card", "id": CARD1, "from": frm(), "state": "made", "why": None, "fp": FP, "at": 1.0}]}
         self.assertIsNone(ta.problem_of_apply(good))
-        for change in ({"id": "x"}, {"tool": "agy"}, {"state": "kept"}, {"at": "now"}, {"undone_at": "x"}, {"extra": 1}, {"items": [{}]},
+        for change in ({"id": "x"}, {"tool": "grok"}, {"state": "kept"}, {"at": "now"}, {"undone_at": "x"}, {"extra": 1}, {"items": [{}]},
                        {"items": [dict(good["items"][0], kind="group")]}, {"items": [dict(good["items"][0], state="kept")]},
                        {"items": [dict(good["items"][0], id="../x")]}, {"items": [dict(good["items"][0], fp="12")]},
                        {"items": [dict(good["items"][0], why="有名字的原因")]}, {"items": [dict(good["items"][0], name="客服")]},

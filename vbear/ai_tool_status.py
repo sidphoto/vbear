@@ -20,6 +20,9 @@ Codex also carries ``chat_login``: whether the Codex that chats (its own login f
 login, by the exit code of its own status command (0 logged in, anything else not, no answer unknown); a folder that VBear
 refuses to use is told in a sentence. That folder is looked at, never created here.
 
+AGY also carries ``chat``: ``{"verified": bool}``, whether the AGY that is installed is a version whose chat check passed on this
+Mac (P46-5). It is read from the record of ``agy-chat-verified.json`` and asks AGY nothing.
+
 No tool's own login folder is opened, listed or read here. The commands run with the same plain environment the
 terminals get, from the root folder, with no input.
 """
@@ -37,7 +40,7 @@ from typing import Optional
 
 from . import ai_tools, config as cfg
 from .jsonstore import GuardedJsonStore, StoreError
-from .runtime import codex_chat_env, daemon
+from .runtime import cli_versions, codex_chat_env, daemon
 
 VERSION_TIMEOUT_S = 10.0
 STATUS_TIMEOUT_S = 20.0
@@ -139,6 +142,8 @@ def _inspect(tool: ai_tools.Tool, marked_at: Optional[float]) -> dict:
            "login_regions": [{"id": rid, "label": label} for rid, label, _line in tool.login_regions]}
     if tool.id in ai_tools.CHAT_LOGIN:
         row["chat_login"] = {"state": "unknown", "problem": ""}
+    if tool.id == "agy":
+        row["chat"] = {"verified": False}       # P46-5: whether this AGY passed the chat check, read from the record only
     if not tool.status_command:
         row["login"] = "marked" if marked_at is not None else "not_marked"
         row["marked_at"] = marked_at
@@ -153,6 +158,8 @@ def _inspect(tool: ai_tools.Tool, marked_at: Optional[float]) -> dict:
     row.update(installed=True, version=version, install_problem="")
     if tool.id in ai_tools.CHAT_LOGIN:
         row["chat_login"] = _chat_login(binary)
+    if tool.id == "agy":
+        row["chat"] = {"verified": version in cli_versions.agy_chat_verified_versions()}
     if tool.status_command:
         code, _ = _run([binary, *tool.status_command[1:]], STATUS_TIMEOUT_S, False)
         row["login"] = "unknown" if code is None else "logged_in" if code == 0 else "not_logged_in"

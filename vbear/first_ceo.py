@@ -3,11 +3,12 @@ chat with yet, to make one.
 
 ``plan(profiles, tool_rows)`` answers three things and makes nothing:
 
-* ``needed``: the person has no card they can chat with (an enabled card on Claude Code or Codex). A person who has one is
+* ``needed``: the person has no card they can chat with (an enabled card on Claude Code, Codex or AGY). A person who has one is
   not shown the step.
-* which AI tool the card would use: a ready Claude Code, otherwise a ready Codex. A tool that is ready only because the
-  person pressed 「我登入好了」 (AGY, Grok, MCODE) cannot chat, so it is never chosen. With none ready the plan says to go
-  back to the start-up (``go``), and nothing can be made.
+* which AI tool the card would use: a ready Claude Code, otherwise a ready Codex, otherwise a ready AGY (P46-5; its chat
+  still has to pass the check, which the plan says in ``chat_note``). A tool that is ready only because the person pressed
+  「我登入好了」 (Grok, MCODE) cannot chat, so it is never chosen. With none ready the plan says to go back to the start-up
+  (``go``), and nothing can be made.
 * the words to fill in: the name, the instructions and the opening sentence of the first chat. All three are only a
   starting point the person can change; the opening sentence is put in the chat's box and never sent by anything but the
   person's own press of the send button.
@@ -24,7 +25,7 @@ NAME = "CEO"
 POSITION = "planner"            # the position that is labelled CEO (agent_profiles.POSITION_TABLE)
 LAUNCH_MODE = "safe"            # ADR 0002: a new card starts in safe mode
 # The tools in the order they are tried, and what the person is told they are called.
-TOOLS = (("claude", "Claude Code"), ("codex", "Codex"))
+TOOLS = (("claude", "Claude Code"), ("codex", "Codex"), ("agy", "AGY"))
 INSTRUCTIONS = (
     "你是我的 CEO（執行長）。我不是工程師，請用一般人聽得懂的話跟我說話，不要用術語。\n"
     "我來找你的時候，通常還不知道要做什麼。請先問我幾個簡單的問題，了解我想做什麼，再幫我把想法整理成一份簡單的計畫："
@@ -32,9 +33,11 @@ INSTRUCTIONS = (
     "凡是要花錢、對外發布、刪除資料或改動檔案的事，先告訴我你打算做什麼，等我說可以再做。"
 )
 OPENING = "你好，請先問我三個問題，了解我想做什麼。"
-SETUP_REASON = "目前沒有已經就緒、而且能聊天的 AI 工具（Claude Code 或 Codex）。先到「開始設定」把其中一個裝好、登入。"
+SETUP_REASON = "目前沒有已經就緒、而且能聊天的 AI 工具（Claude Code、Codex 或 AGY）。先到「開始設定」把其中一個裝好、登入。"
 CODEX_CHAT_NOTE = ("Codex 聊天要用另一份登入：先到「開始設定」按「讓聊天用的 Codex 登入」，登入之後才能和 CEO 聊。"
                    "角色卡現在還是可以先建立。")
+AGY_CHAT_NOTE = ("AGY 要先到聊天頁按「驗證聊天」（會用你的 Google 方案跑十幾則很短的對話），驗證通過之後才能和 CEO 聊。"
+                 "角色卡現在還是可以先建立。")
 
 
 def _can_chat(profile) -> bool:
@@ -75,4 +78,9 @@ def plan(profiles, tool_rows) -> dict:
         out["chat_ready"] = login.get("state") == "logged_in"
         if not out["chat_ready"]:
             out["chat_note"] = CODEX_CHAT_NOTE
+    elif tool_id == "agy":
+        chat = row.get("chat") if isinstance(row.get("chat"), dict) else {}
+        out["chat_ready"] = chat.get("verified") is True
+        if not out["chat_ready"]:
+            out["chat_note"] = AGY_CHAT_NOTE
     return out

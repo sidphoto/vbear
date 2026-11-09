@@ -674,6 +674,36 @@ test("source: built with el(), no innerHTML, no emoji, no outside resource, only
   assert(!/launch_mode|equipped_skill_ids|enabled/.test(BLOCK), "the page never says full mode, a skill card or switched on");
 });
 
+test("AGY: the third choice shows only when the server offers it, adds its own lines, and asks again with agy; an AGY not yet checked says so", async () => {
+  setServer({ tools: { ...TOOLS_READY, agy: { ready: true, why: "", chat_verified: true }, default: "claude" } });
+  const main = await open();
+  await tick(main, "cards", "shop", "service");
+  await click(action(main, "preview"));
+  const radios = ["claude", "codex", "agy"].map((k) => allBy(dialog(), "data-tpl-tool", k).length);
+  assert.deepStrictEqual(radios, [1, 1, 1]);
+  assert(text(by(dialog(), "data-templates", "tool")).includes("AGY"));
+  let lines = by(dialog(), "data-templates", "fixed").findAll((n) => n.tag === "li").map(text);
+  assert.strictEqual(lines.length, 4, "no AGY line until AGY is chosen");
+  const agy = by(dialog(), "data-tpl-tool", "agy");
+  agy.checked = true;
+  agy.dispatch("change");
+  await settle();
+  assert.strictEqual(posts()[posts().length - 1][2].tool, "agy");
+  lines = by(dialog(), "data-templates", "fixed").findAll((n) => n.tag === "li").map(text);
+  assert.strictEqual(lines.length, 5);
+  for (const w of ["AGY 的員工預設不帶記憶", "送到 Google", "AGY 技能", "完整模式"]) assert(lines[4].includes(w), w);
+  assert.strictEqual(by(dialog(), "data-tpl-tool", "agy").checked, true);
+  h.dom().bodyEl.children.slice().forEach((n) => { if (n.hasClass && n.hasClass("modal-backdrop")) n.remove(); });
+  setServer({ tools: { ...TOOLS_READY, agy: { ready: true, why: "", chat_verified: false }, default: "agy" } });
+  const again = await open();
+  await tick(again, "cards", "shop", "service");
+  await click(action(again, "preview"));
+  assert.strictEqual(by(dialog(), "data-tpl-tool", "agy").checked, true, "the default can be AGY");
+  const more = by(dialog(), "data-templates", "fixed").findAll((n) => n.tag === "li").map(text);
+  assert.strictEqual(more.length, 6);
+  assert(more[5].includes("還沒通過聊天驗證") && more[5].includes("驗證聊天") && more[5].includes("Google 方案"), more[5]);
+});
+
 (async () => {
   let pass = 0;
   for (const [name, fn] of tests) {
