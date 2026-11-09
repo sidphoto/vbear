@@ -4,16 +4,17 @@ The daemon owns the chat processes and is the only writer of a chat's record (vb
 module asks it (``daemon_client.call``), reads the record files where only reading is needed (the list of chats), and
 decides the things the console decides:
 
-  * which role cards may chat: an enabled card whose tool is Claude Code or Codex. The tool decides the chat's engine
-    (claude-chat or codex-chat) when the chat is opened, and the engine never changes. Checked when a chat is opened and
+  * which role cards may chat: an enabled card whose tool is Claude Code, Codex or AGY. The tool decides the chat's engine
+    (claude-chat, codex-chat or agy-chat) when the chat is opened, and the engine never changes. Checked when a chat is opened and
     again on every message, because a card can be switched off or changed later (a card whose tool changed to the other
     one cannot go on in the old chat: ``card_tool_changed``); a card of another tool, or a disabled one, is refused with
     the reason, never started;
   * what of the card goes into the chat: only the instructions the person wrote on the card (never the position's
     default text), passed to the daemon, which adds them to Claude Code's system prompt;
-  * which Claude Code or Codex runs it (the pinned one), and whether that version may chat at all (``support``): the
+  * which Claude Code, Codex or AGY runs it (the pinned one), and whether that version may chat at all (``support``): the
     version has a chat-mode source list and a pass of the chat check, and no administrator policy is in the way; for
-    Codex also the login of its own folder (vbear/runtime/codex_chat_env.py);
+    Codex also the login of its own folder (vbear/runtime/codex_chat_env.py), for AGY its own settings folder and the
+    person's hooks (vbear/runtime/agy_chat_env.py; AGY's login is the person's own, found out when a chat starts);
   * what of the person's memory goes into the chat (P42-1): the lines of ``memory.json`` (read only, never written here)
     unless the card has memory switched off or the file cannot be read; the daemon checks every line again;
   * whether the employee may use the shared folder (P43-1, ADR 0009): the person's switch for the card on the shared folder page
@@ -36,7 +37,7 @@ from pathlib import Path
 from . import admin_policy, agent_profiles, ai_tools, board_engine, config as cfg, daemon_client, groups, meetings as mt
 from . import memory as memory_store, routines as routines_store, shared_folder
 from .api_error import ApiError
-from .runtime import agent_sessions, chat_engines, chat_protocol as cp, chat_store as cs, cli_versions, codex_chat_env, memory_rules
+from .runtime import agent_sessions, agy_chat_env, chat_engines, chat_protocol as cp, chat_store as cs, cli_versions, codex_chat_env, memory_rules
 from .runtime import shared_rules
 
 LIST_MAX = 100                    # chats named in the list, newest first; the rest are counted
@@ -61,7 +62,7 @@ CODE_TEXT: dict[str, tuple[int, str]] = {
     "not_found": (404, "找不到這個聊天。"),
     "no_card": (404, "找不到這張角色卡。"),
     "card_disabled": (409, "這張角色卡已停用，啟用之後才能聊天。"),
-    "card_tool_unsupported": (409, "聊天目前只支援工具是 Claude Code 或 Codex 的角色卡。"),
+    "card_tool_unsupported": (409, "聊天目前只支援工具是 Claude Code、Codex 或 AGY 的角色卡。"),
     "card_tool_changed": (409, "這張角色卡換了 AI 工具，原來的聊天不能再用，請開新的聊天。"),
     "refused": (409, "你按下允許的當下，VBear 又檢查了一次這個動作，發現現在已經不安全，所以拒絕了它（沒有執行）。"),
     "expired": (409, "這張卡片過了 5 分鐘還沒有回覆，已過期，VBear 視為拒絕（沒有執行）。"),
@@ -84,7 +85,7 @@ CODE_TEXT: dict[str, tuple[int, str]] = {
     "unsupported_version": (409, "VBear 沒有這個版本的聊天模式常數，不會啟動。"),
     "admin_policy": (409, "這台 Mac 上有管理員政策或系統設定，可能蓋過 VBear 的設定，所以不啟動聊天。"),
     "drift": (409, "AI 工具的檔案或設定在檢查之後改變了，VBear 不啟動它。請重新整理後再試。"),
-    "invalid_binary": (409, "找不到可以安全啟動的 AI 工具程式（Claude Code 或 Codex）。"),
+    "invalid_binary": (409, "找不到可以安全啟動的 AI 工具程式（Claude Code、Codex 或 AGY）。"),
     "invalid_model": (409, "這張角色卡的模型名稱不能用在聊天。"),
     "invalid_workdir": (409, "員工的工作資料夾不符規定，不啟動。"),
     "unsafe_path": (409, "聊天用到的資料夾或檔案不是這個使用者擁有的私人檔案（或是連結），VBear 不使用它。"),
@@ -94,6 +95,13 @@ CODE_TEXT: dict[str, tuple[int, str]] = {
     "commit_not_enforceable": (409, "這個設定在這個版本不能確實執行，不啟動。"),
     "not_logged_in": (409, "聊天用的 Codex 還沒有登入（或查不出有沒有登入）。請到「開始設定」按「讓聊天用的 Codex 登入」。"),
     "codex_home": (409, "聊天用的 Codex 資料夾不能用（裡面有不是 VBear 放的設定檔、太大，或路徑不安全），VBear 不使用它。"),
+    "agy_home": (409, "聊天用的 AGY 資料夾不能用（裡面有不是 VBear 放的設定、太大，或路徑不安全），VBear 不使用它。"
+                      "請到 VBear 的狀態資料夾，把不是 VBear 放的那個項目移走後再試。"),
+    "agy_hooks": (409, "你自己的 AGY 設定裡有會自動執行的指令（hooks）。AGY 聊天會載入它們，VBear 管不到，所以不啟動。"
+                       "請把 ~/.agents/hooks.json 移走後再試（VBear 不會替你動它）。"),
+    "agy_workdir": (409, "員工的工作資料夾最上層有 AGY 會當成設定或規則來讀的項目（.agents、.agent、.gemini、GEMINI.md、AGENTS.md），"
+                         "或有指向資料夾以外的連結，VBear 不讓 AGY 在那裡聊天。請把它移走後再試。"),
+    "agy_version": (409, "讀不到 AGY 的版本，或 VBear 不能拿這個 AGY 來聊天（程式不安全、版本不在 VBear 認得的清單裡）。"),
     "manual_review": (409, "這個聊天之前的程序還沒確認已經結束，需要人工檢查 VBear 的狀態資料夾，之後才能再送訊息。"),
     "too_many": (409, "聊天已經太多，請先刪掉不用的。"),
     "full": (409, "這個聊天的紀錄已經滿了，請另開一個聊天。"),
@@ -109,7 +117,7 @@ CODE_TEXT: dict[str, tuple[int, str]] = {
     "memory_refused": (409, "記憶裡有一條現在不能送出，請到記憶頁看看。你的訊息還沒有送出。"),
     "shared_unsafe": (409, "共用資料夾的位置不安全（可能被換成連結或權限被改過），VBear 不會用它。請到共用資料夾頁看說明。你的訊息還沒有送出。"),
     "shared_full": (409, "共用資料夾超過 1 GiB 或 1 萬個檔案。請在 Finder 整理，或把這位員工的共用資料夾關掉。你的訊息還沒有送出。"),
-    "shared_unverified": (409, "這個 AI 工具的版本還沒檢查過共用資料夾。按「檢查」（Claude Code 約 US$0.01；Codex 用你的 ChatGPT 方案），"
+    "shared_unverified": (409, "這個 AI 工具的版本還沒檢查過共用資料夾。按「檢查」（Claude Code 約 US$0.01；Codex 用你的 ChatGPT 方案；AGY 用你的 Google 方案），"
                                "或先把這位員工的共用資料夾關掉。你的訊息還沒有送出。"),
 }
 
@@ -150,7 +158,7 @@ def card_gate(profile) -> tuple[bool, str, str]:
     model = profile.get("model") if isinstance(profile.get("model"), dict) else {}
     if chat_engines.by_tool(model.get("tool")) is None:
         return False, "card_tool_unsupported", (
-            f"這張角色卡的工具是 {tool_label(model.get('tool'))}，聊天目前支援 Claude Code 與 Codex。")
+            f"這張角色卡的工具是 {tool_label(model.get('tool'))}，聊天目前支援 Claude Code、Codex 與 AGY。")
     return True, "", ""
 
 
@@ -170,6 +178,15 @@ def _default_claude() -> tuple[str | None, str | None, str]:
     if res.compatible and res.observed_version and res.binary_path:
         return res.binary_path, res.observed_version, ""
     return None, None, res.reason
+
+
+def _default_agy_binary():
+    """(binary, version) of the AGY that may chat, or None (not installed, not a version VBear knows, not verified...)."""
+    try:
+        pinned = agy_chat_env.pinned_binary()
+    except agy_chat_env.AgyRefused:
+        return None
+    return pinned.binary, pinned.version
 
 
 def unsupported_text(version: str) -> str:
@@ -210,17 +227,23 @@ class ChatService:
     """``runtime``: anything with ``_rpc(op, timeout, **fields)`` (the console's NativeRuntime). ``claude``: a function
     returning (binary, version, why not); the pinned Claude Code by default. ``codex``: a function returning the Codex chat
     state (codex_chat_env.status of the state folder by default); ``codex_binary``: a function returning (binary, version) of
-    the pinned Codex, or None. ``verifier``: claude_verify.ChatVerifier; ``codex_verifier``: codex_verify.CodexChatVerifier.
+    the pinned Codex, or None. ``agy`` and ``agy_binary`` are the same two questions for AGY (agy_chat_env.status of the state
+    folder; (binary, version) of the pinned AGY, or None). ``verifier``: claude_verify.ChatVerifier; ``codex_verifier``:
+    codex_verify.CodexChatVerifier; ``agy_verifier``: the AGY chat check's (P46-4).
     ``ledger``: a function returning the day's ledger (the meetings' runner, whose day the chats share)."""
 
     def __init__(self, runtime, *, claude=None, codex=None, codex_binary=None, verifier=None, codex_verifier=None,
-                 ledger=None, profile=None, profiles=None, base=None, memory=None, shared=None, shared_verified=None):
+                 ledger=None, profile=None, profiles=None, base=None, memory=None, shared=None, shared_verified=None,
+                 agy=None, agy_binary=None, agy_verifier=None):
         self.runtime = runtime
         self.claude = claude or _default_claude
         self.codex = codex or (lambda: codex_chat_env.status(self.base))
         self.codex_binary = codex_binary or (lambda: codex_chat_env.pinned_binary())
         self.verifier = verifier
         self.codex_verifier = codex_verifier
+        self.agy = agy or (lambda: agy_chat_env.status(self.base))
+        self.agy_binary = agy_binary or _default_agy_binary
+        self.agy_verifier = agy_verifier
         self.ledger = ledger
         self._profile = profile or (lambda pid: agent_profiles.get_profile_readonly(pid))
         self._profiles = profiles or (lambda: list(agent_profiles.load_all(None, None, mark_corrupt=False).values()))
@@ -316,7 +339,7 @@ class ChatService:
         ``engine`` is an AI tool of the engine table; its row names the method that answers."""
         if (not isinstance(body, dict) or set(body) - {"version", "engine", "shared"}
                 or chat_engines.by_tool(body.get("engine", "claude")) is None or not isinstance(body.get("shared", False), bool)):
-            raise ApiError(400, "bad_request", "只接受 version、engine（claude 或 codex），和 shared（true 或 false）。")
+            raise ApiError(400, "bad_request", "只接受 version、engine（claude、codex 或 agy），和 shared（true 或 false）。")
         verify = getattr(self, chat_engines.by_tool(body.get("engine", "claude")).verify)
         return verify(body.get("version"), **({"shared": True} if body.get("shared") else {}))      # without shared the call is the one it was
 
@@ -366,6 +389,37 @@ class ChatService:
         if not policy.ok:
             raise ApiError(409, "admin_policy", policy.reason())
         return {"status": self.codex_verifier.start("", version)}
+
+    # What a state of AGY that is not ready is refused with (the word of agy_chat_env.status, and its own sentence).
+    AGY_REFUSAL = {"not_installed": "invalid_binary", "unsupported": "agy_version", "unverified": "unverified",
+                   "policy": "admin_policy", "hooks": "agy_hooks", "folder": "agy_home", "version_unreadable": "agy_version"}
+
+    def _agy_refusal(self, state: dict) -> ApiError:
+        code = self.AGY_REFUSAL.get(state.get("state"), "invalid_binary")
+        why = state.get("why") if isinstance(state.get("why"), str) else ""
+        return ApiError(CODE_TEXT[code][0], code, why.strip() or CODE_TEXT[code][1])
+
+    def _verify_agy(self, wanted, shared: bool = False) -> dict:
+        """The AGY chat check (about fourteen short calls on the person's own Google plan), asked for by the page: refused when it
+        could not pass anyway (no AGY, a version VBear has no constants for, an administrator policy, hooks, an unusable folder).
+        A version that passed before is not checked again unless ``shared`` asks for the part made with the shared folder."""
+        if self.agy_verifier is None:
+            raise ApiError(503, "unavailable", "這個主控台沒有驗證功能。")
+        state = self.agy()
+        version = state.get("version")
+        if state.get("verified") is True and isinstance(version, str):
+            if not shared or cli_versions.shared_verified("agy-chat", version):
+                return {"already_verified": True, "version": version, "status": self.agy_verifier.status()}
+            if state.get("state") != "ready":
+                raise self._agy_refusal(state)
+        elif state.get("state") != "unverified" or not isinstance(version, str):
+            raise self._agy_refusal(state)
+        if wanted is not None and wanted != version:
+            raise ApiError(409, "version_changed", f"目前的 AGY 是 {version}，不是 {wanted}；請重新整理後再驗證。")
+        policy = admin_policy.check_agy(version)
+        if not policy.ok:
+            raise ApiError(409, "admin_policy", policy.reason())
+        return {"status": self.agy_verifier.start("", version)}
 
     # ---- the list and one chat ----------------------------------------------------------------------------------
 
@@ -492,7 +546,8 @@ class ChatService:
             if engine == "claude-chat":
                 version = self.claude()[1]
             else:
-                pinned = self.codex_binary() if engine == "codex-chat" else None
+                getter = {"codex-chat": self.codex_binary, "agy-chat": self.agy_binary}.get(engine)
+                pinned = getter() if getter else None
                 version = pinned[1] if pinned else None
         except Exception:                              # a page that only wants to say "unchecked" is not broken by an unreadable tool
             version = None
@@ -646,6 +701,23 @@ class ChatService:
         return {"chat_id": chat_id, "text": text, "engine": "codex-chat",
                 "cli": {"binary": binary, "version": version, "identity": identity},
                 "model_id": own if isinstance(own, str) and agent_sessions.MODEL_ID_RE.match(own) else None}
+
+    def _agy_fields(self, chat_id, text, profile) -> dict:
+        """What the daemon is told for an AGY chat. The service says why AGY cannot chat before it asks (the daemon checks all of it
+        again): the state of ``support`` that is not ready is the refusal, in its own words. AGY has one model, so none is named."""
+        state = self.agy()
+        if state.get("state") != "ready":
+            raise self._agy_refusal(state)
+        pinned = self.agy_binary()
+        if not pinned:
+            raise api_error("invalid_binary", "找不到可以安全啟動的 AGY")
+        binary, version = pinned
+        try:
+            identity = agent_sessions.binary_identity(binary)
+        except OSError:
+            raise api_error("drift", "AGY 檔案已消失或不可執行") from None
+        return {"chat_id": chat_id, "text": text, "engine": "agy-chat",
+                "cli": {"binary": binary, "version": version, "identity": identity}, "model_id": None}
 
     def answer(self, chat_id, body) -> dict:
         keys = {"card_id", "token", "decision"}

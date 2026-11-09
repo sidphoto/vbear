@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .. import admin_policy
-from . import cli_versions, review_codex, review_store
+from . import agy_chat_protocol as acp, cli_versions, review_codex, review_store
 
 CHAT_HOME_NAME = "agy-chat-home"
 CLI_DIR = "antigravity-cli"
@@ -42,27 +42,28 @@ STATUS_TIMEOUT_S = 10.0
 CACHE_TTL_S = 10.0
 POLICY_ROOT = "/"                              # where the administrator policy is looked for (tests give another root)
 
-# What VBear makes AGY read (ADR 0012, decision 1): the five keys of the design. "useG1Credits" is the paid-credits switch; that
-# it is a key of this file is read from the binary's strings, not proven, and the chat check says whether AGY still starts with it.
-SETTINGS = {"toolPermission": "request-review", "allowNonWorkspaceAccess": False, "enableTerminalSandbox": True,
-            "useG1Credits": False, "permissions": {"allow": [], "ask": [], "deny": []}}
-SETTINGS_BYTES = (json.dumps(SETTINGS, indent=2, sort_keys=True) + "\n").encode("utf-8")
-
-# Names VBear never writes in the chat folder: finding one means another program put it there. (name as shown, where it sits)
-FORBIDDEN_TOP = ("GEMINI.md", "AGENTS.md")
-FORBIDDEN_CONFIG = ("hooks.json", "skills", "workflows", "global_workflows", "plugins", "projects")
+# Everything that depends on the version of AGY is written once, in the protocol's version table (agy_chat_protocol.VERSIONS, P46-1):
+# the settings VBear makes AGY read (ADR 0012, decision 1; "useG1Credits" is the paid-credits switch, and that it is a key of this
+# file is read from the binary's strings, not proven, and the chat check says whether AGY still starts with it), the names that
+# must not be in the chat folder and at the top of a work folder. The names below are that table's own objects, not copies; a test
+# (tests/test_p46_agy_chat_launch.py) holds them to it, and so does rule 14b of tests/test_autonomy_guard.py.
 CONFIG_DIR = "config"
+_NEWEST = acp.VERSIONS[tuple(acp.VERSIONS)[-1]]
+SETTINGS = _NEWEST.settings
+SETTINGS_BYTES = acp.settings_bytes(_NEWEST)
+# Names VBear never writes in the chat folder: finding one means another program put it there. (name as shown, where it sits)
+FORBIDDEN_TOP = tuple(n for n in _NEWEST.home_forbidden if "/" not in n)
+FORBIDDEN_CONFIG = tuple(n.split("/", 1)[1] for n in _NEWEST.home_forbidden if n.startswith(CONFIG_DIR + "/"))
 MCP_CONFIG_NAME = "mcp_config.json"
 MCP_CONFIG_MAX = 64 << 10
 
 # Names at the top of a work folder (or an open shared folder) that AGY reads as settings and rules.
-WORKDIR_FORBIDDEN = (".agents", ".agent", ".gemini", "GEMINI.md", "AGENTS.md")
+WORKDIR_FORBIDDEN = _NEWEST.workdir_forbidden
 WORKDIR_SCAN_MAX = 10_000
 HOOKS_FILE = ".agents/hooks.json"             # under the person's HOME; looked for, never read
 
-# Versions this code knows how to run. The argv, environment and message constants of a version are the protocol table's
-# (agy_chat_protocol, P46-1); this is only the list the binary's version is matched against, and agrees with it by a test.
-KNOWN_VERSIONS = ("1.5.3",)
+# Versions this code knows how to run: the protocol table's keys. The binary's version is matched against this list.
+KNOWN_VERSIONS = tuple(acp.VERSIONS)
 VERSION_OUT = re.compile(r"([0-9]+\.[0-9]+\.[0-9]+)\n?")        # the whole output of ``agy --version``, nothing else
 BINARY_NAME = "agy"
 

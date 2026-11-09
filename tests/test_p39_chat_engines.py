@@ -131,9 +131,9 @@ class RowIsEnoughTests(TableCase):
 
 class RowsThatWereThereTests(unittest.TestCase):
     def test_the_two_engines_of_v0_13_are_rows_with_their_old_names(self):
-        self.assertEqual([(r.tool, r.engine, r.check_mode) for r in ce.TABLE],
+        self.assertEqual([(r.tool, r.engine, r.check_mode) for r in ce.TABLE[:2]],
                          [("claude", "claude-chat", "chat"), ("codex", "codex-chat", "codex-chat")])
-        self.assertEqual(ce.engine_ids(), ("claude-chat", "codex-chat"))
+        self.assertEqual(ce.engine_ids(), ("claude-chat", "codex-chat", "agy-chat"))    # the third row is P46-3's
         self.assertIs(ce.by_tool("codex"), ce.by_engine("codex-chat"))
         self.assertIsNone(ce.by_tool(["not", "hashable"]))
         self.assertIsNone(ce.by_engine("grok-chat"))

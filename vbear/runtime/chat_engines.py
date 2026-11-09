@@ -19,6 +19,8 @@ _COMMON_FIELDS = frozenset({"v", "id", "profile_id", "created_at", "engine"})
 CLAUDE_MONEY = ""          # Claude's money sentence stays in ChatService.support (its top-level answer)
 CODEX_MONEY = ("聊天用你自己的 ChatGPT 方案，不另外收費。Codex 不回報金額，VBear 依 token 數估算（每 100 萬 token 計 US$1，至少 US$0.01）"
                "後算進每天上限；這是 VBear 的記帳規則，不是帳單。")
+AGY_MONEY = ("聊天用你自己的 Google 方案（AGY），不另外收費。AGY 不回報金額，VBear 依 token 數估算（每 100 萬 token 計 US$1，至少 US$0.01）"
+             "後算進每天上限；這是 VBear 的記帳規則，不是帳單。AGY 一回合結束才說用了多少，所以一回合可能超過每回合上限。")
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,11 @@ TABLE: tuple[ChatEngine, ...] = (
         daemon_send="_codex_send", manifest_problem="codex_chat_manifest_problem", launch_settings="_codex_chat_settings",
         support_key="codex", state="codex", binary="codex_binary", verifier="codex_verifier", fields="_codex_fields",
         verify="_verify_codex", money=CODEX_MONEY),
+    ChatEngine(
+        engine="agy-chat", tool="agy", noun="AGY 聊天", check_mode="agy-chat",
+        daemon_send="_agy_send", manifest_problem="agy_chat_manifest_problem", launch_settings="_agy_chat_settings",
+        support_key="agy", state="agy", binary="agy_binary", verifier="agy_verifier", fields="_agy_fields",
+        verify="_verify_agy", money=AGY_MONEY),
 )
 
 

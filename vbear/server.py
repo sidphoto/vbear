@@ -464,6 +464,7 @@ class Console:
                 self.chats = chat_service_mod.ChatService(
                     self.runtime, verifier=getattr(self, "chat_verifier", None),
                     codex_verifier=getattr(self, "codex_chat_verifier", None),
+                    agy_verifier=getattr(self, "agy_chat_verifier", None),
                     ledger=lambda: self.meeting_runner().ledger(self.store.conf))
             return self.chats
 
