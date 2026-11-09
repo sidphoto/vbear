@@ -171,7 +171,7 @@ class ForChatTests(StoreCase):
     def test_a_new_card_takes_memory_along_when_it_is_a_claude_code_card_and_not_when_it_is_a_codex_card(self):
         """The person's choice (v0.17): Claude Code cards on by default, Codex cards off until the person switches them on."""
         self.add()
-        self.assertEqual(memory.DEFAULT_ON, {"claude-chat": True, "codex-chat": False})
+        self.assertEqual(memory.DEFAULT_ON, {"claude-chat": True, "codex-chat": False, "agy-chat": False})
         claude, codex = memory.for_card("emp-1", "claude-chat"), memory.for_card("emp-9", "codex-chat")
         self.assertEqual((claude.readable, claude.on, len(claude.entries)), (True, True, 1))
         self.assertEqual((codex.readable, codex.on, codex.entries), (True, False, []))

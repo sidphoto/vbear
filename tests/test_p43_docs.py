@@ -116,7 +116,7 @@ class SharedFolderDocsTests(unittest.TestCase):
         self.assertEqual((rules.BEGIN_MARK, rules.END_MARK), ("BEGIN_VBEAR_SHARED_JSON", "END_VBEAR_SHARED_JSON"))
         self.assertEqual(rules.PROTECTED, (".claude", ".codex", ".agents", ".git"))
         self.assertEqual((shared_folder.CARDS_MAX, shared_folder.FILES_MAX, shared_folder.LOG_MAX), (200, 200, 1 << 20))
-        self.assertEqual(shared_folder.COMPANY, {"claude-chat": "Anthropic", "codex-chat": "OpenAI"})
+        self.assertEqual(shared_folder.COMPANY, {"claude-chat": "Anthropic", "codex-chat": "OpenAI", "agy-chat": "Google"})
         for text in (self.section, self.changelog):
             self.assertIn("1 GiB", text)
             self.assertIn("10,000", text)
