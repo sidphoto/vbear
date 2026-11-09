@@ -218,6 +218,7 @@ class ChatVerifier:
 
     # What differs for the Codex check (vbear/codex_verify.py), which runs the same way.
     LABEL = "Claude Code"
+    TIMEOUT = None                                         # seconds the child may run; None: CHAT_RUN_TIMEOUT
 
     def _report_path(self, version: str) -> Path:
         return reports_dir() / f"claude-{version}-chat.json"
@@ -235,7 +236,7 @@ class ChatVerifier:
         out.parent.mkdir(mode=0o700, exist_ok=True)
         try:
             proc = subprocess.run(self._argv(binary, out), cwd=PACKAGE_PARENT, stdin=subprocess.DEVNULL,
-                                  capture_output=True, text=True, timeout=CHAT_RUN_TIMEOUT)
+                                  capture_output=True, text=True, timeout=self.TIMEOUT or CHAT_RUN_TIMEOUT)
         except (OSError, subprocess.TimeoutExpired) as exc:
             return self._finish("error", f"聊天驗證無法完成：{type(exc).__name__}")
         if proc.returncode != 0:
