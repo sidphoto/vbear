@@ -85,6 +85,9 @@ class AgyConstants:
     announced_kinds: tuple              # tool kinds whose first tool_call only announces the call (it may say in_progress before it asks)
     cli_closed: tuple                   # (folder of antigravity-cli, the names allowed in it) for a folder whose content is closed to names
                                         # of this list: AGY made it (it shows after a command ran) and its content is not known yet
+    builtin_sha256: tuple               # (path below antigravity-cli/builtin, SHA-256 of the file): a file listed here passes only with that
+                                        # hash; a file that can run (``builtin_runnable``) and has no hash here is refused whatever its name
+    builtin_runnable: tuple             # lower-case endings of the names of files that can run or be run by something (.js, .json, ...)
     builtin_paths: tuple                # every path (below antigravity-cli/builtin) AGY's own built-in content is known to have: only these
                                         # exact paths pass the forbidden-name scan there, and any other path in builtin is refused
     forbidden_anywhere: tuple           # a name (up to its first dot, any case) that is refused at any depth of config/projects
@@ -136,6 +139,11 @@ VERSIONS = {
         # persistent_terminals shows after AGY ran a command (the fourth real run: empty when looked at); nothing is known to be in it,
         # so nothing may be, and a name to add goes here and nowhere else.
         cli_closed=(("persistent_terminals", ()),),
+        # No hash is pinned yet: the check's ``builtin_hashes`` observation (path -> SHA-256, nothing of the content) of a real run gives
+        # them. Until they are here a built-in file that can run (the plugin's scripts and its json files, any of these endings) is refused.
+        builtin_sha256=(),
+        builtin_runnable=(".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".sh", ".bash", ".zsh", ".command", ".py", ".rb", ".pl", ".html",
+                          ".htm", ".json"),
         # AGY's own built-in skills and plugin: every path below antigravity-cli/builtin of a real AGY 1.5.3 (the fourth real run: names
         # only, no content). They are named like the skills, plugins, hooks and rules VBear refuses elsewhere, so each is listed exactly,
         # never by pattern; a name that is not here is refused, and the check's ``builtin_names`` observation lists what a real run has.

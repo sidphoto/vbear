@@ -6,6 +6,7 @@ only program that is executed is the fake launcher in this test's own folder."""
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -66,6 +67,12 @@ class CheckCase(unittest.TestCase):
             self.addCleanup(patch.stop)
         # a root under /tmp is the test's own; the guard against it has a test of its own
         patch = mock.patch.object(cc, "find_left", lambda root: [])
+        patch.start()
+        self.addCleanup(patch.stop)
+        # no hash of the real AGY's built-in files is pinned yet: the fake's files hold "made-up" and the test pins that for the ones that run
+        pinned = {rel: hashlib.sha256(b"made-up").hexdigest() for rel in agy_chat_env.BUILTIN_PATHS
+                  if agy_chat_env.builtin_executable_like(rel) and rel not in agy_chat_env.BUILTIN_DIRS}
+        patch = mock.patch.object(agy_chat_env, "BUILTIN_SHA", pinned)
         patch.start()
         self.addCleanup(patch.stop)
         self.conf_path = self.home / "fake-agy.json"
@@ -286,6 +293,22 @@ class RealMachineShapeTests(CheckCase):
         self.assert_failed(code, report, "home_clean")
         self.assertIn("builtin/skills/made-up-skill", report["checks"]["home_clean"]["reason"])
         self.assertEqual(report["observations"]["builtin_names"]["not_in_table"], ["skills/made-up-skill"])
+
+    def test_the_report_lists_the_sha256_of_every_built_in_file_by_its_relative_path_and_nothing_else_of_it(self):
+        code, report = self.check()
+        self.assertEqual(code, 0, report.get("error"))
+        got = report["observations"]["builtin_hashes"]
+        self.assertEqual(set(got["files"]), {p for p in agy_chat_env.BUILTIN_PATHS if p not in agy_chat_env.BUILTIN_DIRS})
+        want = hashlib.sha256(b"made-up").hexdigest()
+        self.assertEqual(got["files"]["plugins/swarm/plugin.json"], want)
+        self.assertEqual(got["pinned_differ"], [])
+        self.assertNotIn("made-up", json.dumps(report["observations"]), "the content itself is never in the report")
+
+    def test_a_built_in_file_that_changed_since_the_pin_fails_home_clean_and_is_named_in_the_hash_observation(self):
+        code, report = self.check({"builtin_changed": True})
+        self.assert_failed(code, report, "home_clean")
+        self.assertIn("builtin/plugins/swarm/plugin.json", report["checks"]["home_clean"]["reason"])
+        self.assertEqual(report["observations"]["builtin_hashes"]["pinned_differ"], ["plugins/swarm/plugin.json"])
 
     def test_something_in_persistent_terminals_fails_home_clean_by_name_and_is_listed(self):
         code, report = self.check({"persistent_content": True})

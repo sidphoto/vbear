@@ -39,6 +39,7 @@ The configuration is the JSON file named by $FAKE_AGY_CONFIG (``write_launcher``
   builtin_stranger     a skill folder appears in antigravity-cli/builtin/skills that the version table does not list (same moment)
   no_shell_attempt     the outside_shell message is answered with no command at all
   stop_after_failure   a message with several commands stops at the first one that fails (as the real model did)
+  builtin_changed      builtin/plugins/swarm/plugin.json holds other bytes (same moment as builtin_stranger)
   manifest_differs     builtin/.manifest names a file that is not there and leaves out one that is
   persistent_content   a file appears in antigravity-cli/persistent_terminals (at the end of the process that answered resume_ask or, the stop step being last, stop)
   project_hook         a hooks file appears inside config/projects/p-0001 (at the end of the process that answered resume_ask or, the stop step being last, stop)
@@ -210,6 +211,8 @@ class Agent:
             pass
         if self.flags.get("project_hook") and self.gemini and self.last_step in ("resume_ask", "stop"):
             (Path(self.gemini) / "config" / "projects" / "p-0001" / "hooks.json").write_text("{}")
+        if self.flags.get("builtin_changed") and self.gemini and self.last_step in ("resume_ask", "stop"):
+            (Path(self.gemini) / "antigravity-cli" / "builtin" / "plugins" / "swarm" / "plugin.json").write_text("made-up, changed")
         if self.flags.get("builtin_stranger") and self.gemini and self.last_step in ("resume_ask", "stop"):
             (Path(self.gemini) / "antigravity-cli" / "builtin" / "skills" / "made-up-skill").mkdir(parents=True, exist_ok=True)
         if self.flags.get("persistent_content") and self.gemini and self.last_step in ("resume_ask", "stop"):

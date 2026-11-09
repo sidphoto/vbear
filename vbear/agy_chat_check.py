@@ -55,6 +55,7 @@ never a value) is in ``observations.protocol``, to confirm the "format" fields o
 from __future__ import annotations
 
 import collections
+import hashlib
 import json
 import os
 import re
@@ -1183,6 +1184,35 @@ def _builtin_names(home: Path, limit: int = 400) -> dict:
     return out
 
 
+def _builtin_hashes(home: Path, limit: int = 400) -> dict:
+    """The SHA-256 of every plain file below ``antigravity-cli/builtin`` by its relative path (nothing of the content; a file over 4 MiB or
+    that cannot be read is ``null``): ``{"files": {path: hex}, "pinned_differ": [paths whose pinned hash is another], "more": n}``. A real
+    run's answer is what goes into the version table's ``builtin_sha256``."""
+    base = home / "antigravity-cli" / "builtin"
+    out = {"files": {}, "pinned_differ": [], "more": 0}
+    if not base.is_dir() or base.is_symlink():
+        return out
+    for dirpath, dirs, files in os.walk(base, followlinks=False):
+        rel = os.path.relpath(dirpath, base)
+        for name in sorted(files):
+            path = name if rel == "." else rel + "/" + name
+            full = Path(dirpath) / name
+            if len(out["files"]) >= limit:
+                out["more"] += 1
+                continue
+            digest = None
+            try:
+                if not full.is_symlink() and full.is_file() and full.stat().st_size <= agy_chat_env.BUILTIN_HASH_MAX:
+                    digest = hashlib.sha256(full.read_bytes()).hexdigest()
+            except OSError:
+                pass
+            out["files"][path] = digest
+            if path in agy_chat_env.BUILTIN_SHA and agy_chat_env.BUILTIN_SHA[path] != digest:
+                out["pinned_differ"].append(path)
+    out["pinned_differ"].sort()
+    return out
+
+
 def _persistent_names(home: Path, limit: int = 40) -> dict:
     """Names (relative, nothing of any content; an id in a name is left out) under ``antigravity-cli/persistent_terminals``, which AGY
     makes when it runs a command: ``{"names": [...], "more": n}``."""
@@ -1259,6 +1289,7 @@ def _final_checks(s: AgySession, ctx: dict, checks: dict, obs: dict) -> None:
     obs["home_deep"] = _home_deep_names(home)
     obs["builtin_names"] = _builtin_names(home)
     obs["builtin_manifest"] = _builtin_manifest(home)
+    obs["builtin_hashes"] = _builtin_hashes(home)
     obs["persistent_terminals"] = _persistent_names(home)
     checks["home_clean"] = check(
         status == "ok", state=status, reason=None if status == "ok" else why,

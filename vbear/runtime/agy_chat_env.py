@@ -21,6 +21,7 @@ starts AGY but not a model. Nothing of what AGY prints is kept apart from the ve
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -68,6 +69,11 @@ CREATED_CLI = tuple(n.split("/", 1)[1] for n in _NEWEST.home_created if n.starts
 CLI_CLOSED = {name: frozenset(allowed) for name, allowed in _NEWEST.cli_closed}   # folders of antigravity-cli with a closed list of names
 BUILTIN_NAME = "builtin"
 BUILTIN_PATHS = frozenset(_NEWEST.builtin_paths)       # exact paths, below antigravity-cli/builtin; nothing else is let through there
+BUILTIN_DIRS = frozenset(p for p in BUILTIN_PATHS if any(q.startswith(p + "/") for q in BUILTIN_PATHS))
+BUILTIN_SHA = dict(_NEWEST.builtin_sha256)             # path -> sha256 hex of the file (a test patches it)
+BUILTIN_RUNNABLE = tuple(_NEWEST.builtin_runnable)
+BUILTIN_HASH_MAX = 4 << 20                             # a pinned file is read up to this many bytes
+LETTERS_DIFFER = object()                              # table_folder: it is spelled with other letters than the table's
 MCP_CONFIG_NAME = "mcp_config.json"
 MCP_CONFIG_MAX = 64 << 10
 
@@ -125,10 +131,11 @@ def _foreign(name: str) -> AgyRefused:
                       "請把它移走（VBear 不會替你刪）。")
 
 
-def _refuse_strangers(names, known) -> None:
-    """AgyRefused when a name is neither one AGY makes by itself nor one VBear writes (compared without regard to case)."""
-    allowed = {n.casefold() for n in known}
-    strangers = sorted(n for n in names if n.casefold() not in allowed)
+def _refuse_strangers(names, known, exact: bool = False) -> None:
+    """AgyRefused when a name is neither one AGY makes by itself nor one VBear writes (compared without regard to case, or, with
+    ``exact``, with the very letters of the table)."""
+    allowed = set(known) if exact else {n.casefold() for n in known}
+    strangers = sorted(n for n in names if (n if exact else n.casefold()) not in allowed)
     if strangers:
         raise _foreign("、".join(strangers[:5]))
 
@@ -209,6 +216,75 @@ def _check_projects(cfd) -> None:
             raise _foreign("projects/" + where)
 
 
+def builtin_executable_like(rel: str) -> bool:
+    """Whether a built-in file can run or be run by something, by the ending of its name (any letters)."""
+    return rel.casefold().endswith(BUILTIN_RUNNABLE)
+
+
+def table_folder(where: str):
+    """The one function that says which folder of the table a path below ``antigravity-cli`` is in: ``builtin`` or a closed folder
+    (``CLI_CLOSED``), spelled exactly as the table spells it; ``LETTERS_DIFFER`` when its first part is the same word in other letters
+    (that is never the table's folder); None for any other path."""
+    first = where.split("/", 1)[0]
+    for name in (BUILTIN_NAME, *CLI_CLOSED):
+        if first == name:
+            return name
+        if first.casefold() == name.casefold():
+            return LETTERS_DIFFER
+    return None
+
+
+def _file_sha256(fd: int, parts) -> str | None:
+    """The SHA-256 of the plain file ``antigravity-cli/<parts>`` below the folder ``fd`` is open on, or None (not a plain file, a link on
+    the way, too big, unreadable). Every part is opened without following a link; only the hash leaves this function."""
+    opened = []
+    try:
+        cur = fd
+        for part in (CLI_DIR, *parts[:-1]):
+            cur = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=cur)
+            opened.append(cur)
+        leaf = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | getattr(os, "O_NONBLOCK", 0), dir_fd=cur)
+        opened.append(leaf)
+        if not stat.S_ISREG(os.fstat(leaf).st_mode):
+            return None
+        digest, size = hashlib.sha256(), 0
+        while True:
+            chunk = os.read(leaf, 1 << 16)
+            if not chunk:
+                return digest.hexdigest()
+            size += len(chunk)
+            if size > BUILTIN_HASH_MAX:
+                return None
+            digest.update(chunk)
+    except OSError:
+        return None
+    finally:
+        for each in opened:
+            try:
+                os.close(each)
+            except OSError:
+                pass
+
+
+def _check_builtin_entry(fd, where: str, mode: int) -> None:
+    """One path below ``antigravity-cli/builtin`` (``where`` starts with ``builtin/``): it must be a path of the table, a folder where the
+    table has something below it and a plain file otherwise; a plain file with a pinned hash must have it, and one that can run and has
+    none is refused. AgyRefused (naming ``where``) when not."""
+    rel = where[len(BUILTIN_NAME) + 1:]
+    is_dir = rel in BUILTIN_DIRS
+    if rel not in BUILTIN_PATHS or not (stat.S_ISDIR(mode) if is_dir else stat.S_ISREG(mode)):
+        raise _foreign(CLI_DIR + "/" + where)
+    if is_dir:
+        return
+    pinned = BUILTIN_SHA.get(rel)
+    if pinned is None:
+        if builtin_executable_like(rel):
+            raise _foreign(CLI_DIR + "/" + where)
+        return
+    if _file_sha256(fd, (*where.split("/"),)) != pinned:
+        raise _foreign(CLI_DIR + "/" + where)
+
+
 def _check_cli_dir(fd) -> None:
     """``antigravity-cli`` (AGY's own working folder, with VBear's ``settings.json`` in it), when it is there: a plain folder whose
     top level holds only the names of ``CREATED_CLI``. Below the top level nothing is allowed that is named like a hook, rule,
@@ -230,13 +306,16 @@ def _check_cli_dir(fd) -> None:
         raise _foreign(CLI_DIR) from exc
     found, too_much = _collect_tree(first, CLI_DIR, CLI_MAX_DEPTH, CLI_MAX_ENTRIES)
     top = [w for w, depth, _ in found if depth == 0]
-    _refuse_strangers(top, CREATED_CLI)
+    _refuse_strangers(top, CREATED_CLI, exact=True)        # AGY spells its folders one way: other letters are a stranger
     for where, depth, mode in found:
-        if where.startswith(BUILTIN_NAME + "/"):         # AGY's own built-in content: only the paths of the table, exactly
-            if where[len(BUILTIN_NAME) + 1:] not in BUILTIN_PATHS or not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
-                raise _foreign(CLI_DIR + "/" + where)
-        elif where.split("/", 1)[0] in CLI_CLOSED and depth >= 1:     # a folder AGY made whose content nobody knows: only the listed names
-            if where.split("/", 1)[1] not in CLI_CLOSED[where.split("/", 1)[0]] or not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+        folder = table_folder(where)
+        if folder is LETTERS_DIFFER:
+            raise _foreign(CLI_DIR + "/" + where)
+        if folder == BUILTIN_NAME:                         # AGY's own built-in content: only the paths of the table, exactly
+            if depth >= 1:
+                _check_builtin_entry(fd, where, mode)
+        elif folder is not None:                           # a folder AGY made whose content nobody knows: only the listed names
+            if depth >= 1 and (where.split("/", 1)[1] not in CLI_CLOSED[folder] or not (stat.S_ISREG(mode) or stat.S_ISDIR(mode))):
                 raise _foreign(CLI_DIR + "/" + where)
         elif depth >= 1 and _is_forbidden_name(where.rsplit("/", 1)[-1]):
             raise _foreign(CLI_DIR + "/" + where)
