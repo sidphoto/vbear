@@ -265,6 +265,17 @@ class RealMachineShapeTests(CheckCase):
         self.assert_failed(code, report, "home_clean")
         self.assertIn("stranger-item", report["checks"]["home_clean"]["reason"])
 
+    def test_the_report_says_how_many_names_each_of_agys_folders_holds_and_which_are_named_like_a_hook_or_a_skill(self):
+        code, report = self.check()
+        self.assertEqual(code, 0, report.get("error"))
+        deep = report["observations"]["home_deep"]
+        self.assertEqual(deep["forbidden_named"], [])
+        self.assertIn("antigravity-cli/builtin", deep["counts"])
+        self.assertEqual(deep["counts"]["antigravity-cli/builtin"], 0)
+        code, report = self.check({"project_hook": True})
+        deep = report["observations"]["home_deep"]
+        self.assertEqual(deep["forbidden_named"], ["config/projects/p-0001/hooks.json"])
+
     def test_a_hooks_file_hidden_inside_a_project_folder_fails_home_clean_by_where_it_is(self):
         code, report = self.check({"project_hook": True})
         self.assert_failed(code, report, "home_clean")
@@ -303,6 +314,63 @@ class RealMachineShapeTests(CheckCase):
         ls = report["observations"]["ls_ask"]
         self.assertEqual((ls["cards"], ls["turn_ended"], ls["ran_without_a_card"], ls["errors"]), (1, "result", False, []))
         self.assertNotIn("ls -a 那個回合", self.printed)
+
+
+class AskProbeTests(CheckCase):
+    """The question the second real run left open: does AGY run a command before it asks, and in what order does it send what."""
+
+    def test_a_well_behaved_agy_sends_the_call_pending_then_asks_and_the_refusal_stops_it(self):
+        code, report = self.check()
+        self.assertEqual(code, 0, report.get("error"))
+        probe = report["observations"]["ask_probe"]
+        self.assertEqual((probe["asked"], probe["verdict"], probe["file_written"], probe["turn_ended"], probe["problem"]),
+                         (True, "asked_and_refused", False, True, None))
+        self.assertEqual(probe["statuses_before_the_request"], ["pending"])
+        self.assertEqual(probe["events"][0], ["tool_call", "pending", "execute"])
+        self.assertIn(["request_permission", "pending", "execute"], probe["events"])
+        proto = report["observations"]["protocol"]
+        self.assertIn("tool_call:pending", proto["tool_statuses"]["execute"])
+        self.assertIn("CommandLine", proto["tool_raw_fields"]["execute"])
+        self.assertTrue(proto["sequence"])
+
+    def test_a_call_that_arrives_running_and_is_never_asked_is_recorded_as_ran_without_asking(self):
+        code, report = self.check({"probe_unasked": True})
+        self.assertEqual(code, 0, report.get("error"))            # an observation: the verdict is the person's
+        probe = report["observations"]["ask_probe"]
+        self.assertEqual((probe["asked"], probe["verdict"], probe["file_written"]), (False, "ran_without_asking", True))
+        self.assertEqual(probe["events"][0], ["tool_call", "in_progress", "execute"])
+        self.assertEqual(probe["statuses_before_the_request"], [])
+
+    def test_a_call_that_arrives_running_and_then_asks_shows_the_status_before_the_request(self):
+        code, report = self.check({"probe_running_then_ask": True})
+        self.assertEqual(code, 0, report.get("error"))
+        probe = report["observations"]["ask_probe"]
+        self.assertEqual((probe["asked"], probe["verdict"], probe["file_written"]), (True, "asked_and_refused", False))
+        self.assertEqual(probe["statuses_before_the_request"], ["in_progress"])
+
+    def test_the_probe_answers_every_request_with_reject_once_and_only_reads_the_work_folder_it_made(self):
+        code, report = self.check()
+        self.assertEqual(code, 0, report.get("error"))
+        log = self.fake_log()
+        starts = [r for r in log if r["event"] == "start"]
+        probe = [s for s in starts if s["argv"][s["argv"].index("--gemini-dir") + 1].endswith("/gp")]
+        self.assertEqual(len(probe), 1)
+        self.assertTrue(probe[0]["cwd"].endswith("/gq"))
+        self.assertNotIn("--add-dir", probe[0]["argv"])
+
+    def test_a_status_word_nobody_knew_is_shown_as_it_is_and_anything_odd_is_a_question_mark(self):
+        self.assertEqual(cc._word("awaiting_approval", cc._STATUS_WORDS), "awaiting_approval")
+        self.assertEqual(cc._word("pending", cc._STATUS_WORDS), "pending")
+        self.assertEqual(cc._word(None, cc._STATUS_WORDS), "-")
+        for odd in ("Run /Users/x/secret now", "a" * 40, "x@example.org", 5, {"a": 1}, ""):
+            self.assertEqual(cc._word(odd, cc._STATUS_WORDS), "?", odd)
+
+    def test_a_violation_says_which_message_came_just_before_it(self):
+        code, report = self.check({"ls_unasked": True})
+        self.assert_failed(code, report, "ls_asks")
+        at = report["observations"]["protocol"]["violation_at"]
+        self.assertTrue(at and at[0]["after"] == ["tool_call_update", "in_progress", "execute"], at)
+        self.assertIn("沒有經過 VBear 的允許", at[0]["message"])
 
 
 class RefusalTests(CheckCase):

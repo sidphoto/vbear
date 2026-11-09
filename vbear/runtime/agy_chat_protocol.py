@@ -113,7 +113,12 @@ VERSIONS = {
                         "config/global_workflows", "config/plugins"),
         # AGY 1.5.3 makes these in a fresh --gemini-dir (the first real run found config/projects among them). Names only are
         # looked at, and a name that is in neither list is a name something else put there.
-        home_created=("antigravity-cli", "config", "config/config.json", "config/mcp_config.json", "config/projects"),
+        home_created=("antigravity-cli", "antigravity-cli/annotations", "antigravity-cli/bin", "antigravity-cli/brain",
+                      "antigravity-cli/builtin", "antigravity-cli/cache", "antigravity-cli/conversation_summaries.db",
+                      "antigravity-cli/conversations", "antigravity-cli/crashes", "antigravity-cli/implicit",
+                      "antigravity-cli/installation_id", "antigravity-cli/jetbox_summaries_proto.pb",
+                      "antigravity-cli/jetski_state.pbtxt", "antigravity-cli/log", "antigravity-cli/settings.json",
+                      "config", "config/.migrated", "config/config.json", "config/mcp_config.json", "config/projects"),
         # Inside config/projects only empty folders pass until a real run shows what AGY makes there (it is the one place where a
         # foreign hook, rule or skill could hide): a name to add goes here, and nowhere else.
         project_entries=(),

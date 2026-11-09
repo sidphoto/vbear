@@ -223,7 +223,7 @@ class ChatHomeTests(FolderCase):
     def test_what_agy_makes_there_by_itself_is_accepted_and_every_other_name_is_refused_by_name(self):
         self.make_home()
         for name in ("config/projects", "config/config.json", "config/mcp_config.json", "antigravity-cli/conversations",
-                     "antigravity-cli/logs/x.log"):
+                     "antigravity-cli/log/x.log"):
             path = self.chat_home / name
             path.parent.mkdir(exist_ok=True, parents=True, mode=0o700)
             path.mkdir() if not name.endswith((".json", ".log")) else path.write_text("{}" if name.endswith(".json") else "x")
@@ -322,6 +322,45 @@ class ChatHomeTests(FolderCase):
             (projects / f"p-{i:05d}").mkdir()
         self.refused(env.check_chat_home, self.state, code="foreign_settings")
 
+    def test_the_names_agy_1_5_3_really_made_are_all_accepted_in_their_places(self):
+        self.make_home()
+        real = {"antigravity-cli": ["annotations", "bin", "brain", "builtin", "cache", "conversation_summaries.db", "conversations",
+                                   "crashes", "implicit", "installation_id", "jetbox_summaries_proto.pb", "jetski_state.pbtxt",
+                                   "log", "settings.json"],
+                "config": [".migrated", "config.json", "mcp_config.json", "projects"]}
+        for top, names in real.items():
+            for name in names:
+                path = self.chat_home / top / name
+                path.parent.mkdir(exist_ok=True, parents=True, mode=0o700)
+                if name in ("annotations", "bin", "brain", "builtin", "cache", "conversations", "crashes", "implicit", "log", "projects"):
+                    path.mkdir(exist_ok=True)
+                elif name != "settings.json":
+                    path.write_text("{}" if name.endswith(".json") else "x")
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home)
+
+    def test_a_name_in_antigravity_cli_that_is_not_on_the_list_is_refused_by_name_and_so_is_a_forbidden_one_at_any_depth(self):
+        self.make_home()
+        cli = self.chat_home / "antigravity-cli"
+        cli.mkdir(exist_ok=True, mode=0o700)
+        (cli / "builtin" / "tools").mkdir(parents=True)
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home)
+        (cli / "made-up-top").write_text("x")
+        self.assertIn("made-up-top", self.refused(env.check_chat_home, self.state, code="foreign_settings"))
+        (cli / "made-up-top").unlink()
+        for where in ("builtin/skills", "implicit/Workflows", "brain/a/b/c/hooks.json", "cache/rules.md", "bin/GEMINI.md",
+                      "conversations/AGENTS.md", "log/plugins", "builtin/tools/settings.json", "implicit/mcp_config.json"):
+            for kind in ("file", "dir"):
+                with self.subTest(where=where, kind=kind):
+                    path = cli / where
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("x") if kind == "file" else path.mkdir(exist_ok=True)
+                    why = self.refused(env.check_chat_home, self.state, code="foreign_settings")
+                    self.assertIn(Path(where).name.casefold(), why.casefold())
+                    self.assertIn("antigravity-cli/", why)
+                    self.assertNotIn(str(self.tmp), why)
+                    shutil.rmtree(path) if path.is_dir() else path.unlink()
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home, "VBear's own settings.json is not what is looked for")
+
     def test_a_config_folder_that_is_a_link_or_a_file_is_refused(self):
         self.make_home()
         (self.chat_home / "config").symlink_to(self.tmp)
@@ -332,8 +371,9 @@ class ChatHomeTests(FolderCase):
 
     def test_what_agy_makes_itself_is_fine(self):
         self.make_home()
-        for rel in ("config/config.json", "antigravity-cli/conversations/c1.db", "antigravity-cli/log/a.log",
-                    "antigravity-cli/skills/built-in/x.md"):
+        for rel in ("config/config.json", "config/.migrated", "antigravity-cli/conversations/c1.db", "antigravity-cli/log/a.log",
+                    "antigravity-cli/builtin/some-tool/readme.txt", "antigravity-cli/conversation_summaries.db",
+                    "antigravity-cli/jetski_state.pbtxt", "antigravity-cli/installation_id"):
             self.write_private(self.chat_home / rel, "{}")
         self.assertEqual(env.check_chat_home(self.state), self.chat_home)
 
@@ -367,7 +407,7 @@ class ChatHomeTests(FolderCase):
 
     def test_the_size_is_a_threshold_that_refuses_and_can_be_left_out(self):
         self.make_home()
-        self.write_private(self.chat_home / "antigravity-cli" / "big.bin", "x" * 4096)
+        self.write_private(self.chat_home / "antigravity-cli" / "conversation_summaries.db", "x" * 4096)
         self.assertEqual(env.HOME_LIMIT, 512 << 20)
         with mock.patch.object(env, "HOME_LIMIT", 1024):
             self.refused(env.check_chat_home, self.state, code="too_big")
@@ -378,7 +418,7 @@ class ChatHomeTests(FolderCase):
     def test_a_link_inside_the_folder_cannot_be_counted_so_it_refuses(self):
         self.make_home()
         (self.chat_home / "antigravity-cli").mkdir(mode=0o700)
-        (self.chat_home / "antigravity-cli" / "l").symlink_to(self.tmp)
+        (self.chat_home / "antigravity-cli" / "cache").symlink_to(self.tmp)
         self.refused(env.check_chat_home, self.state, code="too_big")
 
 

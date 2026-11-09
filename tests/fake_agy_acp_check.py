@@ -32,6 +32,8 @@ The configuration is the JSON file named by $FAKE_AGY_CONFIG (``write_launcher``
   cancel_keeps_running the command goes on after session/cancel (and the process group's end)
   forgets              the code word is not remembered after a resume
   home_item            the --gemini-dir folder gets a hooks file when the process that answered resume_ask ends
+  probe_unasked        in the probe step the command arrives already running and no request for permission ever comes
+  probe_running_then_ask  in the probe step the command arrives running and a request for permission follows
   home_stranger        the --gemini-dir folder gets an item nobody knows (at the end of the process that answered resume_ask)
   project_hook         a hooks file appears inside config/projects/p-0001 (at the end of the process that answered resume_ask)
   auth_error           session/new is answered with "Authentication required"
@@ -215,6 +217,12 @@ class Agent:
         (base / "config" / "config.json").write_text('{"plugins": ["swarm"]}')
         (base / "config" / "mcp_config.json").write_text("{}")
         (base / "config" / "projects" / "p-0001").mkdir(parents=True, exist_ok=True)       # a real AGY 1.5.3 makes this by itself
+        (base / "config" / ".migrated").write_text("")
+        cli = base / "antigravity-cli"
+        for name in ("annotations", "bin", "brain", "builtin", "cache", "conversations", "crashes", "implicit", "log"):
+            (cli / name).mkdir(parents=True, exist_ok=True)
+        for name in ("conversation_summaries.db", "installation_id", "jetbox_summaries_proto.pb", "jetski_state.pbtxt"):
+            (cli / name).write_text("made-up")
         if method == "session/new":
             self.session = "not-a-uuid" if self.flags.get("session_id_not_uuid") else str(uuid.uuid4())
             self.sessions_dir()
@@ -287,6 +295,35 @@ class Agent:
         code, out = self.run(command, bypass)
         self.finish_call(cid, True, code, out)
         return decision, code, out
+
+    def probe_command(self, text):
+        """The question of the real run: does the command run before a request for permission comes (and does one come at all)?
+        ``probe_unasked``: the call arrives already running and there is never a request, as in the real run; ``probe_running_then_ask``:
+        it arrives running and then asks; the default: pending, then asks, and a refusal ends it."""
+        cmd = re.search(r"shell command: (.*?) -- ", text).group(1)
+        if self.flags.get("probe_unasked") or self.flags.get("probe_running_then_ask"):
+            self.call_no += 1
+            cid = f"call-{os.getpid()}-{self.call_no}"
+            raw = {"CommandLine": cmd}
+            self.update(sessionUpdate="tool_call", toolCallId=cid, title="Run a command", kind="execute", status="in_progress",
+                        rawInput=raw, locations=[], content=[], name="run_command", args={})
+            if self.flags.get("probe_running_then_ask"):
+                self.next_id += 1
+                req = self.next_id
+                self.write({"jsonrpc": "2.0", "id": req, "method": "session/request_permission",
+                            "params": {"sessionId": self.session, "toolCall": {"toolCallId": cid, "kind": "execute",
+                                                                             "status": "in_progress", "rawInput": raw},
+                                       "options": OPTIONS}})
+                while True:
+                    msg = self.recv()
+                    if msg is not None and msg.get("id") == req and "method" not in msg:
+                        break
+                return "Refused."
+            code, out = self.run(cmd)
+            self.finish_call(cid, True, code, out)
+            return "Done."
+        decision, _code, _out = self.shell(cmd)
+        return "Done." if decision == "allow" else "Refused."
 
     def run(self, command, bypass=False):
         free = bypass or self.flags.get("outside_escapes")
@@ -445,6 +482,8 @@ class Agent:
             strict = self.settings_mode() == "strict" and not self.flags.get("strict_ignored")
             decision, content = self.read_file(name, ask=strict)
             return "I read it." if decision in ("allow", "silent") else "I could not read it."
+        if step == "probe":
+            return self.probe_command(text)
         if step == "ask":
             return self.simple_commands(text)
         if step == "deny":

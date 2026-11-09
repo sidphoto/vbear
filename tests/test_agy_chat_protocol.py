@@ -79,8 +79,14 @@ class ConstantsTests(unittest.TestCase):
         c = acp.VERSIONS["1.5.3"]
         self.assertEqual(c.home_forbidden, ("GEMINI.md", "AGENTS.md", "config/hooks.json", "config/skills",
                                             "config/workflows", "config/global_workflows", "config/plugins"))
-        self.assertEqual(c.home_created, ("antigravity-cli", "config", "config/config.json", "config/mcp_config.json",
-                                          "config/projects"))
+        # what a real AGY 1.5.3 made in a fresh --gemini-dir (the second real run), one level at a time
+        self.assertEqual(c.home_created, (
+            "antigravity-cli", "antigravity-cli/annotations", "antigravity-cli/bin", "antigravity-cli/brain",
+            "antigravity-cli/builtin", "antigravity-cli/cache", "antigravity-cli/conversation_summaries.db",
+            "antigravity-cli/conversations", "antigravity-cli/crashes", "antigravity-cli/implicit", "antigravity-cli/installation_id",
+            "antigravity-cli/jetbox_summaries_proto.pb", "antigravity-cli/jetski_state.pbtxt", "antigravity-cli/log",
+            "antigravity-cli/settings.json", "config", "config/.migrated", "config/config.json", "config/mcp_config.json",
+            "config/projects"))
         self.assertTrue(set(c.home_created).isdisjoint(c.home_forbidden))
         self.assertEqual(c.project_entries, (), "nothing is known to be made inside a project folder yet (a real run must show it)")
         self.assertEqual(c.forbidden_anywhere, ("hooks", "rules", "workflows", "global_workflows", "skills", "plugins", "settings",
