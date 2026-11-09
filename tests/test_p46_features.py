@@ -143,6 +143,22 @@ class SharedFolderForAgyTests(ApiCase):
             self.assertIsNone(mine["verified"])
 
 
+class RoutinesForAgyTests(ApiCase):
+    """ADR 0010: a routine can be given to an AGY employee, like to any employee who can chat (and to none who cannot)."""
+
+    BODY = {"name": "每天早上的整理", "text": "請把昨天的待辦整理成三行。", "days": [1, 2, 3, 4, 5], "times": ["09:00"], "enabled": False}
+
+    def test_a_routine_is_given_to_an_agy_employee(self):
+        status, out = self.call("/api/routines", "POST", dict(self.BODY, profile_id=self.emp))
+        self.assertEqual(status, 201, out)
+        self.assertEqual((out["routine"]["profile_id"], out["routine"]["enabled"]), (self.emp, False))
+
+    def test_an_agy_employee_who_is_switched_off_cannot_have_one(self):
+        off = self.card("停用的AGY員工", "agy", enabled=False)
+        status, out = self.call("/api/routines", "POST", dict(self.BODY, profile_id=off))
+        self.assertEqual((status, out["code"]), (400, "routine_card"))
+
+
 class GroupsWithAgyTests(GroupBase):
     """ADR 0007: an AGY card is a member like any other (two or three, mixed); the notes name the companies the words go to."""
 
