@@ -65,6 +65,7 @@ PROJECTS_MAX_ENTRIES = 200
 CLI_MAX_DEPTH = 10
 CLI_MAX_ENTRIES = 20_000
 CREATED_CLI = tuple(n.split("/", 1)[1] for n in _NEWEST.home_created if n.startswith(CLI_DIR + "/"))
+CLI_CLOSED = {name: frozenset(allowed) for name, allowed in _NEWEST.cli_closed}   # folders of antigravity-cli with a closed list of names
 BUILTIN_NAME = "builtin"
 BUILTIN_PATHS = frozenset(_NEWEST.builtin_paths)       # exact paths, below antigravity-cli/builtin; nothing else is let through there
 MCP_CONFIG_NAME = "mcp_config.json"
@@ -233,6 +234,9 @@ def _check_cli_dir(fd) -> None:
     for where, depth, mode in found:
         if where.startswith(BUILTIN_NAME + "/"):         # AGY's own built-in content: only the paths of the table, exactly
             if where[len(BUILTIN_NAME) + 1:] not in BUILTIN_PATHS or not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+                raise _foreign(CLI_DIR + "/" + where)
+        elif where.split("/", 1)[0] in CLI_CLOSED and depth >= 1:     # a folder AGY made whose content nobody knows: only the listed names
+            if where.split("/", 1)[1] not in CLI_CLOSED[where.split("/", 1)[0]] or not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
                 raise _foreign(CLI_DIR + "/" + where)
         elif depth >= 1 and _is_forbidden_name(where.rsplit("/", 1)[-1]):
             raise _foreign(CLI_DIR + "/" + where)

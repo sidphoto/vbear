@@ -29,14 +29,19 @@ The configuration is the JSON file named by $FAKE_AGY_CONFIG (``write_launcher``
   network_works        ``curl`` works
   link_read_asks       a read through the link asks first (else it is read without a request)
   link_leaks           the reply says the decoy's code word without any tool call
+  orphan_after_stop    a process in a session of its own (``sleep 5``) is left behind when the stopped process ends
   cancel_keeps_running the command goes on after session/cancel (and the process group's end)
   forgets              the code word is not remembered after a resume
   home_item            the --gemini-dir folder gets a hooks file when the process that answered resume_ask ends
   probe_unasked        in the probe step the command arrives already running and no request for permission ever comes
   probe_running_then_ask  in the probe step the command arrives running and a request for permission follows
-  home_stranger        the --gemini-dir folder gets an item nobody knows (at the end of the process that answered resume_ask)
+  home_stranger        the --gemini-dir folder gets an item nobody knows (at the end of the process that answered resume_ask or, the stop step being last, stop)
   builtin_stranger     a skill folder appears in antigravity-cli/builtin/skills that the version table does not list (same moment)
-  project_hook         a hooks file appears inside config/projects/p-0001 (at the end of the process that answered resume_ask)
+  no_shell_attempt     the outside_shell message is answered with no command at all
+  stop_after_failure   a message with several commands stops at the first one that fails (as the real model did)
+  manifest_differs     builtin/.manifest names a file that is not there and leaves out one that is
+  persistent_content   a file appears in antigravity-cli/persistent_terminals (at the end of the process that answered resume_ask or, the stop step being last, stop)
+  project_hook         a hooks file appears inside config/projects/p-0001 (at the end of the process that answered resume_ask or, the stop step being last, stop)
   auth_error           session/new is answered with "Authentication required"
   add_dir_ignored      --add-dir does not make the shared folder writable for a command
   only_shared          outside_edit_escapes works only when the shared folder is on
@@ -74,8 +79,28 @@ INIT = {"protocolVersion": 1, "agentCapabilities": {"loadSession": True, "prompt
                                                                             "additionalDirectories": {}}},
         "authMethods": [{"id": "fake-auth-1", "name": "Made-up sign-in"}], "_meta": {"antigravity": {"tier": "fake-tier-alpha"}}}
 SKILLS = ["fake-skill-alpha", "fake-skill-beta", "fake-builtin"]
-BUILTIN = ("plugins", "skills/agy-customizations/docs/skills.md", "skills/agy-customizations/docs/plugins.md",
-           "skills/agy-customizations/docs/hooks.md", "skills/agy-customizations/docs/rules.md")      # (parents are made)
+BUILTIN = (".checksum", ".manifest", "keep.txt", "plugins", "plugins/swarm", "plugins/swarm/README.md", "plugins/swarm/assets",
+           "plugins/swarm/assets/logo.svg", "plugins/swarm/plugin.json", "plugins/swarm/sidecars",
+           "plugins/swarm/sidecars/swarm_board", "plugins/swarm/sidecars/swarm_board/README.md",
+           "plugins/swarm/sidecars/swarm_board/app.js", "plugins/swarm/sidecars/swarm_board/channels.mjs",
+           "plugins/swarm/sidecars/swarm_board/hive.css", "plugins/swarm/sidecars/swarm_board/hive.js",
+           "plugins/swarm/sidecars/swarm_board/index.html", "plugins/swarm/sidecars/swarm_board/main.mjs",
+           "plugins/swarm/sidecars/swarm_board/narrator_bootstrap.js", "plugins/swarm/sidecars/swarm_board/package.json",
+           "plugins/swarm/sidecars/swarm_board/sidecar.json", "plugins/swarm/sidecars/swarm_board/styles.css", "skills",
+           "skills/agy-customizations", "skills/agy-customizations/SKILL.md", "skills/agy-customizations/docs",
+           "skills/agy-customizations/docs/hooks.md", "skills/agy-customizations/docs/json_configs.md",
+           "skills/agy-customizations/docs/mcp_servers.md", "skills/agy-customizations/docs/plugins.md",
+           "skills/agy-customizations/docs/rules.md", "skills/agy-customizations/docs/skills.md", "skills/antigravity_guide",
+           "skills/antigravity_guide/SKILL.md", "skills/antigravity_guide/references",
+           "skills/antigravity_guide/references/app.md", "skills/antigravity_guide/references/cli.md",
+           "skills/antigravity_guide/references/ide.md", "skills/antigravity_guide/references/sdk.md", "skills/automation",
+           "skills/automation/SKILL.md", "skills/generative_ui", "skills/generative_ui/SKILL.md",
+           "skills/migrate-agent-settings", "skills/migrate-agent-settings/SKILL.md", "skills/migrate-workflows",
+           "skills/migrate-workflows/SKILL.md", "skills/native_swarm", "skills/native_swarm/SKILL.md",
+           "skills/native_swarm/logo.svg", "skills/permissioned-github", "skills/permissioned-github/SKILL.md",
+           "skills/plugin", "skills/plugin/SKILL.md", "skills/run-workflow", "skills/run-workflow/SKILL.md",
+           "skills/swarm_monitor", "skills/swarm_monitor/SKILL.md", "skills/swarm_narrator", "skills/swarm_narrator/SKILL.md",
+           "skills/ui-plugin-navigation", "skills/ui-plugin-navigation/SKILL.md")      # (the paths of a real AGY 1.5.3's antigravity-cli/builtin; a path with something below it is a folder)
 EXACT = re.compile(r"exactly(?: this shell command)?: (.+?) -- ", re.S)
 
 
@@ -183,13 +208,15 @@ class Agent:
                     self.dispatch(msg)
         except Eof:
             pass
-        if self.flags.get("project_hook") and self.gemini and self.last_step == "resume_ask":
+        if self.flags.get("project_hook") and self.gemini and self.last_step in ("resume_ask", "stop"):
             (Path(self.gemini) / "config" / "projects" / "p-0001" / "hooks.json").write_text("{}")
-        if self.flags.get("builtin_stranger") and self.gemini and self.last_step == "resume_ask":
+        if self.flags.get("builtin_stranger") and self.gemini and self.last_step in ("resume_ask", "stop"):
             (Path(self.gemini) / "antigravity-cli" / "builtin" / "skills" / "made-up-skill").mkdir(parents=True, exist_ok=True)
-        if self.flags.get("home_stranger") and self.gemini and self.last_step == "resume_ask":
+        if self.flags.get("persistent_content") and self.gemini and self.last_step in ("resume_ask", "stop"):
+            (Path(self.gemini) / "antigravity-cli" / "persistent_terminals" / "t-made-up").write_text("x")
+        if self.flags.get("home_stranger") and self.gemini and self.last_step in ("resume_ask", "stop"):
             (Path(self.gemini) / "stranger-item").write_text("x")
-        if self.flags.get("home_item") and self.gemini and self.last_step == "resume_ask":
+        if self.flags.get("home_item") and self.gemini and self.last_step in ("resume_ask", "stop"):
             (Path(self.gemini) / "config").mkdir(parents=True, exist_ok=True)
             (Path(self.gemini) / "config" / "hooks.json").write_text("{}")
         self.log(event="exit", code=0)
@@ -228,9 +255,17 @@ class Agent:
             (cli / name).mkdir(parents=True, exist_ok=True)
         for rel in BUILTIN:                                  # AGY's own built-in skills and plugin: named like what VBear refuses elsewhere
             path = cli / "builtin" / rel
-            path.mkdir(parents=True, exist_ok=True) if "." not in rel.rsplit("/", 1)[-1] else path.parent.mkdir(parents=True, exist_ok=True)
-            if "." in rel.rsplit("/", 1)[-1]:
+            if any(other.startswith(rel + "/") for other in BUILTIN):
+                path.mkdir(parents=True, exist_ok=True)
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("made-up")
+        manifest = {"files": {rel: "made-up-hash" for rel in BUILTIN if not any(o.startswith(rel + "/") for o in BUILTIN)
+                              and rel not in (".manifest", ".checksum")}}
+        if self.flags.get("manifest_differs"):
+            manifest["files"].pop("keep.txt")                                   # a name that is there but not listed
+            manifest["files"]["skills/made-up/SKILL.md"] = "made-up-hash"        # and one that is listed but not there
+        (cli / "builtin" / ".manifest").write_text(json.dumps(manifest))
         for name in ("conversation_summaries.db", "installation_id", "jetbox_summaries_proto.pb", "jetski_state.pbtxt"):
             (cli / name).write_text("made-up")
         if method == "session/new":
@@ -346,6 +381,8 @@ class Agent:
 
     def run(self, command, bypass=False):
         free = bypass or self.flags.get("outside_escapes")
+        if self.gemini:                                      # a real AGY 1.5.3 makes this when it runs a command (empty when looked at)
+            (Path(self.gemini) / "antigravity-cli" / "persistent_terminals").mkdir(parents=True, exist_ok=True)
         cmd = command.strip()
         if cmd == "ls -a":
             return 0, "\n".join([".", ".."] + sorted(os.listdir(self.cwd)))
@@ -403,6 +440,9 @@ class Agent:
             return decision
         self.update(sessionUpdate="tool_call_update", toolCallId=cid, status="in_progress")
         seconds = int(m.group(1)) * self.scale
+        if self.flags.get("orphan_after_stop"):              # like AGY's persistent terminal: its own session, seen while the process
+            subprocess.Popen(["sleep", "6"], cwd=self.cwd, start_new_session=True, stdin=subprocess.DEVNULL,    # lives, outlives it
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         end = time.monotonic() + seconds
         while time.monotonic() < end:
             if self.cancelled:
@@ -514,6 +554,8 @@ class Agent:
             path = re.search(r"create the file (\S+) containing", text).group(1)
             decision = self.write_file(path, "outside")
             return "Done." if decision == "allow" else "Refused."
+        if step == "outside_shell" and self.flags.get("no_shell_attempt"):
+            return "I did not run anything."
         if step in ("outside_shell", "network", "tmp_write", "shared_shell"):
             return self.simple_commands(text)
         if step == "bypass":
@@ -559,9 +601,9 @@ class Agent:
 
     def simple_commands(self, text):
         for found in EXACT.finditer(text):
-            decision, _code, _out = self.shell(found.group(1))
-            if decision != "allow":
-                break
+            decision, code, _out = self.shell(found.group(1))
+            if decision != "allow" or (self.flags.get("stop_after_failure") and code not in (0, None)):
+                break                         # (the real model did stop at the first command the sandbox stopped)
         return "Done."
 
 

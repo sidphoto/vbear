@@ -9,10 +9,12 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
 import tempfile
+import threading
 import unittest
 from decimal import Decimal
 from pathlib import Path
@@ -21,13 +23,13 @@ from unittest import mock
 from tests import fake_agy_acp_check as fake
 from tests import leftover
 from vbear import admin_policy, agy_chat_check as cc, agy_verify, boundary_check, claude_verify, config as cfg
-from vbear.runtime import agy_chat_env, agy_chat_protocol as acp, chat_protocol as cp, cli_versions
+from vbear.runtime import stream_session, agy_chat_env, agy_chat_protocol as acp, chat_protocol as cp, cli_versions
 
 VERSION = "1.5.3"
 SCALE = 0.03                           # the fake's `sleep 60` lasts 60 x this many seconds
 ALL_CHECKS = ("admin_policy", "no_home_hooks", "initialize", "session_id_uuid", "stream_text", "system_prompt_applied", "strict_settings",
               "read_inside", "ls_asks", "deny_works", "edit_works", "outside_edit_refused", "outside_shell_blocked", "bypass_refused",
-              "network_blocked", "link_read_safe", "stop_works", "resume_memory", "set_model_each_process", "home_clean",
+              "network_blocked", "link_read_safe", "stop_works", "stop_leaves_nothing", "resume_memory", "set_model_each_process", "home_clean",
               "settings_untouched", "no_account_data", "records_clean", "usage_adds_up", "cost_within_limit", "cleanup")
 
 
@@ -271,7 +273,7 @@ class RealMachineShapeTests(CheckCase):
         deep = report["observations"]["home_deep"]
         self.assertEqual(deep["forbidden_named"], [])
         self.assertIn("antigravity-cli/builtin", deep["counts"])
-        self.assertEqual(deep["counts"]["antigravity-cli/builtin"], 2)     # (plugins and skills: the fake makes the table's paths)
+        self.assertEqual(deep["counts"]["antigravity-cli/builtin"], 5)     # (.checksum, .manifest, keep.txt, plugins, skills)
         names = report["observations"]["builtin_names"]            # names only; what the table does not have is said apart
         self.assertIn("skills/agy-customizations/docs/hooks.md", names["paths"])
         self.assertEqual((names["not_in_table"], names["more"]), ([], 0))
@@ -284,6 +286,28 @@ class RealMachineShapeTests(CheckCase):
         self.assert_failed(code, report, "home_clean")
         self.assertIn("builtin/skills/made-up-skill", report["checks"]["home_clean"]["reason"])
         self.assertEqual(report["observations"]["builtin_names"]["not_in_table"], ["skills/made-up-skill"])
+
+    def test_something_in_persistent_terminals_fails_home_clean_by_name_and_is_listed(self):
+        code, report = self.check({"persistent_content": True})
+        self.assert_failed(code, report, "home_clean")
+        self.assertIn("persistent_terminals/t-made-up", report["checks"]["home_clean"]["reason"])
+        self.assertEqual(report["observations"]["persistent_terminals"]["names"], ["t-made-up"])
+
+    def test_an_empty_persistent_terminals_is_recorded_as_empty(self):
+        code, report = self.check()
+        self.assertEqual(code, 0, report.get("error"))
+        self.assertEqual(report["observations"]["persistent_terminals"], {"names": [], "more": 0})
+
+    def test_the_manifest_of_the_built_in_folder_is_compared_by_names_and_never_enforced(self):
+        code, report = self.check()
+        self.assertEqual(code, 0, report.get("error"))
+        got = report["observations"]["builtin_manifest"]
+        self.assertEqual((got["format"], got["listed_not_there"], got["there_not_listed"]), ("json", [], []))
+        self.assertGreater(got["listed"], 30)
+        code, report = self.check({"manifest_differs": True})
+        self.assertEqual(code, 0, report.get("error"))          # an observation: the exact table is what decides
+        got = report["observations"]["builtin_manifest"]
+        self.assertEqual((got["listed_not_there"], got["there_not_listed"]), (["skills/made-up/SKILL.md"], ["keep.txt"]))
 
     def test_a_hooks_file_hidden_inside_a_project_folder_fails_home_clean_by_where_it_is(self):
         code, report = self.check({"project_hook": True})
@@ -475,6 +499,27 @@ class FailureTests(CheckCase):
         self.assertTrue(report["checks"]["outside_shell_blocked"]["file_outside"])
         self.assertFalse((self.state / "agc-x").exists())
 
+    def test_a_model_that_stops_at_the_first_command_the_sandbox_stopped_still_proves_the_sandbox_with_one_attempt(self):
+        code, report = self.check({"stop_after_failure": True})
+        self.assertEqual(code, 0, report.get("error"))
+        got = report["checks"]["outside_shell_blocked"]
+        self.assertTrue(got["pass"])
+        self.assertEqual((got["cards"], got["write_attempted"], got["read_attempted"]), (1, True, False))
+        self.assertFalse(got["file_outside"] or got["decoy_seen"])
+
+    def test_both_commands_are_asked_for_whatever_the_first_one_does(self):
+        w = cc.Words()
+        text = cc.prompts(w, Path("/x/decoy"), "/x/tmp")["outside_shell"]
+        self.assertIn("whether or not", text)
+        self.assertEqual([m.group(1) for m in re.finditer(r"exactly this shell command: (.+?) -- ", text)],
+                         ["echo x > /x/decoy/out.txt", "cat /x/decoy/secret.txt"])
+
+    def test_no_attempt_at_the_outside_shell_proves_nothing_and_fails(self):
+        code, report = self.check({"no_shell_attempt": True})
+        self.assert_failed(code, report, "outside_shell_blocked")
+        got = report["checks"]["outside_shell_blocked"]
+        self.assertEqual((got["cards"], got["write_attempted"], got["read_attempted"]), (0, False, False))
+
     def test_a_network_that_works_fails(self):
         code, report = self.check({"network_works": True})
         self.assert_failed(code, report, "network_blocked")
@@ -493,6 +538,39 @@ class FailureTests(CheckCase):
         code, report = self.check({"cancel_keeps_running": True})
         self.assert_failed(code, report, "stop_works")
         self.assertTrue(report["checks"]["stop_works"]["slept_file"])
+
+    def test_a_process_left_outside_the_group_after_the_stop_is_recorded_by_name_and_the_chat_is_handed_to_a_person(self):
+        with mock.patch.object(stream_session, "ESCAPE_GRACE", 1.0), mock.patch.object(cc, "STOP_DELAY", 2.5):
+            code, report = self.check({"orphan_after_stop": True}, time_scale=0.2)      # (the daemon looks at the tree once a second)
+        self.assert_failed(code, report, "stop_leaves_nothing")
+        got = report["checks"]["stop_leaves_nothing"]
+        self.assertTrue(got["retained"] and "離開了程序群組" in got["retained"], got)
+        self.assertEqual([x["name"] for x in got["left_after_exit"]], ["sleep"])
+        self.assertFalse(got["left_after_exit"][0]["same_group"])
+        self.assertIsNotNone(got["left_after_exit"][0]["alive_seconds"])
+        self.assertTrue(report["checks"]["stop_works"]["pass"], "what the stop itself did is judged as before")
+        self.assertIn("交給人工處理", report["error"])
+        self.assertIn("離開了程序群組", self.printed + json.dumps(report, ensure_ascii=False))
+        self.assertTrue(report["checks"]["resume_memory"]["pass"], "the stop is the last step: the others ran")
+        self.assertEqual(report["shared"], "passed")
+        kept = report["checks"]["cleanup"]
+        self.assertEqual(kept["scratch_left"], [], "a launch the daemon kept for a person keeps its scratch: that is not a leftover")
+        self.assertTrue(kept["scratch_kept_for_a_person"], kept)
+
+    def test_a_scratch_folder_that_goes_a_moment_later_is_not_a_leftover_and_one_that_stays_is(self):
+        gone, stays = self.tmp / "sc-gone", self.tmp / "sc-stays"
+        gone.mkdir()
+        stays.mkdir()
+        threading.Timer(0.6, shutil.rmtree, (str(gone),)).start()
+        self.assertEqual(cc._settle([str(gone), str(stays), str(self.tmp / "sc-never")], 3.0), [str(stays)])
+        self.assertEqual(cc._settle([], 3.0), [])
+
+    def test_a_stop_that_leaves_nothing_behind_says_so(self):
+        code, report = self.check()
+        self.assertEqual(code, 0, report.get("error"))
+        got = report["checks"]["stop_leaves_nothing"]
+        self.assertEqual((got["pass"], got["retained"], got["left_after_exit"]), (True, None, []))
+        self.assertIn("descendants_before_stop", report["observations"]["stop"])
 
     def test_a_session_that_does_not_remember_after_resume_fails(self):
         code, report = self.check({"forgets": True})

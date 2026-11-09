@@ -326,13 +326,14 @@ class ChatHomeTests(FolderCase):
         self.make_home()
         real = {"antigravity-cli": ["annotations", "bin", "brain", "builtin", "cache", "conversation_summaries.db", "conversations",
                                    "crashes", "implicit", "installation_id", "jetbox_summaries_proto.pb", "jetski_state.pbtxt",
-                                   "log", "settings.json"],
+                                   "log", "persistent_terminals", "settings.json"],
                 "config": [".migrated", "config.json", "mcp_config.json", "projects"]}
         for top, names in real.items():
             for name in names:
                 path = self.chat_home / top / name
                 path.parent.mkdir(exist_ok=True, parents=True, mode=0o700)
-                if name in ("annotations", "bin", "brain", "builtin", "cache", "conversations", "crashes", "implicit", "log", "projects"):
+                if name in ("annotations", "bin", "brain", "builtin", "cache", "conversations", "crashes", "implicit", "log", "projects",
+                            "persistent_terminals"):
                     path.mkdir(exist_ok=True)
                 elif name != "settings.json":
                     path.write_text("{}" if name.endswith(".json") else "x")
@@ -365,16 +366,20 @@ class ChatHomeTests(FolderCase):
         base = self.chat_home / "antigravity-cli" / "builtin"
         for rel in paths:
             path = base / rel
-            if rel.endswith(".md"):
-                self.write_private(path, "x")
-            else:
+            if any(other.startswith(rel + "/") for other in env.BUILTIN_PATHS):          # a folder: something is below it
                 path.mkdir(parents=True, exist_ok=True)
+            else:
+                self.write_private(path, "x")
         return base
 
     def test_the_built_in_content_of_agy_passes_only_by_the_exact_paths_of_the_table(self):
         self.make_home()
-        self.assertTrue(env.BUILTIN_PATHS, "the table has names")
-        self.assertIn("skills/agy-customizations/docs/skills.md", env.BUILTIN_PATHS)
+        self.assertEqual(len(env.BUILTIN_PATHS), 62, "every path of the real AGY 1.5.3 (the fourth real run), one by one")
+        for name in (".checksum", ".manifest", "keep.txt", "plugins/swarm/plugin.json", "plugins/swarm/sidecars/swarm_board/main.mjs",
+                     "skills/agy-customizations/docs/skills.md", "skills/agy-customizations/docs/rules.md", "skills/native_swarm/logo.svg"):
+            self.assertIn(name, env.BUILTIN_PATHS)
+        self.assertEqual(sum(1 for p in env.BUILTIN_PATHS if p.startswith("skills/") and p.count("/") == 1), 13, "13 skill folders")
+        self.assertFalse(any(set(p) & set("*?[") for p in env.BUILTIN_PATHS), "no pattern, only names")
         for rel in sorted(env.BUILTIN_PATHS):                  # all of the table, though named skills, plugins, hooks and rules
             self.make_builtin(rel)
         self.assertEqual(env.check_chat_home(self.state), self.chat_home)
@@ -412,6 +417,27 @@ class ChatHomeTests(FolderCase):
                 if "/" in where:
                     (cli / where.split("/")[0]).rmdir()
         self.assertEqual(env.check_chat_home(self.state), self.chat_home)
+
+    def test_persistent_terminals_is_made_by_agy_and_only_empty_passes(self):
+        self.make_home()
+        cli = self.chat_home / "antigravity-cli"
+        (cli / "persistent_terminals").mkdir(parents=True, exist_ok=True)
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home)
+        for where, kind in (("t-1", "file"), ("t-1", "dir"), ("hooks.json", "file"), ("a/b/rules", "dir")):
+            with self.subTest(where=where, kind=kind):
+                path = cli / "persistent_terminals" / where
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("x") if kind == "file" else path.mkdir(exist_ok=True)
+                why = self.refused(env.check_chat_home, self.state, code="foreign_settings")
+                self.assertIn("antigravity-cli/persistent_terminals/", why)
+                self.assertNotIn(str(self.tmp), why)
+                shutil.rmtree(cli / "persistent_terminals")
+                (cli / "persistent_terminals").mkdir()
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home)
+        shutil.rmtree(cli / "persistent_terminals")
+        (cli / "persistent_terminals").symlink_to(self.tmp)
+        with self.assertRaises(env.AgyRefused):                  # a link is never let in (it is refused whichever check sees it first)
+            env.check_chat_home(self.state)
 
     def test_a_config_folder_that_is_a_link_or_a_file_is_refused(self):
         self.make_home()
