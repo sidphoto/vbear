@@ -223,6 +223,9 @@ class Agent:
         if self.flags.get("home_item") and self.gemini and self.last_step in ("resume_ask", "stop"):
             (Path(self.gemini) / "config").mkdir(parents=True, exist_ok=True)
             (Path(self.gemini) / "config" / "hooks.json").write_text("{}")
+        if self.gemini:                                      # what a real AGY 1.5.3 leaves beside its database when it ends (the sixth real run)
+            for side in ("-shm", "-wal"):
+                (Path(self.gemini) / "antigravity-cli" / ("conversation_summaries.db" + side)).write_text("made-up")
         self.log(event="exit", code=0)
         return 0
 

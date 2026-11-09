@@ -123,6 +123,10 @@ VERSIONS = {
         # looked at, and a name that is in neither list is a name something else put there.
         home_created=("antigravity-cli", "antigravity-cli/annotations", "antigravity-cli/bin", "antigravity-cli/brain",
                       "antigravity-cli/builtin", "antigravity-cli/cache", "antigravity-cli/conversation_summaries.db",
+                      # SQLite's side files of that database: left by the first process, so they are there at the second start (the sixth
+                      # real run saw -shm and -wal; -journal is the third name SQLite uses). Exactly these, only beside the database.
+                      "antigravity-cli/conversation_summaries.db-journal", "antigravity-cli/conversation_summaries.db-shm",
+                      "antigravity-cli/conversation_summaries.db-wal",
                       "antigravity-cli/conversations", "antigravity-cli/crashes", "antigravity-cli/implicit",
                       "antigravity-cli/installation_id", "antigravity-cli/jetbox_summaries_proto.pb",
                       "antigravity-cli/jetski_state.pbtxt", "antigravity-cli/log", "antigravity-cli/persistent_terminals",
