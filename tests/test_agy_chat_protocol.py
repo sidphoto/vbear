@@ -1048,6 +1048,25 @@ class PermissionTests(Drive):
         req = self.permission("read", {"Path": inside, "OtherPath": outside}, [{"path": inside}])
         self.assertEqual(req["action"], "ask")
 
+
+    def test_a_file_call_member_that_is_not_on_the_short_list_is_a_possible_path_and_judged_as_one(self):
+        a = os.path.join(self.work, "a.txt")
+        for key in ("Whatever", "Output", "Link", "x"):
+            for bad in (os.path.join(self.out, "o.txt"), "relative.txt", "/etc/made-up.txt", os.path.join(self.work, ".git", "x")):
+                for kind in ("edit", "delete", "move"):
+                    raw = {"Path": a, "Content": "x", "Destination": os.path.join(self.work, "b.txt"), key: bad}
+                    self.assertEqual(self.permission(kind, raw, [{"path": a}])["action"], "deny", (kind, key, bad))
+        fine = os.path.join(self.work, "b.txt")
+        req = self.permission("edit", {"Path": a, "Content": "x", "Whatever": fine}, [{"path": a}])
+        self.assertEqual(req["action"], "ask")
+
+    def test_a_file_call_member_that_cannot_be_read_as_a_path_or_a_plain_number_is_refused(self):
+        a = os.path.join(self.work, "a.txt")
+        for value in ({"Where": "/etc"}, [{"p": "x"}], [1, 2]):
+            self.assertEqual(self.permission("edit", {"Path": a, "Content": "x", "Whatever": value}, [{"path": a}])["action"], "deny", value)
+        for key, value in (("Description", "why"), ("Overwrite", True), ("Mode", 420), ("Explanation", "e"), ("Reason", "r")):
+            self.assertEqual(self.permission("edit", {"Path": a, "Content": "x", key: value}, [{"path": a}])["action"], "ask", key)
+
     # -- search
 
     def test_a_search_inside_is_asked_instead_when_the_work_folder_has_a_link_to_the_outside(self):
@@ -1253,6 +1272,38 @@ class ViolationTests(Drive):
                     {"Query": ""}, {"Query": "x", "Glob": ""}):
             got = self.search(raw)
             self.assertEqual(len(got), 1, raw)
+
+
+    def test_a_kind_that_changes_after_the_yes_is_a_violation(self):
+        src = self.touch(self.work, "a.txt")
+        req = self.permission("execute", {"CommandLine": "ls -a"})
+        self.t.answered(req["request_id"], "allow")
+        out = self.update(status="in_progress", kind="read", rawInput={"CommandLine": "ls -a"})
+        self.assertEqual([k for k, _ in out], ["violation"])
+        outside = self.touch(self.out, "o.txt")
+        req = self.permission("read", {"Path": outside}, [{"path": outside}])
+        self.assertEqual(req["action"], "ask")
+        self.t.answered(req["request_id"], "allow")
+        out = self.update(status="in_progress", kind="edit", rawInput={"Path": outside, "Content": "x"})
+        self.assertEqual([k for k, _ in out], ["violation"])
+        req = self.permission("read", {"Path": src}, [{"path": src}])
+        self.t.answered(req["request_id"], "allow")
+        self.assertEqual([k for k, _ in self.update(status="in_progress", kind="edit")], ["violation"])
+
+    def test_a_search_that_runs_unasked_names_its_places_as_absolute_paths_with_no_pattern_characters(self):
+        inside = self.touch(self.work, "a.txt")
+        self.assertEqual(self.search({"Query": "made-up", "SearchPath": self.work}), [])
+        self.assertEqual(self.search({"Query": "made-up", "Directory": inside}, [{"path": inside}]), [])
+        for bad in ("relative", "sub/dir", self.work + "/{a,b}", self.work + "/*", self.work + "/a?", self.work + "/[ab]", "~", "~/x",
+                    self.work + "/../x"):
+            for key in ("Path", "SearchPath", "Directory", "TargetFolder"):
+                self.assertEqual(len(self.search({"Query": "made-up", key: bad})), 1, (key, bad))
+
+    def test_a_search_member_named_like_a_pattern_is_a_pattern_and_never_a_place(self):
+        for key in ("Pattern", "Glob", "IncludePath", "includes", "FileGlob"):
+            self.assertEqual(self.search({"Query": "made-up", key: "*.py"}), [], key)
+            for bad in (self.work, "/etc/*", "../x", "a/b"):
+                self.assertEqual(len(self.search({"Query": "made-up", key: bad})), 1, (key, bad))
 
     def test_a_search_is_a_violation_when_the_work_folder_has_a_link_to_the_outside_even_with_a_path_inside(self):
         os.symlink(self.out, os.path.join(self.work, "out-link"))

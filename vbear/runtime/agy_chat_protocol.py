@@ -417,19 +417,40 @@ def _str_paths(items, key: str | None = None) -> list[str]:
 
 
 _PATH_KEY_WORDS = ("path", "dest", "target", "source", "src", "dst", "file", "folder", "dir")
+_PATTERN_KEY_WORDS = ("pattern", "glob", "include", "exclude")
+# What a file call's raw input may hold besides places (compared in lower case): anything else is a possible place.
+_NOT_A_PLACE = frozenset({"content", "contents", "text", "newtext", "oldtext", "description", "explanation", "reason", "summary",
+                          "comment", "title", "overwrite", "bypasssandbox"})
+_FILE_KINDS = ("edit", "delete", "move")
 
 
-def _raw_paths(raw) -> list[str]:
-    """Every path the raw input of a tool call names, without repeats: ``Path`` first, then the other members whose name says they
-    hold a place (path, destination, target, source, new path, file, folder... in any case; a member that holds a file's content does
-    not count) in the order of their names. A value is a string or a list of strings."""
+def _is_pattern_key(key) -> bool:
+    return isinstance(key, str) and any(w in key.casefold() for w in _PATTERN_KEY_WORDS)
+
+
+def _is_place_key(key, kind) -> bool:
+    """Whether a member of a raw input may name a place. A file call (edit, delete, move) fails closed: every member that is not on
+    the short list of ones that only describe or hold content is a possible place. For the other tools a member counts when its
+    name says it holds a place (path, destination, target, source, file, folder...), unless it is named like a pattern."""
+    if not isinstance(key, str):
+        return False
+    folded = key.casefold()
+    if key == "Path":
+        return True
+    if kind in _FILE_KINDS:
+        return folded not in _NOT_A_PLACE
+    return any(w in folded for w in _PATH_KEY_WORDS) and not any(w in folded for w in ("content", "text")) and not _is_pattern_key(key)
+
+
+def _raw_paths(raw, kind=None) -> list[str]:
+    """Every place the raw input of a tool call names, without repeats: ``Path`` first, then the other members that may hold a place
+    (see ``_is_place_key``) in the order of their names. A value is a string or a list of strings."""
     if not isinstance(raw, dict):
         return []
     out = []
     keys = sorted((k for k in raw if isinstance(k, str) and k != "Path"), key=str.casefold)
     for key in (["Path"] if "Path" in raw else []) + keys:
-        folded = key.casefold()
-        if key != "Path" and (any(w in folded for w in ("content", "text")) or not any(w in folded for w in _PATH_KEY_WORDS)):
+        if not _is_place_key(key, kind):
             continue
         value = raw[key]
         for item in value if isinstance(value, list) else [value]:
@@ -438,9 +459,24 @@ def _raw_paths(raw) -> list[str]:
     return out
 
 
-def _paths_of(raw, locations) -> list[str]:
+def _unreadable_member(raw, kind) -> bool:
+    """Whether a file call holds a member that is not on the short list and whose value is neither a string, a list of strings nor a
+    plain scalar: it might hold a place VBear cannot read, so the call is refused."""
+    if kind not in _FILE_KINDS:
+        return False
+    for key, value in raw.items():
+        if not isinstance(key, str):
+            return True
+        if key.casefold() in _NOT_A_PLACE:
+            continue
+        if isinstance(value, dict) or (isinstance(value, list) and not all(isinstance(i, str) for i in value)):
+            return True
+    return False
+
+
+def _paths_of(raw, locations, kind=None) -> list[str]:
     """Every path a tool call names, in the order of the raw input first and the locations after, without repeats."""
-    out = _raw_paths(raw)
+    out = _raw_paths(raw, kind)
     for path in _str_paths(locations, "path"):
         if path not in out:
             out.append(path)
@@ -804,7 +840,7 @@ class AgyTracker:
             rec["locations"] = data["locations"]
         if isinstance(data.get("content"), list):
             rec["content"] = data["content"]
-        rec["paths"] = _paths_of(rec["raw"], rec["locations"])
+        rec["paths"] = _paths_of(rec["raw"], rec["locations"], rec["kind"])
         return cid, rec, new
 
     def _summary(self, rec) -> str:
@@ -826,7 +862,7 @@ class AgyTracker:
         """What a yes was given to: everything the raw input says but a short list of fields that only describe (so a field added or
         changed after the yes is a different call), and the paths."""
         raw = {k: v for k, v in rec["raw"].items() if not (isinstance(k, str) and k.casefold() in _DESCRIBING)}
-        return (json.dumps(raw, sort_keys=True, default=repr), tuple(rec["paths"]))
+        return (rec["kind"], json.dumps(raw, sort_keys=True, default=repr), tuple(rec["paths"]))
 
     @staticmethod
     def _bypasses(raw) -> bool:
@@ -834,11 +870,17 @@ class AgyTracker:
 
     def _search_problem(self, rec) -> str | None:
         """Why a search that ran without a request is a violation, or None (the way a Claude chat lets a Glob or a Grep pass): every
-        string it holds is a bare name (no ``/``, ``..`` or ``~``), the work folder has no link to the outside, and what path it names
-        is inside the folders (a member that names a place is judged as a path, not as a pattern)."""
-        places = set(_raw_paths(rec["raw"]))
-        if not all(not cp._pattern_names_a_path(text) for text in _strings_of(rec["raw"]) if text not in places):
-            return "AGY 沒有問就搜尋，而搜尋的內容帶有路徑（/、.. 或 ~），可能讀到工作資料夾以外"
+        string that is not a place is a bare name (no ``/``, ``..`` or ``~``), every place it names (a member named like a path, and
+        the locations) is an absolute path with no ``~``, ``{``, ``*``, ``?`` or ``[`` and is inside the folders, and the work folder
+        has no link to the outside. A member named like a pattern is always a pattern, never a place."""
+        raw = rec["raw"]
+        for key, value in raw.items():
+            if not _is_place_key(key, "search"):
+                if not all(not cp._pattern_names_a_path(text) for text in _strings_of(value)):
+                    return "AGY 沒有問就搜尋，而搜尋的內容帶有路徑（/、.. 或 ~），可能讀到工作資料夾以外"
+        for place in rec["paths"]:
+            if not os.path.isabs(place) or any(c in place for c in "~{*?["):
+                return "AGY 沒有問就搜尋，而搜尋的地方不是一個明確的絕對路徑，可能在工作資料夾以外"
         if cp._outward_link(self.workdir):
             return "AGY 沒有問就搜尋，而工作資料夾裡有指向外面的連結"
         if rec["paths"] and judge_read(rec["paths"], self.workdir, self.shared).action != "allow":
@@ -941,7 +983,9 @@ class AgyTracker:
     def _decide_file(self, rec, raw: dict, extra: dict):
         diffs = extra["diffs"]
         raw_path = raw.get("Path")
-        paths = _raw_paths(raw)                         # every place the call names: a move names two
+        paths = _raw_paths(raw, rec["kind"])            # every place the call names: a move names two
+        if _unreadable_member(raw, rec["kind"]):
+            return "deny", "請求裡有 VBear 讀不懂的欄位，可能是檔案路徑，不能允許", extra
         located = _str_paths(rec["locations"], "path")
         if not (isinstance(raw_path, str) and raw_path):
             return "deny", "看不到這次要修改的檔案路徑", extra

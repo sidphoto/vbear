@@ -2201,14 +2201,15 @@ card"); what it already fixes, and what `tests/test_agy_chat_protocol.py` and ru
 - **A request to run outside the sandbox (`BypassSandbox`, any value but `false`) is refused by VBear with no card.** So is anything that
   reaches the network, and any kind of tool VBear has no card for.
 - **File tools are judged by VBear** (they are not in AGY's sandbox), every place the call names (a move names where it goes; a move with no
-  destination is refused): inside the work folder (or the shared folder the employee has), links
+  destination is refused; any member of the raw input that is not on a short list of describing or content ones is read as a possible place,
+  and one that cannot be read is refused): inside the work folder (or the shared folder the employee has), links
   followed, none of `.git`, `.agents`, `.agent`, `.gemini`, `.codex`, `.claude` or a `GEMINI.md` / `AGENTS.md` at any depth, no file with another
   hard link, and a card that fits; otherwise refused with no card. A read inside the folders is VBear's own yes; outside, a card that says the
   content goes to Google.
 - **The chat stops (a violation) when** a command, a file change, a network use or any other tool ran and VBear had not answered "allow once"
-  (or the call changed after the yes: any member of its raw input but a short list of describing ones, or `BypassSandbox`), a read ran outside
+  (or the call changed after the yes: any member of its raw input but a short list of describing ones, or `BypassSandbox`, or the kind of tool), a read ran outside
   the folders without a request, a search ran without a request unless every string in it is a bare name, the work folder has no link to the
-  outside and any path it names is inside the folders (the rule of a Claude chat's Glob and Grep), the mode is not `default`, a message is of another
+  outside and every place it names is an absolute path with no `~ { * ? [` inside the folders (a member named like a pattern is never a place; the rule of a Claude chat's Glob and Grep), the mode is not `default`, a message is of another
   session, or the model could not be set. The tracker reads nothing after that.
 - **Nothing about the person is kept**: not the plan name, the sign-in methods, the thoughts or the names of the commands and skills.
 
