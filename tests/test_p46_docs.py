@@ -237,9 +237,11 @@ class ChangelogTests(unittest.TestCase):
                        "「估計」", "Google plan", "no new kind of event", "`agy acp`", "`shared_folder.SUPPORTED_ENGINES`", "`tools/qa_p46.py`", "US$0.30", "7801", "7788", "7789"):
             self.assertIn(phrase, self.first, phrase)
 
-    def test_the_real_machine_result_is_there_and_the_qa_line_is_left_for_the_coordinator(self):
-        for phrase in ("passed its main part on the seventh run", "15 turns", "US$0.57", "3.1 seconds", "TODO (coordinator)", "`found: [\"path\"]`", "false positive"):
+    def test_the_real_machine_result_and_the_qa_run_are_there(self):
+        for phrase in ("passed its main part on the seventh run", "15 turns", "US$0.57", "3.1 seconds", "`found: [\"path\"]`", "false positive",
+                       "45 ok, 0 warn, 0 FAIL", "13 AGY turns"):
             self.assertIn(phrase, self.first, phrase)
+        self.assertNotIn("TODO", self.first, "the coordinator filled in the real-Mac line")
 
     def test_going_back_to_v0190_is_written_and_marks_what_is_not_known(self):
         back = self.first[self.first.index("**Going back to v0.19.0.**"):]
