@@ -25,6 +25,13 @@ allowed to do, or what several agents are up to. VBear puts that on one screen. 
 armor, and only then send it in. If you give a job to a team, VBear shows who is on it and stops at the gates
 where you decide.
 
+> **Since v0.22 the start-up page asks one question first and the home page never guesses.** 開始設定 opens with 「先選一家你要用的 AI」: three cards (Claude Code,
+> Codex, AGY; xAI Grok is a grey 「之後支援」 line), nothing preselected or recommended. Pressing 「選這個」 opens that AI's install and login row and a checklist, with one
+> button, 「試一下，並做聊天安全檢查」, that says the cost and asks you first. The home page draws its frame first (「載入中…」) and does not say nothing waits before it has read
+> anything. A chat that waits for your 「允許這一次」 is part of 等你決定 and of the number in the page title (and the Dock, in the app); in 設定 there is a Mac notification
+> switch, off by default, that asks the Mac only when you press it and carries only a number. Deleting a meeting or a proposal no longer lowers today's spending.
+> Details: [CHANGELOG.md](CHANGELOG.md), [ADR 0014](docs/adr/0014-pick-one-ai-first.md) and the 「Easy start 2 (v0.22)」 section of [docs/SECURITY-MODEL.md](docs/SECURITY-MODEL.md).
+
 > **Since v0.21 the screens use plain company words, and the menu has four items.** **首頁** (home): what waits for your decision (等你決定), your
 > employees (點頭像就聊), today, and a box 「想做什麼？跟 CEO 說」. **員工**: add, set up, chat with and delete employees, plus memory, the shared
 > folder, team templates and the office. **工作**: conversations, 分配工作, 定時工作, meetings, 常用做法 and 「AI 自己做了什麼」. **設定**. The engineering

@@ -2322,3 +2322,53 @@ steps before and after on a real Mac, and a person reads the result.
 Going back to v0.20.0: nothing is migrated, because v0.21.0 added no setting and no data. A limit typed as US$5 is read by v0.20.0 (the start-up page says
 「目前的每天上限是 US$5，不是這三個之一」); a routine made every day and on is an ordinary routine there. The menu is the 19 items again, and the addresses
 `#/employees` and `#/work` say 「找不到這個頁面」; `#/settings?open=limits` is the plain settings page.
+
+## Easy start 2 (v0.22)
+
+v0.22.0 (ADR 0014) changes what the start-up page and the home page ask and show, adds one local notification, and closes one hole in the day's
+spending (#86). **It does not move any start-up boundary**: none of `vbear/agent_launch.py`, `vbear/runtime/*`, `vbear/chat_service.py`, the `*_verify.py` files,
+`vbear/chat_check.py`, `vbear/cli_versions.py` or `vbear/admin_policy.py` changed. Python changed only in `chief.py`, `first_ceo.py`, `meetings.py`,
+`memory_suggest.py`, `skillbook_suggest.py`, `staffing.py` (each a line or a few about the spending kept), `server.py` (one line that reads the `tool`
+query of `GET /api/first-ceo` and refuses a value it does not know with a 400), and the new `spend_keep.py`. **No route (API path), no key of `config.json` and no kind of
+chat event was added.** The only new keys of the browser's `localStorage` are `vbear-setup-pick` and `vbear-notify`. Guard rule 15b still holds (its list of paths gained
+`/api/first-ceo?tool=` and nothing else); rule 16 (16a to 16g) was added and rules 1 to 15 were not loosened.
+
+- **The picker asks and decides nothing.** The start-up page shows three cards in a fixed order, preselects nothing, marks nothing as recommended and does not reorder
+  by state (guard rule 16b). The pick is stored only in the browser, only when 「選這個」 is pressed (`vbear-setup-pick`); 「換一家」 writes and erases nothing. The server never
+  stores it and uses it for one thing: the create-CEO page sends it as `?tool=` so that the first CEO is planned on that tool. If that tool is not ready the answer is
+  `can_create: false` with a reason; **the plan never swaps in another tool** (`first_ceo.plan(..., wanted=None)` keeps the old order only when no tool was picked). A
+  value that is not a known tool is a 400. Logging in is still the person's own press on a row and is finished in the AI tool's own page; VBear reads and stores no login code or key.
+- **The background chat safety check still asks first and still stops at a policy.** The one button 「試一下，並做聊天安全檢查」 opens a confirm area that
+  says what each part does and what it costs, with the vendor's full cost text (`CHAT_VERIFY_COST_CLAUDE`, `CHAT_VERIFY_COST_CODEX`, `CHAT_AGY_VERIFY_COST`). **Only 「確認，開始」 sends**
+  (`POST /api/setup/tools/<id>/try {"confirmed": true}`, then, if this version has not been verified, `POST /api/chat-support/verify`); 「取消」 sends nothing (guard rule 16a). The verification
+  itself, its records and its once-per-version, once-per-Mac rule were not touched: a pass is **not carried to another version and is not kept in the browser**. A tool that an administrator
+  setting blocks gets no button, so nothing is run and nothing is spent. Running in the background is what the server's thread already did; the page only learned to wait for it and to open the chat
+  when it passes (the opening words are put in the box and **nothing is sent**).
+- **Home says what it has not read yet.** Until a block's data arrives it says 載入中, and it never says 「沒有要你決定的事」 or shows a number first (16c). A read that failed
+  or is incomplete shows no number in the title or on the Dock and posts no notification (a missing number is safer than a wrong one). The home page re-reads its other sources every
+  5 seconds and the chat list at most every 30 seconds (16d).
+- **The waiting count is only a number.** The page hands the Mac app `{count, notify}` through `window.webkit.messageHandlers.vbearWaiting` (and `{ask: true}` when the person presses the notification switch);
+  the app answers with `granted`, `denied` or `unavailable`. No text of a chat, a name or a path is in it (16d). The title is `VBear` or `(N) VBear`.
+- **The notification is local, count-only and off by default.** The switch in settings is off until pressed; **only that press asks the Mac for permission** (`requestAuthorization` once, alert only; nothing
+  at start-up). The content is fixed, 「VBear」 and 「有 N 件事等你決定」; it is posted only when a complete read counted more than the last one, the switch is on and the app is not in front, under one fixed identifier.
+  The Swift code has no `URLSession`, `URLRequest` or `Process` and reads nothing from the page but the two numbers and the switch (16e, checked on the source by `tests/test_p48_notify_static.py`
+  and `macos/test_waiting_bridge.sh`). In a browser the browser's own `Notification` is used the same way. A refused or unavailable permission leaves the switch off. Nothing is sent to any server of anyone.
+- **Deleting no longer lowers the day's spending (#86).** Before a meeting, a staffing, chief-of-staff, memory-suggestion or skill-suggestion record is deleted, what each of its done turns spent
+  (`started_at`, `ended_at`, `cost_usd`) is written to `<state>/spend-keep/<kind>-<id>.json` (folder 0700, files 0600, atomic writes) and kept for two days. The day's spending adds those files, so deleting and
+  then spending again can no longer take a day under its limit. A file that cannot be read or does not parse makes **today's spending unknown, which stops further spending** (fail closed). A queued or running record
+  cannot be deleted (409 `running`). A deleted chat already kept its cost in `chat-spend/`, which did not change. Hidden dot files and the module's own temporary files are ignored, and temporary files older than a day are pruned. If the delete fails after the keep was written, the cost may be counted
+  twice, which errs on the safe side (guard rule 16f). This only ever makes the day's total larger or unknown, never smaller.
+- **Opening choices and the plan hint spend nothing.** An opening choice only puts words in the box (0 requests); the 「計畫整理好了嗎？」 hint opens the same preview as the 「⋯」 item, and nothing that costs money is sent
+  before the person confirms in that dialog (16g). The create-CEO page folds its explanations into 「詳細資訊」 but keeps 「每件事先問我」 and, for AGY, the sentence that the talk goes to Google in view.
+
+Residual risks: (1) `GET /api/chats` makes the console run the three AI tools' `--version` on every call without a cache; the start-up page, the home page and the chat pages read it, so a person with a slow tool sees
+the numbers up to 30 seconds late and the console does a little more work (a server-side cache would be in `cli_versions.py`, a boundary file, and was not changed). (2) The stored pick is only a preference, but it
+is read by the create-CEO page after 「換一家」, so a person who changed their mind sees the page on the earlier tool until they press 「選這個」 again. (3) The notification switch does not notice a permission
+revoked in System Settings; the app checks the authorization before it posts, so nothing is posted. (4) An unsigned or ad-hoc signed app may not be given the permission (the page says so). (5) A stray unknown file in
+`spend-keep/` makes the day unknown and stops spending until it is removed; two versions writing at once are not covered; if the delete fails after the keep, the cost may be counted twice. (6) The skill
+suggestions' spending is still not inside the chat side's daily cap (as before this version). (7) `request_queue_size` was not changed: more than five simultaneous connections can be reset on the default queue.
+(8) Whether the notification really appears, the Dock number and the permission window were not tried on a real Mac here; the person tries them after upgrading.
+
+Going back to v0.21.0: nothing is migrated, because v0.22.0 added no setting and no data a v0.21.0 needs. `spend-keep/` is not read by v0.21.0 (a meeting or proposal deleted on the same day is not counted again, as before; from
+the next day on there is no difference); `vbear-setup-pick` and `vbear-notify` are not read; the start-up page is one row per tool again and the try and the chat check are two buttons; the records of the chat safety check
+are of the same format, so a version that passed still passes; the Mac's notification permission stays but the v0.21.0 app posts none and has no Dock number.

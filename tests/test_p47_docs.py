@@ -136,7 +136,8 @@ class ChangelogTests(unittest.TestCase):
         cls.first = flat(section(cls.text, "## v0.21.0", "## v0.20.0"))
 
     def test_the_release_heading_is_first_and_not_unreleased(self):
-        self.assertTrue(self.text.startswith("# Changelog\n\n## v0.21.0 — easier to pick up (好上手 1)\n"), self.text[:80])
+        self.assertIn("\n## v0.21.0 — easier to pick up (好上手 1)\n", self.text)                  # (P48-7 put v0.22.0 in front of it)
+        self.assertRegex(self.text, r"\A# Changelog\n\n## v0\.\d+\.\d+ — ")
         self.assertLess(self.text.index("## v0.21.0"), self.text.index("## v0.20.0"))
         self.assertNotIn("Unreleased", self.first)
 
@@ -184,7 +185,7 @@ class SecurityModelTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.model = flat(raw("docs", "SECURITY-MODEL.md"))
-        cls.section = section(cls.model, "## Plain navigation (v0.21)")
+        cls.section = section(cls.model, "## Plain navigation (v0.21)", "## Easy start 2 (v0.22)")   # (P48-7 added a section after it)
         cls.app = raw("web", "app.js")
 
     def test_the_section_is_the_last_one_and_says_no_boundary_moved(self):
@@ -251,7 +252,7 @@ class ReadmeAndReferenceTests(unittest.TestCase):
 
     def test_the_architecture_has_the_section_and_names_things_the_page_has(self):
         self.assertIn("## Plain navigation — `web/index.html`, `web/app.js` (v0.21)", self.arch)
-        part = section(self.arch, "## Plain navigation — `web/index.html`, `web/app.js` (v0.21)", "## Front end — `web/`")
+        part = section(self.arch, "## Plain navigation — `web/index.html`, `web/app.js` (v0.21)", "## Easy start 2 — `web/app.js`, `macos/VBear/main.swift`, `vbear/spend_keep.py`, `vbear/first_ceo.py` (v0.22)")
         for name in ("syncAdvancedNav", "NAV_PARENT", "viewHome", "homeWaiting", "homeTeam", "homeToday", "homeAsk", "homeFirstSteps", "viewEmployees", "viewWork",
                      "openChatWith", "plainWords", "plainNotice", "limitReachedNotice", "dailyLimitEditor", "chatPrepState", "navPageName", "wireNavMenu"):
             self.assertIn(name, part, name)
