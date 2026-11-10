@@ -1458,7 +1458,7 @@ No Codex version is chat-verified out of the box: no process starts until one pa
   day's ledger. A pass writes `codex-chat-verified.json` and a 0600 report that `cli_versions` reads back every time.
 - **The page.** A card of a Codex chat shows the command whole, its folder and what Codex says it does, or each file's
   path, what is done to it and its diff, as text in `<pre>` (never as markup). A command card says, above its buttons,
-  「允許後，這個指令可能在沙盒外執行：能改到工作資料夾以外的檔案，也能連網。只允許你看得懂、確定沒問題的指令。」 (a
+  「允許後，這個指令可能在保護範圍（沙盒）外執行：能改到工作資料夾以外的檔案，也能連網。只允許你看得懂、確定沒問題的指令。」 (a
   file card and a Claude card do not). Its buttons are 「允許這一次」, 「拒絕」 and
   「改內容再問」, whose note says VBear declines the original and Codex asks again, so the person must allow once more;
   nothing on the page says the change was applied. There is no "allow from now on". A reply's cost reads 「估計 US$x」 with
@@ -1539,7 +1539,7 @@ own** after one confirmation. What it never does is fixed by the structure of th
   `POST /api/settings/autonomy` from the settings page (with `X-VBear`); a proposal or a dispatch has no way to write them.
 - **Sending goes through the chat service and nothing else.** `vbear/dispatch_runner.py` opens a new chat for each step and
   sends with `ChatService.send_for_dispatch`; the message is marked in the chat record with `origin = {dispatch, step}`
-  and the chat page says 「VBear 依派工送出」. The runner has no way to answer an allow card: **every command and every file
+  and the chat page says 「VBear 依分配工作送出」. The runner has no way to answer an allow card: **every command and every file
   change the employee wants is still asked of the person, as in any chat**, and the employee's work folder and the
   limits of the chat are the card's own. A step is sent only when the day's lamp is green or yellow and the one before it
   ended normally; the runner sends one step at a time, writes the intent before the call and the result after it, and after
@@ -2280,3 +2280,45 @@ believes of what comes back. The process that uses it is described in "Chats wit
 
 What is still only synthetic: the fixtures are built from the investigation's facts and ACP's public formats, since its raw messages were not
 kept; the first six real runs of the check each found something the fixtures could not have shown (section 12 of `docs/evidence/agy-1.5.3-chat.md`), the seventh passed the main part (section 11), and the fixtures are still synthetic.
+
+## Plain navigation (v0.21)
+
+v0.21.0 (ADR 0013) changes what the screen says and where it puts things. **It does not move any boundary**: Python changed only in the Chinese
+wording of `vbear/autonomy.py` and `vbear/first_ceo.py` (the three sentences of `NEVER` mean what they meant), and nothing was added to the server:
+no route, no key of `config.json`, no data file, no kind of chat event, and no key of the browser's `localStorage`. Guard rule 15b holds this
+(the `/api/` paths the page uses are a subset of v0.20.0's, the routes of `vbear/server.py` are v0.20.0's, the kinds of a chat's record are v0.20.0's).
+
+- **Advanced mode is a display and not a permission.** The switch (`advanced_mode`, off by default, there since v0.20.0) only decides whether the menu lists
+  the engineering pages (指令視窗, 工作台, 流程, 專案資料夾, AI 工具的外掛清單, 員工詳細資料) and whether paths and diagnostics are shown. No Python reads
+  it to decide a behaviour (guard rule 15a), switching it changes none of the 自己動手 ticks, the spending limits, the chat limits or the launch mode of an
+  employee, and an employee still asks about every command and every file change. The advanced pages stay open by their address when it is off (a
+  bookmark keeps working; the page says it is an advanced page): hiding a page from the menu is not a protection and is not described as one.
+- **The home page's box sends one message, by the person's press.** 「想做什麼？跟 CEO 說」 sends with 送出, the same request (`POST /api/chats/<id>/messages`)
+  as the chat page's 送出, under the same per-turn and daily limits. Drawing the page, typing and switching to it send nothing (guard rule 15c). When the CEO is
+  answering, a card waits, or the chat cannot start, nothing is sent: the words are put in the chat's box.
+- **The spending limits are folded away, not weaker.** The menu has no spending page and the home page shows no amount; the day's limit and the day's use
+  are in the settings section 「用量與上限」, which is closed until opened (`#/settings?open=limits` opens it). Every check of the server is as it was: the
+  per-turn limit, the daily limit, the routines' own limit, and the red-lamp stop. When a limit stops a message, a routine, a group or a dispatch, the
+  screen says in plain words that nothing was sent or spent, that the count starts again at 0:00, and gives a button to the settings. **The AI still cannot
+  raise a limit** (ADR 0003): the limit is written only by the person's 儲存 (`POST /api/setup/daily-limit`, 0.01 to 50) and the settings page sends nothing when
+  it loads (guard rule 15d). The confirmation boxes still say the most a step may cost.
+- **A routine is on by default but starts nothing by itself.** A new routine is every day and on. With 自己動手 item 3 off it only reminds the person at the
+  time; with item 3 on, saving it as on first asks, in the same words as the 開啟 button (15d). A routine made by a team template is still made off.
+- **The permission cards are in plain words and keep every warning.** The names of the tools move into a closed 「技術細節」 at the foot of the card; the
+  three buttons (允許這一次, 改內容再允許, 拒絕) are the same, there is no "allow from now on"; the warning sentences are the same sentences with 沙盒 written
+  保護範圍（沙盒） the first time. The 「⋯」 menu of the chat page opens the same preview and confirmation boxes as the buttons it replaced (15e).
+- **Plain words for errors are made on the screen, and the original is kept.** `plainWords()` knows a short list of sentences of the server (the background
+  program is not running, the AI tool's version could not be checked, a thing that needs the person's look, a limit that stopped it) and says them
+  with a next step; the original sentence is kept whole behind 「技術細節」, and a sentence it does not know is shown as it came, with no guess at a cause.
+  The server's sentences, including those in the start-up boundary, are not changed.
+
+Residual risks, all of them display: (1) the folded 「用量與上限」 is one more press away than a number on the home page, so a person may notice a high
+day later than before; a limit that stops something is said at the place where it happens. (2) The editor accepts any amount from US$0.01 to US$50 (the
+server has always accepted it; v0.20.0 offered only 1, 3 and 10), so a person can type a bigger limit more easily; it is the person's own decision and
+the AI cannot make it. (3) The advanced pages keep their old words inside (任務卡, 出發, 終端機): only the menu names and the page titles were changed
+in this version. (4) Whether the plain sentence is right for a person is not tested by a program: the walk in `tools/qa_p47.py` counts steps and stuck
+steps before and after on a real Mac, and a person reads the result.
+
+Going back to v0.20.0: nothing is migrated, because v0.21.0 added no setting and no data. A limit typed as US$5 is read by v0.20.0 (the start-up page says
+「目前的每天上限是 US$5，不是這三個之一」); a routine made every day and on is an ordinary routine there. The menu is the 19 items again, and the addresses
+`#/employees` and `#/work` say 「找不到這個頁面」; `#/settings?open=limits` is the plain settings page.

@@ -117,9 +117,10 @@ class CodexChatDocsTests(unittest.TestCase):
         self.assertIn("project_root_markers", self.changelog)
 
     def test_an_allowed_command_may_run_outside_the_sandbox_is_said_in_every_place(self):
-        warning = "允許後，這個指令可能在沙盒外執行：能改到工作資料夾以外的檔案，也能連網。只允許你看得懂、確定沒問題的指令。"
-        # (P47-4) the page now says 保護範圍（沙盒）; the sentence is otherwise the same. The documents still quote the old noun until P47-6.
-        self.assertIn(warning.replace("沙盒外", "保護範圍（沙盒）外"), self.app)
+        # (P47) the page says 保護範圍（沙盒）; the security model quotes the same sentence word for word. (ADR 0005 is the record of the 2026-11-07
+        # decision and keeps the words of its day, below.)
+        warning = "允許後，這個指令可能在保護範圍（沙盒）外執行：能改到工作資料夾以外的檔案，也能連網。只允許你看得懂、確定沒問題的指令。"
+        self.assertIn(warning, self.app)
         for phrase in ("允許後可能在沙盒外執行", "三個選項", "照現在發布", "`never`", "`:root`", "等 Codex 修好", "apply_patch", "連網",
                        "寫整台電腦", "不再問", "`require_escalated`"):
             self.assertIn(phrase, self.adr, phrase)
@@ -134,9 +135,9 @@ class CodexChatDocsTests(unittest.TestCase):
         for name, text in (("changelog", self.changelog), ("readme", self.en)):
             for phrase in ("outside the sandbox", "write anywhere", "reach the network"):
                 self.assertIn(phrase, text, (name, phrase))
-        for phrase in ("沙盒外", "連網", "整台電腦"):
+        for phrase in ("保護範圍（沙盒）外", "連網", "整台電腦"):
             self.assertIn(phrase, self.zh, phrase)
-        self.assertIn("沙盒外", self.ref)
+        self.assertIn("保護範圍（沙盒）外", self.ref)
         self.assertIn("is only noted", self.changelog)
 
     def test_the_old_claim_that_the_sandbox_stops_what_the_person_allowed_is_gone(self):
