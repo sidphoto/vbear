@@ -205,6 +205,18 @@ const ENGLISH = /[A-Za-z]{4,}/;
     assert.strictEqual(evalIn('plainWords("只有沒有程序在執行、也沒有等待人工處理（manual_review）的流程才能刪除。").text'), "只有沒有程序在執行、也沒有要你檢查的流程才能刪除。");
   });
 
+  await test("fix47 plainWords: 'not checked for chat' and 'administrator's policy' (the sentences a refused send carries) are said in plain words, the original kept whole; neither tells a person with a policy to verify", () => {
+    const unchecked = "這個版本的聊天模式還沒有在這台 Mac 上通過驗證，不會啟動。（Claude Code 2.1.318 的聊天模式還沒有通過驗證。處理方式：先執行聊天模式的驗證（會花一點額度）。）";
+    const w = evalIn(`plainWords(${JSON.stringify(unchecked)})`);
+    assert.strictEqual(w.known, true);
+    assert.ok(w.text.includes("安全檢查") && w.detail === unchecked && !/Mac|runtime/.test(w.text + w.next));
+    const policy = "這台 Mac 上有管理員政策或系統設定，可能蓋過 VBear 的設定，所以不啟動聊天。";
+    const p = evalIn(`plainWords(${JSON.stringify(policy)})`);
+    assert.strictEqual(p.known, true);
+    assert.ok(p.text.includes("管理員設定") && p.text.includes("不能用它聊天") && !p.text.includes("驗證") && !p.next.includes("驗證"), p.text + p.next);
+    assert.strictEqual(p.detail, policy);
+  });
+
   // ---- plainNotice / notice / toast -------------------------------------------------------------------------------------
   await test("plainNotice: the plain words in the box, the original only behind 「技術細節」", () => {
     for (const raw of [...RUNTIME_DOWN, "Agent CLI 版本檢查回傳失敗", "審查需要人工處理（manual_review）"]) {

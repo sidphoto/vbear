@@ -72,7 +72,7 @@ function setPage(over = {}) {
       if (page.chatError) return jsonResponse({ ok: false, error: page.chatError }, false, 409);
       return jsonResponse({ ok: true, chat: { id: CHAT_ID, profile_id: body.profile_id, created_at: 1 } }, true, 201);
     }
-    if (p === "/api/chats") return jsonResponse({ ok: true, chats: page.chats, more: 0, cards: chatCards(), support: support(), limits: { per_turn_usd: "0.5", daily_usd: "3" },
+    if (p === "/api/chats") return jsonResponse({ ok: true, chats: page.chats, more: 0, cards: chatCards(), support: { ...support(), ...(page.supportExtra || {}) }, limits: { per_turn_usd: "0.5", daily_usd: "3" },
       ledger: { spent_usd: "0", daily_usd: "3", lamp: "green", includes: [] }, ledger_error: null, problems: [], scratch: "" });
     if (p === `/api/chats/${CHAT_ID}` && method === "GET") return jsonResponse(detail());
     if (p === `/api/chats/${CHAT_ID}/stream`) return { ok: false, status: 503, headers: { get: () => "" }, json: async () => ({}) };
@@ -175,9 +175,10 @@ test("the card can be made on the ready Codex when Claude Code is not ready, and
 
 test("AGY: the card can be made on a ready AGY (the last choice), and the page says the talk goes to Google and the AGY skills are used", async () => {
   setPage({ plan: plan({ tool: "agy", tool_name: "AGY", chat_ready: false,
-    chat_note: "AGY 聊天要先通過驗證：到聊天頁按「驗證聊天」（用你的 Google 方案）。" }) });
+    chat_note: "AGY 聊天要先通過驗證：到聊天頁按「驗證聊天」（用你的 Google 方案）。" }), supportExtra: { agy: { state: "unverified" } } });
   const main = await open("#/ceo");
-  assert(/AGY/.test(text(ceo(main, "tool"))) && /已就緒/.test(text(ceo(main, "tool"))));
+  // the tool is there, but its chat is not checked yet: the page does not say 「已就緒」 (fix47), it says the check comes first
+  assert(/AGY/.test(text(ceo(main, "tool"))) && /先做一次安全檢查/.test(text(ceo(main, "tool"))) && !/已就緒/.test(text(ceo(main, "tool"))));
   const note = text(ceo(main, "agy-note"));
   assert(note.includes("送到 Google") && note.includes("AGY 技能") && note.includes("通過驗證"), note);
   assert(/驗證聊天/.test(text(ceo(main, "chat-note"))));

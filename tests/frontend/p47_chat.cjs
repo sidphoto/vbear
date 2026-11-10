@@ -573,7 +573,7 @@ test("CEO: the safety check asks first (it uses the person's own login, under US
   await settle(80);
   assert.deepStrictEqual(calls("POST", "/api/chat-support/verify").map((c) => c.body), [{ version: "2.1.318" }]);
   assert(q(h.dom().mainEl, "prep-running"), "it says the check is running");
-  assert.strictEqual(calls("POST", "/api/chats").length, 1, "no conversation was opened while it runs (only the one that failed before)");
+  assert.strictEqual(calls("POST", "/api/chats").length, 0, "no conversation was opened while it runs (and none was tried before: the page knew the tool could not chat yet)");
   page.list = prepList({});
   page.created = { ok: true, chat: { id: CID, profile_id: NEW_ID, created_at: 1 } };
   page.createStatus = null;
@@ -608,6 +608,93 @@ test("the page for a chat that cannot start yet: each reason has one action in p
   const main = await open("#/chat?profile=" + NEW_ID);
   assert.strictEqual(text(q(main, "prep-action")), "開始聊天");
   assert.strictEqual(calls("POST", "/api/chats").length, 0, "even when ready, the page does not open a conversation by itself");
+});
+
+// ---- fix47: a chat that cannot start is not opened, and the page says the real reason ---------------------------------
+
+const readyList = () => listing({ cards: [newCard()], support: support({ codex: codexSupport(), agy: agySupport() }) });
+async function createCeo() {
+  const main = await open("#/ceo");
+  main.find((n) => n.getAttribute && n.getAttribute("data-ceo") === "create").click();
+  await settle(80);
+}
+
+test("fix47 CEO: a tool held back by an administrator's policy does not open a conversation: no chat is made, the page for this employee says the real reason in one line and offers one way on", async () => {
+  setPage({ extra: ceoExtra(), list: prepList({}, { state: "policy", message: "管理員政策" }) });
+  await createCeo();
+  assert.strictEqual(calls("POST", "/api/chats").length, 0, "no conversation was made");
+  assert.strictEqual(global.location.hash, "#/chat?profile=" + NEW_ID);
+  const main = await open(global.location.hash);
+  const reason = text(q(main, "prep-reason"));
+  assert(reason.includes("管理員設定") && reason.includes("不能用它聊天"), reason);
+  assert(!reason.includes("驗證"), "it does not tell the person to verify what verifying cannot fix: " + reason);
+  const actions = qa(main, "prep-action");
+  assert.strictEqual(actions.length, 1);
+  assert.strictEqual(actions[0].getAttribute("href"), "#/setup");
+  assert.strictEqual(calls("POST", "/messages").length, 0);
+  // the opening waited under the employee's id: once the tool can chat, the page opens the conversation with it in the box
+  page.list = readyList(); page.created = { ok: true, chat: { id: CID, profile_id: NEW_ID, created_at: 1 } };
+  page.detail = detail({ card: newCard(), chat: { id: CID, profile_id: NEW_ID, created_at: 1, engine: "claude-chat" } });
+  const again = await open(global.location.hash);
+  await press("prep-action", again);
+  assert.strictEqual(global.location.hash, "#/chat/" + CID);
+  assert.strictEqual(q(await open(global.location.hash), "input").value, OPENING, "the opening waited under the employee's id");
+  assert.strictEqual(calls("POST", "/messages").length, 0);
+});
+
+test("fix47 CEO: a tool not checked for chat yet goes to the page too, with no conversation made; one that can chat opens the conversation as before", async () => {
+  setPage({ extra: ceoExtra(), list: prepList({}, { state: "unverified", message: "還沒有通過驗證" }) });
+  await createCeo();
+  assert.strictEqual(calls("POST", "/api/chats").length, 0);
+  assert.strictEqual(global.location.hash, "#/chat?profile=" + NEW_ID);
+  setPage({ extra: ceoExtra(), list: readyList(), created: { ok: true, chat: { id: CID, profile_id: NEW_ID, created_at: 1 } },
+    detail: detail({ card: newCard(), chat: { id: CID, profile_id: NEW_ID, created_at: 1, engine: "claude-chat" } }) });
+  await createCeo();
+  assert.strictEqual(calls("POST", "/api/chats").length, 1);
+  assert.strictEqual(global.location.hash, "#/chat/" + CID);
+});
+
+test("fix47 CEO: the page says 「已就緒」 only when a chat can start with the tool, and says what is true otherwise", async () => {
+  const cases = [[{ state: "verified" }, "已就緒"], [{ state: "policy" }, "管理員設定"], [{ state: "unverified" }, "安全檢查"]];
+  for (const [sup, word] of cases) {
+    setPage({ extra: ceoExtra(), list: prepList({}, sup) });
+    const main = await open("#/ceo");
+    const line = text(main.find((n) => n.getAttribute && n.getAttribute("data-ceo") === "tool"));
+    assert(line.includes(word), `${sup.state}: ${line}`);
+    assert.strictEqual(line.includes("已就緒"), sup.state === "verified", `${sup.state}: ${line}`);
+  }
+});
+
+test("fix47 chat: a send the server refuses as 'not checked for chat' says the real reason in plain words, leads to the page that prepares it, keeps the server's sentence behind 「技術細節」 and the words in the box", async () => {
+  const SERVER = "這個版本的聊天模式還沒有在這台 Mac 上通過驗證，不會啟動。（Claude Code 2.1.318 的聊天模式還沒有通過驗證。處理方式：先執行聊天模式的驗證（會花一點額度）。）";
+  setPage({ detail: detail(), sendStatus: 409, sendBody: { ok: false, error: SERVER, code: "unverified" },
+    list: listing({ support: support({ state: "policy", message: "管理員政策", codex: codexSupport(), agy: agySupport() }) }) });
+  const main = await open("#/chat/" + CID);
+  q(main, "input").value = "請幫我整理";
+  await press("send", main);
+  const n = q(main, "not-ready");
+  assert(n, "a notice");
+  const outside = text(n).split(SERVER).join("");
+  assert(outside.includes("這台電腦的 Claude Code 有管理員設定，VBear 不能用它聊天"), outside);
+  assert(!/先執行聊天模式的驗證|還沒有在這台 Mac/.test(outside.split("技術細節").join("")), "the server's sentence is only in the fold");
+  assert(text(n).includes(SERVER), "kept whole");
+  assert(n.find((x) => x.tag === "details"), "behind the fold");
+  assert.strictEqual(q(n, "prep-go").getAttribute("href"), "#/chat?profile=emp-1");
+  assert.strictEqual(q(main, "input").value, "請幫我整理");
+  // the same sentence for a tool that only needs the check: the action is the page, which has the one button
+  page.list = listing({ support: support({ state: "unverified", message: "x", codex: codexSupport(), agy: agySupport() }) });
+  await press("send", h.dom().mainEl);
+  assert(text(q(h.dom().mainEl, "not-ready")).includes("安全檢查") || text(q(h.dom().mainEl, "not-ready")).includes("驗證"), text(q(h.dom().mainEl, "not-ready")));
+});
+
+test("fix47 chat: the stop button is not shown when no turn is running, and a hidden button is really hidden", async () => {
+  setPage({ detail: detail() });
+  let main = await open("#/chat/" + CID);
+  assert.strictEqual(q(main, "stop").hidden, true, "no turn: hidden");
+  setPage({ detail: detail({ live: live({ state: "working", turn: 3 }) }) });
+  main = await open("#/chat/" + CID);
+  assert.strictEqual(q(main, "stop").hidden, false, "a turn is running: shown");
+  assert(/\.btn\[hidden\]\s*\{\s*display:\s*none/.test(CSS), "the .btn rule (inline-flex) would otherwise keep a hidden button on screen");
 });
 
 test("15e: a day at its limit keeps the conversation from starting, says so in plain words, and shows the way to the settings", async () => {

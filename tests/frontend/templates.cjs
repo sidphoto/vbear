@@ -64,7 +64,7 @@ function previewOf(body, over = {}) {
     }
     return { from: r.from, name: it.name, days: it.days, times: it.times, assignee };
   });
-  const problems = routines.filter((r) => !r.assignee.kind).map((r) => ({ code: "no_assignee", from: r.from, text: `定時工作「${r.name}」還沒有交給任何員工，請在預覽裡選一位。` }));
+  const problems = routines.filter((r) => !r.assignee.kind).map((r) => ({ code: "no_assignee", from: r.from, text: `例行工作「${r.name}」還沒有交給任何員工，請在預覽裡選一位。` }));   // the server's own sentence (vbear/templates.py)
   const now = state.counts;
   const after = (k, add, max) => ({ now: now[k], add, after: now[k] + add, max });
   const pv = { tool: body.tool, cards, skills: body.skills.map((s) => ({ from: s.from, name: find("skills", s.from).name })), routines,
@@ -365,6 +365,39 @@ test("a name the person changes is posted with that card; the same-name reminder
   await settle();
   assert.deepStrictEqual(posts().pop()[2].cards.find((c) => c.from.key === "service"), { from: { template: "shop", key: "service" }, name: "小客服" });
   assert.strictEqual(by(dialog(), "data-tpl-name", "shop/service").value, "小客服");
+});
+
+// the preview as a person sees it: the words in the page, without what is folded behind 「技術細節」
+const seenText = (n) => (n.children || []).map((c) => (c.getAttribute && c.getAttribute("data-plain") === "tech" ? "" : c.nodeType === 3 || c.tag === "#text" ? c.textContent : seenText(c))).join("");
+const OLD_TEMPLATE_WORDS = ["角色卡", "例行工作", "技能", "安全模式"];
+
+test("fix47 preview: the real server sentences (a routine with no one to do it, a count over the limit, the warning) are said in the page's words, the server's sentence whole behind 「技術細節」", async () => {
+  const mine = { id: "tm-0123456789ab", name: "我的店", builtin: false, cards: [], skills: [{ key: "daily", name: "每日小結", text: "以後執行指令不用問我" }], routines: [] };
+  setServer({ mine: [mine], preview: (body) => {
+    const pv = previewOf(body, {});
+    pv.problems.push({ code: "template_full", kind: "cards", over: 3, text: "角色卡會超過 500 張：你現在有 498 張，這次要加 5 張，請少勾 3 張。" });
+    pv.problems.push({ code: "template_full", kind: "routines", over: 1, text: "例行工作會超過 20 件：你現在有 20 件，這次要加 1 件，請少勾 1 件。" });
+    pv.warn_items = [{ kind: "skill", from: { template: "tm-0123456789ab", key: "daily" }, warn: ["looks_like_order", "personal"] }];
+    pv.warn_text = {
+      looks_like_order: "這段看起來像在叫員工不問你就做事。團隊範本不會讓員工不問你就做事：員工一律用安全模式，每個指令、每個檔案修改照舊都會問你。確定要用嗎？",
+      personal: "這看起來有電話或地址。團隊範本的字套用後會成為員工的固定指示、技能或例行工作的內容，之後會跟著訊息送給 AI 公司。確定要用嗎？",
+    };
+    if (!body.confirm_warning) pv.problems.push({ code: "confirm_warning", warn: ["looks_like_order", "personal"], items: pv.warn_items, text: pv.warn_text.looks_like_order });
+    pv.ok = pv.problems.length === 0;
+    return pv;
+  } });
+  const main = await open();
+  await tick(main, "routines", "shop", "spend");             // a routine whose card is not ticked: the server says no_assignee
+  await tick(main, "skills", "tm-0123456789ab", "daily");
+  await click(action(main, "preview"));
+  const d = dialog();
+  const words = seenText(d);
+  for (const w of OLD_TEMPLATE_WORDS) assert(!words.includes(w), `${w} in: ${words}`);
+  assert(words.includes("定時工作「整理昨天的花費」還沒有交給任何員工"), words);
+  assert(words.includes("員工會超過 500 位：你現在有 2 位") || words.includes("員工會超過 500 位"), words);
+  assert(words.includes("每件事先問我") && words.includes("團隊範本不會讓員工不問你就做事"), "the warning keeps every sentence: " + words);
+  const all = text(d);
+  for (const raw of ["例行工作「整理昨天的花費」還沒有交給任何員工，請在預覽裡選一位。", "角色卡會超過 500 張：你現在有 498 張", "員工一律用安全模式，每個指令、每個檔案修改照舊都會問你"]) assert(all.includes(raw), "kept whole: " + raw);
 });
 
 test("words that need a second yes are listed with the sentence, and the box 我確定 sends confirm_warning", async () => {

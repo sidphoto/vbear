@@ -5,15 +5,28 @@ there and each carries its number, and nothing in what P47-6 added names a perso
 Seams: the text of the documents (whitespace flattened), the page's source for the words it uses, and the files of the guard rule."""
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# What must never be in the repository, spelled in pieces so that this file does not hold it either.
-PERSONAL = ["identi" + "fy-me", "grill" + "-me", "team" + "work", "minimax" + "-global", "vs." + "8kOc", "AI " + "Pro",
-            "permissions " + "test", "MiniMax-" + "M3", "side" + "chang"]
+# No list of private names is kept in this repository: it is public, and a list of words that must not appear is itself a list of them (even spelled
+# in pieces). The checks are generic patterns (an email-like string that is not an example address, a path in a home folder). A person who wants
+# to look for private words too puts them, one a line, in a file of their own outside git and names it in VBEAR_DOCS_DENYLIST when they run the tests.
+def _local_denylist() -> list[str]:
+    path = os.environ.get("VBEAR_DOCS_DENYLIST", "")
+    if not path:
+        return []
+    try:
+        return [line.strip() for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
+    except OSError:
+        return []
+
+
+PERSONAL = _local_denylist()
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
 HOME_PATH = re.compile(r"/(?:Users|home)/[A-Za-z0-9._-]+")
 SAFE_EMAIL_DOMAINS = ("example.com", "example.org", "example.net")
@@ -134,9 +147,20 @@ class ChangelogTests(unittest.TestCase):
             self.assertIn(word, self.first, word)
 
     def test_it_says_what_did_not_change_and_the_five_rules(self):
-        for word in ("What did not change (safety)", "No route, setting, data file, kind of chat event or `localStorage` key was added", "15a", "15b", "15c", "15d", "15e",
+        for word in ("What did not change (safety)", "No server route (API), setting, data file, kind of chat event or `localStorage` key was added", "15a", "15b", "15c", "15d", "15e",
                      "Advanced mode is not a permission", "the AI still cannot raise a limit", "Money.", "Known limits."):
             self.assertIn(word, self.first, word)
+
+    def test_it_does_not_overstate_the_money_the_routes_or_the_sweep(self):
+        for word in ("There is no amount of money in the new home blocks", "so its cards can still show amounts", "port 7802 only", "for both versions together",
+                     "never counted as zero", "the page has two new addresses", "17 normal pages", "not by that sweep"):
+            self.assertIn(word, self.first, word)
+        self.assertNotIn("There is no amount of money on the home page", self.first)
+        self.assertNotIn("refuses the ports 7788 and 7789", self.first)
+        adr = flat(raw("docs", "adr", "0013-plain-navigation.md"))
+        self.assertIn("新的一般首頁區塊沒有金額", adr)
+        self.assertNotIn("首頁沒有金額；", adr)
+        self.assertIn("the new home blocks show no amount", flat(raw("docs", "SECURITY-MODEL.md")))
 
     def test_it_describes_the_real_machine_walk_with_its_caps(self):
         for word in ("tools/qa_p47.py", "--remote-debugging-pipe", "no TCP port", "--no-ai", "--haiku", "US$0.30", "7788", "7789", "tests/test_qa_p47.py", "tests/test_p47_docs.py"):
@@ -257,8 +281,30 @@ class RealMachineWalkTests(unittest.TestCase):
         self.assertIn("WALL_CAP_S = 20 * 60", script)
         self.assertIn("US$0.30", flat(raw("CHANGELOG.md")))
 
+    def test_no_list_of_private_words_is_kept_in_the_tests_and_the_tests_themselves_are_public(self):
+        for name in ("test_p47_docs.py", "test_p46_docs.py", "test_qa_p47.py"):
+            text = raw("tests", name)
+            self.assertEqual(problems(text, name), [], name)
+            self.assertNotRegex(text, r"(?m)^PERSONAL\s*=\s*\[", name)
+
+    def test_a_local_denylist_outside_git_is_read_when_named_and_ignored_otherwise(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "words.txt"
+            path.write_text("made-up-word\n\n  another one \n", encoding="utf-8")
+            old = os.environ.get("VBEAR_DOCS_DENYLIST")
+            os.environ["VBEAR_DOCS_DENYLIST"] = str(path)
+            try:
+                self.assertEqual(_local_denylist(), ["made-up-word", "another one"])
+                os.environ["VBEAR_DOCS_DENYLIST"] = str(Path(d) / "missing.txt")
+                self.assertEqual(_local_denylist(), [])
+            finally:
+                if old is None:
+                    os.environ.pop("VBEAR_DOCS_DENYLIST", None)
+                else:
+                    os.environ["VBEAR_DOCS_DENYLIST"] = old
+
     def test_the_scan_fires_on_small_made_up_texts(self):
-        for text in ("my home is /Users/alice/projects", "mail a.b@gmail.com now", "skill " + PERSONAL[0], "at /home/bob/x"):
+        for text in ("my home is /Users" + "/alice/projects", "mail " + "someone" + "@" + "corp.invalid" + " now", "at /home" + "/bob/x"):
             self.assertTrue(problems(text, "x"), text)
         for text in ("mail a.b@example.com now", "/Users/fake-user/.codex", "plain words"):
             self.assertEqual(problems(text, "x"), [], text)

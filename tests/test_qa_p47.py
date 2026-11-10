@@ -8,7 +8,7 @@ the coordinator, and the words of the cards by tests/frontend/p47_chat.cjs). Eve
 
 Seams: ``refusal``, ``frame`` / ``unframe``, ``chrome_args``, ``screens_to_scroll``, ``bad_words``, ``judge_step``, ``summarize``, ``claude_spent`` /
 ``claude_allowed``, ``slice_const`` / ``read_tables``, ``compare_table`` / ``compare``, ``Walker`` (over a fake page), ``Run.play`` / ``Run.money_ok``
-(over a fake page and console) and ``main`` (the command line, with those fakes)."""
+(over a fake page and console), ``Browser.allowed_wait`` / ``Browser.close`` (over a fake clock; no Chrome is started) and ``main`` (the command line, with those fakes)."""
 from __future__ import annotations
 
 import ast
@@ -130,6 +130,8 @@ class FakeConsole(qa.Console):
         self.ledger_value, self.daily, self.profiles = ledger, daily, list(profiles or [])
         self.per_turn, self.routines, self.log = 0.25, [], []
         self.verified = False
+        self.support_state = None                    # a word to answer instead (None: verified or not by ``verified``); "unreadable": no answer
+        self.created_chat = None
 
     def call(self, path, method="GET", body=None):
         self.log.append((method, path.split("?")[0], body))
@@ -162,7 +164,9 @@ class FakeConsole(qa.Console):
         if (method, clean) == ("GET", "/api/chats"):
             return 200, {"chats": []}
         if (method, clean) == ("GET", "/api/chat-support"):
-            return 200, {"support": {"state": "verified" if self.verified else "unverified"}}
+            if self.support_state == "unreadable":
+                return 0, None
+            return 200, {"support": {"state": self.support_state or ("verified" if self.verified else "unverified")}}
         if (method, clean) == ("POST", "/api/chat-support/verify"):
             self.verified = True
             return 202, {"ok": True}
@@ -267,6 +271,11 @@ class RefusalTests(unittest.TestCase):
             self.assertIn("own VBear", self.why(port=port))
         for port in (80, 1023, 70000, True):
             self.assertIn("port", self.why(port=port))
+
+    def test_only_port_7802_may_be_used_every_other_port_is_refused_even_the_ones_kept_for_other_checks(self):
+        self.assertIsNone(self.why(port=7802))
+        for port in (7795, 7796, 7797, 7798, 7799, 7800, 7801, 7803, 8000, 65535, 1024):
+            self.assertIn("only port 7802", self.why(port=port), port)
 
     def test_the_persons_own_folder_and_anything_under_it_is_refused(self):
         own = self.root / ".vbear"
@@ -416,7 +425,69 @@ class CompareTests(unittest.TestCase):
         tasks = {name: {"steps": steps, "stuck": stuck, "unable": None, "read": read, "bad": [], "done": True} for name in qa.TASKS}
         if unable:
             tasks["limit"] = {"steps": 3, "stuck": 1, "unable": unable, "read": 50, "bad": [], "done": False}
-        return {"label": label, "mode": "no-ai", "ui": "x", "tasks": tasks, "phone": {"chat_input_px": px}, "money": {"ledger_end": 0.0}, "shots": []}
+        return {"label": label, "mode": "no-ai", "ui": "x", "tasks": tasks, "phone": {"chat_input_px": px}, "money": {"ledger_end": 0.0}, "shots": [],
+                "checks": {"ok": 10, "warn": 0, "fail": 0}}
+
+    def compared(self, before, after):
+        tmp = Path(tempfile.mkdtemp(prefix="q47"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / "a.json").write_text(json.dumps(before))
+        (tmp / "b.json").write_text(json.dumps(after))
+        lines = []
+        code = qa.compare(tmp / "a.json", tmp / "b.json", lines.append)
+        return code, lines[-1]
+
+    def test_an_after_task_that_did_not_finish_is_a_failure_even_with_fewer_steps(self):
+        after = self.result("after", 4)
+        after["tasks"]["first"] = {"steps": 0, "stuck": 0, "unable": None, "read": 0, "bad": [], "done": False, "error": "synthetic stop"}
+        after["checks"]["fail"] = 1
+        code, last = self.compared(self.result("before", 8, 2), after)
+        self.assertEqual(code, 1)
+        self.assertIn("NO", last)
+        self.assertIn("first: after did not finish", last)
+        self.assertNotIn("yes", last)
+
+    def test_an_after_task_that_cannot_be_done_where_before_did_it_is_a_regression(self):
+        after = self.result("after", 4, unable="a button went missing")
+        code, last = self.compared(self.result("before", 8), after)
+        self.assertEqual(code, 1)
+        self.assertIn("limit: after cannot do what before did", last)
+
+    def test_a_task_the_before_run_could_not_do_is_not_a_regression_when_after_does_it(self):
+        code, last = self.compared(self.result("before", 9, unable="no field"), self.result("after", 9))
+        self.assertEqual(code, 0, last)
+        self.assertTrue(last.endswith("yes"))
+
+    def test_a_run_with_a_fail_cannot_be_judged_and_a_task_the_before_run_did_not_finish_cannot_be_compared(self):
+        bad = self.result("before", 4)
+        bad["checks"]["fail"] = 2
+        code, last = self.compared(bad, self.result("after", 4))
+        self.assertEqual(code, 1)
+        self.assertIn("before run has 2 FAIL", last)
+        stopped = self.result("before", 4)
+        stopped["tasks"]["routine"] = {"steps": 1, "stuck": 0, "unable": None, "read": 1, "bad": [], "done": False, "error": "stopped"}
+        code, last = self.compared(stopped, self.result("after", 4))
+        self.assertEqual(code, 1)
+        self.assertIn("routine: before did not finish", last)
+
+    def test_the_table_says_failed_and_dead_end_where_they_happened(self):
+        after = self.result("after", 4)
+        after["tasks"]["first"]["dead_end"] = "the chat box was reached, but the chat cannot be used (state policy)"
+        after["tasks"]["card"] = {"steps": 0, "stuck": 0, "unable": None, "read": 0, "bad": [], "done": False, "error": "synthetic stop"}
+        table = qa.compare_table(self.result("before", 4), after)
+        self.assertIn("first (after): dead end - the chat box was reached", table)
+        self.assertIn("card (after): did not finish - synthetic stop", table)
+        self.assertRegex(table, r"(?m)^card\s+4\s+failed\s+-")
+
+    def test_a_result_file_without_the_count_of_checks_or_a_done_flag_is_not_a_result(self):
+        good = self.result("after", 4)
+        self.assertTrue(qa.result_ok(good))
+        no_checks = dict(good)
+        del no_checks["checks"]
+        self.assertFalse(qa.result_ok(no_checks))
+        no_done = self.result("after", 4)
+        del no_done["tasks"]["card"]["done"]
+        self.assertFalse(qa.result_ok(no_done))
 
     def test_the_table_has_a_row_for_each_task_with_both_versions_and_the_differences(self):
         before, after = self.result("before", 8, 2, "no field", px=1700), self.result("after", 5, 0, px=300)
@@ -561,6 +632,54 @@ class WalkerTests(unittest.TestCase):
         self.assertEqual(w.press("[a]")["scrolls"], 1)
 
 
+class SlowPage(FakePage):
+    """A page whose screen stays empty for ``blank`` looks, as a new state folder's first screen does."""
+
+    def __init__(self, *a, blank=0, **k):
+        super().__init__(*a, **k)
+        self.blank, self.looks = blank, 0
+
+    def main_text(self):
+        self.looks += 1
+        return "" if self.looks <= self.blank else super().main_text()
+
+
+class FirstLoadTests(unittest.TestCase):
+    def test_a_task_waits_for_the_screen_to_be_drawn_up_to_thirty_seconds_before_it_looks(self):
+        page = SlowPage({"#/": {"[a]": {"top": 100}, "_text": "首頁"}}, {}, blank=25)      # 25 looks of 0.5 s each on the fake clock: about 25 seconds
+        w = qa.Walker(page, {"avoid": [], "errors": []}, sleep=lambda s: None, clock=FakeClock())
+        w.begin("#/")
+        self.assertGreater(page.looks, 25)
+        self.assertEqual(w.press("[a]")["scrolls"], 0)
+        self.assertEqual(qa.FIRST_LOAD_S, 30.0)
+
+    def test_a_screen_that_never_draws_does_not_hold_the_walk_for_ever_and_nothing_is_judged_on_it(self):
+        clock = FakeClock()
+        page = SlowPage({"#/": {"_text": "首頁"}}, {}, blank=10 ** 9)
+        w = qa.Walker(page, {"avoid": [], "errors": []}, sleep=lambda s: None, clock=clock)
+        w.begin("#/")
+        self.assertLess(clock.now, 45)
+        self.assertEqual(w.steps, [])
+
+    def test_a_dead_end_is_stuck_and_is_not_a_step_of_the_person(self):
+        page = FakePage({"#/": {"[a]": {"top": 100}, "_text": "x"}}, {})
+        w = qa.Walker(page, {"avoid": [], "errors": []}, sleep=lambda s: None, clock=FakeClock())
+        w.begin("#/")
+        w.press("[a]")
+        w.dead_end("the box cannot be used")
+        done = w.summary()
+        self.assertEqual((done["steps"], done["stuck"]), (1, 1))
+        self.assertEqual(qa.judge_step({"dead_end": True}), ["dead_end"])
+
+    def test_present_looks_without_recording_a_step(self):
+        page = FakePage({"#/": {"[a]": {"top": 100}, "_text": "x"}}, {})
+        w = qa.Walker(page, {"avoid": [], "errors": []}, sleep=lambda s: None, clock=FakeClock())
+        w.begin("#/")
+        self.assertTrue(w.present("[a]"))
+        self.assertFalse(w.present("[nope]", 1.0))
+        self.assertEqual(w.steps, [])
+
+
 # ---- the run, over a fake page and console -------------------------------------------------------------------------------------------
 
 class RunTests(unittest.TestCase):
@@ -612,13 +731,13 @@ class RunTests(unittest.TestCase):
 
     def test_the_money_check_adds_both_ledgers_and_the_chat_checks_and_the_steps_own_limit(self):
         run, page, console = self.run_for(haiku=True, console=FakeConsole(ledger="0.10"))
-        run.other = {"mode": "haiku", "money": {"ledger_end": 0.05}}
+        run.other, run.other_state = {"mode": "haiku", "money": {"ledger_end": 0.05}}, "known"
         self.assertAlmostEqual(0.10 + 0.05 + 0.05 + 0.05, qa.claude_spent([0.10, 0.05], 2))
         self.assertTrue(run.money_ok(0.03))                                  # 0.25 + 0.03 is under 0.30
         run.other = {"mode": "haiku", "money": {"ledger_end": 0.10}}
         self.assertFalse(run.money_ok(0.03))                                 # 0.30 + 0.03 is over it
         run.cap = 0.05
-        run.other = None
+        run.other, run.other_state = None, "none"
         self.assertFalse(run.money_ok(0.03))
 
     def test_a_ledger_that_cannot_be_read_is_never_a_yes(self):
@@ -648,12 +767,233 @@ class RunTests(unittest.TestCase):
         run.verify_chat()
         self.assertEqual([c for c in console.log if c[1] == "/api/chat-support/verify"], [("POST", "/api/chat-support/verify", {"engine": "claude"})])
 
+    # -- the first task does not assume which screen comes first, and a chat box that cannot be used is a dead end ------------------------
+
+    def first_site(self, leave=False, ending="input"):
+        pages = {"#/": {"_text": "首頁", '[data-home-step="2"] a[href="#/ceo"]': {"top": 300}},
+                 "#/ceo": {qa.CEO_GO: {"top": 400}, "_text": "建立 CEO"},
+                 "#/chat/c1": {"_text": "chat", **({qa.CHAT_INPUT: {"top": 300}} if ending == "input" else {'[data-chat="prep-action"]': {"top": 300}})}}
+        if leave:
+            pages["#/"][qa.LEAVE] = {"top": 200}
+            pages["#/start"] = {'[data-home-step="2"] a[href="#/ceo"]': {"top": 300}, "_text": "開始設定"}
+        links = {("#/", '[data-home-step="2"] a[href="#/ceo"]'): "#/ceo", ("#/ceo", qa.CEO_GO): "#/chat/c1"}
+        if leave:
+            links[("#/", qa.LEAVE)] = "#/"
+        return pages, links
+
+    def first_run(self, support=None, **site):
+        pages, links = self.first_site(**site)
+        console = FakeConsole()
+        console.support_state = support
+        page = FakePage(pages, links, on_click={qa.CEO_GO: lambda: console.profiles.append({"id": "prof-000000000001", "name": "CEO", "model": {"tool": "claude"}})})
+        run, page, console = self.run_for(page=page, console=console)
+        run.orig = {"daily": 3.0, "per_turn": 0.25, "profiles": set(), "routines": set()}
+        return run, page, console
+
+    def test_a_real_machine_that_opens_on_the_home_page_is_not_unable_for_lack_of_the_start_up_button(self):
+        run, page, console = self.first_run(support="verified")
+        run.play("first")
+        task = run.tasks["first"]
+        self.assertIsNone(task["unable"])
+        self.assertEqual(task["steps"], 3)                           # the link to the CEO, the create button, the look at the box
+        self.assertNotIn(("click", qa.LEAVE), page.log)
+
+    def test_when_the_start_up_button_is_on_the_screen_it_is_pressed_first(self):
+        run, page, console = self.first_run(support="verified", leave=True)
+        run.play("first")
+        self.assertIn(("click", qa.LEAVE), page.log)
+        self.assertEqual(run.tasks["first"]["steps"], 4)
+
+    def test_without_a_model_a_chat_box_that_cannot_be_used_is_a_dead_end_counted_as_stuck_and_written_in_the_task(self):
+        for support, words in (("unverified", "state unverified"), ("policy", "state policy"), ("unreadable", "could not be read")):
+            run, page, console = self.first_run(support=support)
+            run.task_first()
+            task = run.tasks["first"]
+            self.assertGreaterEqual(task["stuck"], 1, support)
+            self.assertIn(words, task["dead_end"], support)
+            self.assertEqual(task["steps"], 3, "a dead end is not one more step")
+            self.assertTrue([line for line in self.lines if line.startswith("warn") and "cannot be used" in line])
+            self.lines.clear()
+
+    def test_a_chat_box_that_can_be_used_or_the_prepare_pages_one_action_is_not_a_dead_end(self):
+        run, page, console = self.first_run(support="verified")
+        run.task_first()
+        self.assertNotIn("dead_end", run.tasks["first"])
+        self.assertEqual(run.tasks["first"]["stuck"], 0)
+        run, page, console = self.first_run(support="policy", ending="prep")
+        run.task_first()
+        self.assertNotIn("dead_end", run.tasks["first"])
+        self.assertEqual(run.tasks["first"]["stuck"], 0)
+
+    # -- money that is not known is never zero ---------------------------------------------------------------------------------------
+
+    def test_what_the_other_version_spent_is_zero_only_for_the_first_of_the_pair(self):
+        run, page, console = self.run_for(haiku=True, console=FakeConsole(ledger="0.10"))
+        run.read_other()
+        self.assertEqual(run.other_state, "none")
+        self.assertTrue(run.money_ok(0.03))
+        (self.root / "started-before.txt").write_text("started\n")             # the other version began, and left no result
+        run.read_other()
+        self.assertEqual(run.other_state, "unknown")
+        self.assertFalse(run.money_ok(0.0), "it spends nothing when it does not know what the other spent")
+        self.assertTrue([line for line in self.lines if line.startswith("warn")])
+
+    def test_a_result_of_the_other_version_without_a_readable_amount_is_unknown_not_zero(self):
+        run, page, console = self.run_for(haiku=True, console=FakeConsole(ledger="0.01"))
+        good = {"label": "before", "mode": "haiku", "ui": "x", "phone": {}, "shots": [], "checks": {"ok": 1, "warn": 0, "fail": 0},
+                "tasks": {n: {"steps": 1, "stuck": 0, "unable": None, "read": 1, "bad": [], "done": True} for n in qa.TASKS}}
+        for amount, state in ((0.04, "known"), (None, "unknown"), ("x", "unknown"), (-1, "unknown")):
+            (self.root / "qa47-before.json").write_text(json.dumps({**good, "money": {"ledger_end": amount}}))
+            run.read_other()
+            self.assertEqual(run.other_state, state, amount)
+        (self.root / "qa47-before.json").write_text("not json")
+        (self.root / "started-before.txt").write_text("started\n")
+        run.read_other()
+        self.assertEqual(run.other_state, "unknown")
+        (self.root / "qa47-before.json").write_text(json.dumps({**good, "money": {"ledger_end": 0.0}, "label": "after"}))
+        run.read_other()
+        self.assertEqual(run.other_state, "unknown", "a file that is not the other version's")
+
+    def test_a_ledger_that_cannot_be_read_at_the_end_is_null_with_a_fail_and_the_next_run_then_spends_nothing(self):
+        class Gone(FakeConsole):
+            def call(self, path, method="GET", body=None):
+                return (0, None) if path == "/api/meetings/ledger" else super().call(path, method, body)
+        run, page, console = self.run_for(label="before", haiku=True, console=Gone())
+        for name in qa.TASKS:
+            run.tasks[name] = {"steps": 1, "stuck": 0, "unable": None, "read": 1, "bad": [], "done": True}
+        result = run.result()
+        self.assertIsNone(result["money"]["ledger_end"])
+        self.assertEqual(result["checks"]["fail"], 1)
+        self.assertTrue([line for line in self.lines if line.startswith("FAIL") and "ledger" in line])
+        (self.root / "qa47-before.json").write_text(json.dumps(result))
+        later, page2, console2 = self.run_for(label="after", haiku=True, console=FakeConsole(ledger="0.00"))
+        later.read_other()
+        self.assertEqual(later.other_state, "unknown")
+        self.assertFalse(later.money_ok(0.03))
+
+    # -- clean-up deletes only what this run made ----------------------------------------------------------------------------------------
+
+    def test_a_routine_that_was_there_before_the_run_is_not_deleted_even_if_it_has_the_runs_prefix(self):
+        run, page, console = self.run_for()
+        console.routines = [{"id": "r-before", "name": "QA47 虛構早安", "enabled": True}, {"id": "r-mine", "name": "QA47 虛構早安", "enabled": True},
+                            {"id": "r-other", "name": "別的工作", "enabled": True}]
+        run.orig["routines"] = {"r-before"}
+        run.made["routines"] = ["r-mine"]
+        run.cleanup()
+        self.assertEqual(sorted(r["id"] for r in console.routines), ["r-before", "r-other"])
+        deletes = [c for c in console.log if c[1].startswith("/api/routines/") and c[1].endswith("/delete")]
+        self.assertEqual([c[1] for c in deletes], ["/api/routines/r-mine/delete"])
+
+    def test_the_routine_the_run_saved_is_found_among_the_new_ones_only(self):
+        run, page, console = self.run_for()
+        console.routines = [{"id": "r-before", "name": "QA47 虛構早安", "enabled": False, "days": [1], "times": ["07:00"]}]
+        run.orig["routines"] = {"r-before"}
+        console.routines.append({"id": "r-new", "name": "QA47 虛構早安", "enabled": True, "days": list(range(7)), "times": ["08:00"]})
+        run.then_routine_saved()
+        self.assertEqual(run.made["routines"], ["r-new"])
+        self.assertTrue([line for line in self.lines if line.startswith("ok") and "08:00" in line])
+
+    # -- a wait is never longer than two minutes -----------------------------------------------------------------------------------------
+
+    def test_a_wait_that_asks_for_more_than_two_minutes_gives_up_at_two_minutes(self):
+        run, page, console = self.run_for()
+        clock = FakeClock(step=1.0)
+        run.clock = clock
+        with self.assertRaises(qa.Stop):
+            run.wait("something that never comes", lambda: False, cap=10 ** 6, every=1.0)
+        self.assertLess(clock.now, qa.WAIT_CAP_S + 30)
+
+    def test_the_chat_check_does_not_ask_for_more_than_one_wait(self):
+        source = SOURCE.read_text(encoding="utf-8")
+        self.assertNotIn("WAIT_CAP_S * 2", source)
+        self.assertNotRegex(source, r"cap=WAIT_CAP_S\s*\*")
+
     def test_an_address_is_written_down_without_an_id(self):
         self.assertEqual(qa.page_head("#/chat/c-0123456789abcdef"), "#/chat")
         self.assertEqual(qa.page_head("#/chat?profile=prof-1"), "#/chat")
         self.assertEqual(qa.page_head("#/settings?open=limits"), "#/settings")
         self.assertEqual(qa.page_head("#/"), "#/")
         self.assertEqual(qa.page_head(""), "#/")
+
+
+class BrowserDeadlineTests(unittest.TestCase):
+    """The 5 minutes of one Chrome, over a clock that is moved by hand (no Chrome is started: the object is built without its program)."""
+
+    def browser(self):
+        b = qa.Browser.__new__(qa.Browser)
+        b.now = 0.0
+        b.clock = lambda: b.now
+        b.started = 0.0
+        b.sent = []
+        b.proc = None
+        return b
+
+    def test_no_wait_goes_past_what_is_left_of_the_five_minutes_or_past_two_minutes(self):
+        b = self.browser()
+        self.assertEqual(b.allowed_wait(30), 30)
+        self.assertEqual(b.allowed_wait(600), qa.WAIT_CAP_S)              # no single wait is longer than 2 minutes
+        b.now = qa.CHROME_CAP_S - 10
+        self.assertEqual(b.allowed_wait(600), 10)                          # nor than what is left
+        self.assertFalse(b.over())
+
+    def test_after_five_minutes_no_command_is_sent_any_more(self):
+        b = self.browser()
+        b.now = qa.CHROME_CAP_S + 1
+        self.assertTrue(b.over())
+        with self.assertRaises(qa.Stop) as ctx:
+            b.call("Runtime.evaluate", {"expression": "1"})
+        self.assertIn("5 minutes", str(ctx.exception))
+
+    def test_closing_still_goes_through_after_the_deadline_and_the_program_is_ended(self):
+        b = self.browser()
+        b.now = qa.CHROME_CAP_S + 60
+        sent = []
+        b.call = lambda method, params=None, session=None, wait=30.0, force=False: sent.append((method, wait, force)) or {}
+
+        class Proc:
+            ended = []
+
+            def wait(self, timeout=None):
+                self.ended.append("wait")
+
+            def terminate(self):
+                self.ended.append("terminate")
+
+            def kill(self):
+                self.ended.append("kill")
+        b.proc, b.wfd, b.rfd = Proc(), -1, -1
+        b.close()
+        self.assertEqual(sent, [("Browser.close", 5, True)])
+        self.assertIn("wait", Proc.ended)
+        self.assertIsNone(b.proc)
+
+    def test_the_run_closes_its_chrome_when_the_walk_stops_because_of_the_deadline(self):
+        root = Path(tempfile.mkdtemp(prefix="q47"))
+        self.addCleanup(shutil.rmtree, root, True)
+        chrome = root / "chrome"
+        chrome.write_text("x")
+        state = make_state(root)
+        closed = []
+
+        class Late:
+            def __init__(inner, chrome_path, profile):
+                inner.profile = profile
+
+            def close(inner):
+                closed.append("closed")
+
+        class Dead:
+            def __getattr__(inner, name):
+                def fail(*a, **k):
+                    raise qa.Stop("the 5 minutes of this Chrome are over")
+                return fail
+        app = root / "app.js"
+        app.write_text("const WORDS = {\n};\nconst PLAIN_ERRORS = [\n];\n", encoding="utf-8")
+        lines = []
+        code = qa.main(["--state", str(state), "--label", "after", "--chrome", str(chrome)], out=lines.append, console_factory=lambda port, token: FakeConsole(),
+                       browser_factory=Late, page_factory=lambda b, base: Dead(), sleep=lambda s: None, clock=FakeClock(), home=root, app_js=app)
+        self.assertEqual(code, 1)
+        self.assertEqual(closed, ["closed"])
 
 
 class MainTests(unittest.TestCase):
@@ -695,6 +1035,23 @@ class MainTests(unittest.TestCase):
             self.assertTrue(self.lines[0].startswith("refused:"), extra)
         self.assertEqual(self.closed, [])
         self.assertEqual(self.page.log, [])
+
+    def test_every_port_but_7802_is_refused_before_the_token_is_read_or_chrome_is_started(self):
+        for port in ("7795", "7801", "7803", "8080"):
+            self.lines.clear()
+            self.assertEqual(self.go("--port", port), 2, port)
+            self.assertIn("only port 7802", self.lines[0], port)
+        (self.state / "server.token").unlink()                      # a token that cannot be read would be a different message, if it got that far
+        self.lines.clear()
+        self.assertEqual(self.go("--port", "7795"), 2)
+        self.assertIn("only port 7802", self.lines[0])
+        self.assertEqual(self.closed, [])
+        self.assertEqual(self.page.log, [])
+
+    def test_a_run_leaves_a_start_marker_that_is_not_a_result_file(self):
+        self.go()
+        self.assertTrue((self.root / "started-after.txt").is_file())
+        self.assertFalse(str(self.root / "started-after.txt").endswith(".json"))
 
     def test_the_persons_own_state_folder_is_refused(self):
         own = self.root / ".vbear"
