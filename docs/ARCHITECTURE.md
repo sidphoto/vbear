@@ -631,7 +631,7 @@ v0.21.0 (ADR 0013) changes what the page shows and nothing on the server: Python
 - **Chat page.** One line (position・tool・「每件事先問你」・the company the chat goes to), 「詳細資訊」, a 「⋯」 menu whose items open the same preview and
   confirmation boxes as the buttons they replaced, an input box fixed at the bottom, and permission cards in plain words with the tool names behind 「技術細節」
   (rule 15e). A chat that cannot start yet leads to `#/chat?profile=<id>`, one reason and one action (`chatPrepState`).
-- **Tests and the real-machine walk.** `tests/frontend/p47_nav.cjs`, `p47_words.cjs`, `p47_home.cjs`, `p47_settings.cjs`, `p47_chat.cjs` (and the sweep of the words);
+- **Tests and the real-machine walk.** `tests/frontend/p47_nav.cjs`, `p47_words.cjs`, `p47_home.cjs`, `p47_settings.cjs`, `p47_chat.cjs` (and the sweep of the words, which draws 17 normal pages and the first step of the wizard, and the team-template preview);
   `tests/test_autonomy_guard.py` (15a, 15b); `tools/qa_p47.py` drives a headless Chrome over `--remote-debugging-pipe` (no TCP port) through five tasks on v0.20.0 and v0.21.0
   and compares steps, stuck steps, the characters to read and where the chat box sits on a phone (`tests/test_qa_p47.py` tests only its pure functions and an in-memory page).
 

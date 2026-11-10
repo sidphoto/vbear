@@ -37,22 +37,33 @@ What it reads and writes. It talks to the console through the same HTTP routes t
 with ``--haiku``, and the deletes of what it made), and the access token only from ``<state>/server.token`` (never printed, never stored).
 It writes ``<T>/qa47-<label>.json`` (steps, stuck, unable, counts, pixels, money, the names of screenshot files: no conversation, no
 sentence a model wrote) and ``<T>/shots-<label>/*.png`` (``<T>`` is the folder that holds ``<state>``), and uses ``<T>/chrome-<label>`` as
-the browser's own profile. It refuses the ports 7788 and 7789, ``~/.vbear`` and anything under it, and a Claude cap above US$0.30. At the
-end it deletes the employees, chats and routines it made, and puts the day's limit and the per-turn limit back.
+the browser's own profile. It runs on port 7802 only (any other port, 7788 and 7789 first of all, is refused before anything is read or
+started), refuses ``~/.vbear`` and anything under it, and a Claude cap above US$0.30. At the end it deletes the employees, chats and
+routines it made (only the ones whose ids it saw appear after it began), and puts the day's limit and the per-turn limit back.
 
 The money. ``--no-ai`` spends nothing. ``--haiku`` is the only thing that uses Claude Code (the console runs it, on Haiku): the chat
 check of each state folder (kept at US$0.05) and one turn for task 1 and one for task 4, each under a per-turn limit of US$0.03. **The
 hard cap is US$0.30 (``--claude-cap``, never more):** before each step that spends, the script adds "this state folder's day in the ledger
-+ the other folder's day in ``--other-ledger`` + the chat check's US$0.05 + the step's own per-turn limit" and does not do the step, and
-records a FAIL, when that is over the cap.
++ the other version's day (the ``ledger_end`` of its result file) + the chat check's US$0.05 + the step's own per-turn limit" and does not do
+the step, and records a FAIL, when that is over the cap. **An amount that is not known is never counted as zero:** a ledger that cannot be
+read at the end of a run is written as ``null`` with a FAIL; a run that finds the other version's start marker but no readable result
+(it was lost, or it ended without one) does not spend at all; only a run that finds neither (the first of the pair) counts the other day as 0.
 
-Caps on time: 20 minutes for the whole run, 2 minutes for any one wait, 5 minutes for one Chrome.
+Caps on time: 20 minutes for the whole run, 2 minutes for any one wait, 5 minutes for one Chrome (every command to the browser is refused once
+its 5 minutes are over, and no wait goes past what is left of them; the Chrome is closed in every case). A page that has not drawn yet is waited
+for up to 30 seconds when a task begins (a new state folder's first screen can stay empty for 20 seconds).
+
+The first task does not assume which screen comes first: it presses 「leave the start-up」 only when that button is on the screen. With
+``--no-ai`` it also reads the chat support (GET ``/api/chat-support``): reaching a chat box that cannot be used (the tool is not checked for
+chat, held back by an administrator's policy, or the state cannot be read) is a **dead end**: it counts as a stuck step and is written in the
+result; reaching the prepare page's one action instead is the right ending.
 
     python3 tools/qa_p47.py --state "$T/a" --port 7802 --label before --chrome "<path of Chrome>"            # --no-ai is the default
     python3 tools/qa_p47.py --state "$T/b" --port 7802 --label after  --chrome "<path of Chrome>" --haiku
     python3 tools/qa_p47.py --compare "$T/qa47-before.json" "$T/qa47-after.json"
 
-Exit code 0 only when every check passed (a task that is "unable" on v0.20.0 is not a FAIL).
+Exit code 0 only when every check passed (a task that is "unable" on v0.20.0 is not a FAIL). ``--compare`` exits 0 only when both runs have no
+FAIL, every task that the before run did finished or is unable on the after run too is finished there, and nothing is worse.
 """
 from __future__ import annotations
 
@@ -71,7 +82,7 @@ import urllib.request
 from pathlib import Path
 
 FORBIDDEN_PORTS = (7788, 7789)
-DEFAULT_PORT = 7802
+DEFAULT_PORT = 7802                          # the one port this script may use
 LABELS = ("before", "after")
 TASKS = ("first", "limit", "routine", "card", "blocked")
 CLAUDE_CAP_MAX = 0.30
@@ -81,6 +92,7 @@ DAILY_START = 2.00
 WALL_CAP_S = 20 * 60
 WAIT_CAP_S = 2 * 60
 CHROME_CAP_S = 5 * 60
+FIRST_LOAD_S = 30.0                          # a task's first screen can stay empty for 20 seconds on a new state folder
 DESKTOP = (1440, 900)
 PHONE = (390, 844)
 SETTLE_S = 0.35
@@ -136,6 +148,8 @@ def refusal(state: str, port: int, cap: float = CLAUDE_CAP_MAX, label: str = "be
         return "the port must be 1024 to 65535"
     if port in FORBIDDEN_PORTS:
         return f"port {port} is the person's own VBear"
+    if port != DEFAULT_PORT:
+        return f"only port {DEFAULT_PORT} may be used (port {port} is kept for something else)"
     if not isinstance(cap, (int, float)) or isinstance(cap, bool) or not 0 < cap <= CLAUDE_CAP_MAX:
         return f"--claude-cap must be above 0 and at most {CLAUDE_CAP_MAX}"
     if label not in LABELS:
@@ -244,7 +258,8 @@ def bad_words(text: str, avoid: list, errors: list) -> list:
 
 def judge_step(obs: dict) -> list:
     """Why a step counts as stuck. ``obs``: ``scrolls`` (screens scrolled to find the target), ``bad`` (the bad words on the page),
-    ``elsewhere`` (the target was not on this page and the person had to look on another). -> a list of "scrolled", "words", "elsewhere"."""
+    ``elsewhere`` (the target was not on this page and the person had to look on another), ``dead_end`` (the person reached a box that cannot be
+    used). -> a list of "scrolled", "words", "elsewhere", "dead_end"."""
     why = []
     if (obs.get("scrolls") or 0) > 1:
         why.append("scrolled")
@@ -252,6 +267,8 @@ def judge_step(obs: dict) -> list:
         why.append("words")
     if obs.get("elsewhere"):
         why.append("elsewhere")
+    if obs.get("dead_end"):
+        why.append("dead_end")
     return why
 
 
@@ -263,7 +280,8 @@ def summarize(steps: list, unable: str = "") -> dict:
     read = None
     bad = set()
     for s in steps:
-        count += 1 + int(s.get("scrolls") or 0)
+        if s.get("kind") != "dead-end":              # a dead end is not something the person did: it is stuck, and it is not a step
+            count += 1 + int(s.get("scrolls") or 0)
         if s.get("stuck"):
             stuck += 1
         if s.get("read") is not None:
@@ -316,13 +334,17 @@ def read_tables(app_js: Path, run=subprocess.run) -> dict:
 
 
 def result_ok(data) -> bool:
-    """Whether a result file has the shape ``--compare`` and the coordinator rely on: a label, the UI it saw, five tasks each with the numbers.
-    It holds no sentence of a conversation: a task's ``bad`` is a list of terms from the table and ``unable`` is one of our own reasons."""
+    """Whether a result file has the shape ``--compare`` and the coordinator rely on: a label, the UI it saw, five tasks each with the numbers and
+    whether it was finished, and the count of checks. It holds no sentence of a conversation: a task's ``bad`` is a list of terms from the table
+    and ``unable`` is one of our own reasons."""
     if not isinstance(data, dict) or data.get("label") not in LABELS or not isinstance(data.get("tasks"), dict):
+        return False
+    checks = data.get("checks")
+    if not isinstance(checks, dict) or not all(isinstance(checks.get(k), int) and not isinstance(checks.get(k), bool) for k in ("ok", "warn", "fail")):
         return False
     for name in TASKS:
         t = data["tasks"].get(name)
-        if not isinstance(t, dict) or not isinstance(t.get("steps"), int) or not isinstance(t.get("stuck"), int):
+        if not isinstance(t, dict) or not isinstance(t.get("steps"), int) or not isinstance(t.get("stuck"), int) or not isinstance(t.get("done"), bool):
             return False
     return True
 
@@ -333,20 +355,54 @@ COLUMNS = (("steps", "steps"), ("stuck", "stuck"), ("read", "read chars"))
 def _cell(task: dict, key: str) -> str:
     if key == "steps" and task.get("unable"):
         return "unable"
+    if key == "steps" and not task.get("done"):
+        return "failed"
     value = task.get(key)
     return "-" if value is None else str(value)
 
 
 def _delta(a: dict, b: dict, key: str) -> str:
     x, y = a.get(key), b.get(key)
-    if a.get("unable") or b.get("unable") or not isinstance(x, int) or not isinstance(y, int):
+    if a.get("unable") or b.get("unable") or not a.get("done") or not b.get("done") or not isinstance(x, int) or not isinstance(y, int):
         return "-"
     return f"{y - x:+d}"
 
 
+def task_state(task: dict) -> str:
+    """"ok" (finished), "unable" (this version cannot do it, our own reason is written) or "failed" (it did not finish and nothing says it cannot be done)."""
+    if task.get("unable"):
+        return "unable"
+    if task.get("done") is True and not task.get("error"):
+        return "ok"
+    return "failed"
+
+
+def verdict(before: dict, after: dict) -> list:
+    """What is wrong with the pair, as short sentences; an empty list is "no worse". A run with a FAIL cannot be judged; an after task that did not
+    finish, or that cannot be done where the before one could, is a regression whatever its step count; steps and stuck are compared only for a task
+    both versions finished."""
+    problems = []
+    for label, data in (("before", before), ("after", after)):
+        fails = (data.get("checks") or {}).get("fail") or 0
+        if fails:
+            problems.append(f"{label} run has {fails} FAIL")
+    for name in TASKS:
+        a, b = before["tasks"][name], after["tasks"][name]
+        sa, sb = task_state(a), task_state(b)
+        if sb == "failed":
+            problems.append(f"{name}: after did not finish")
+        elif sb == "unable" and sa == "ok":
+            problems.append(f"{name}: after cannot do what before did")
+        elif sa == "failed":
+            problems.append(f"{name}: before did not finish, so it cannot be compared")
+        elif sa == "ok" and sb == "ok" and (b["steps"] > a["steps"] or b["stuck"] > a["stuck"]):
+            problems.append(f"{name}: worse")
+    return problems
+
+
 def compare_table(before: dict, after: dict) -> str:
     """The table ``--compare`` prints: for each task, the steps, stuck and read characters of each version and the difference (after minus
-    before), the tasks that were unable, and the phone's chat-box distance. Lower is better; 'unable' is shown, not counted as zero."""
+    before), the tasks that were unable or failed, and the phone's chat-box distance. Lower is better; 'unable' is shown, not counted as zero."""
     rows = [("task", "steps b", "steps a", "diff", "stuck b", "stuck a", "diff", "read b", "read a", "diff")]
     for name in TASKS:
         a, b = before["tasks"][name], after["tasks"][name]
@@ -360,17 +416,21 @@ def compare_table(before: dict, after: dict) -> str:
             why = data["tasks"][name].get("unable")
             if why:
                 lines.append(f"{name} ({label}): unable - {why}")
+            elif task_state(data["tasks"][name]) == "failed":
+                lines.append(f"{name} ({label}): did not finish - {str(data['tasks'][name].get('error') or 'no reason written')[:120]}")
+            if data["tasks"][name].get("dead_end"):
+                lines.append(f"{name} ({label}): dead end - {data['tasks'][name]['dead_end']}")
     for label, data in (("before", before), ("after", after)):
         px = (data.get("phone") or {}).get("chat_input_px")
         lines.append(f"phone, chat box from the top of the page ({label}): " + ("not measured" if px is None else f"{px} px"))
-    worse = [n for n in TASKS if not before["tasks"][n].get("unable") and not after["tasks"][n].get("unable")
-             and (after["tasks"][n]["steps"] > before["tasks"][n]["steps"] or after["tasks"][n]["stuck"] > before["tasks"][n]["stuck"])]
-    lines.append("every task is no worse than before: " + ("yes" if not worse else "NO - " + ", ".join(worse)))
+    worse = verdict(before, after)
+    lines.append("every task is no worse than before: " + ("yes" if not worse else "NO - " + "; ".join(worse)))
     return "\n".join(lines)
 
 
 def compare(path_a: Path, path_b: Path, out=print) -> int:
-    """``--compare a.json b.json``: print the table. 2 when a file cannot be read or has the wrong shape; 1 when after is worse; else 0."""
+    """``--compare a.json b.json``: print the table. 2 when a file cannot be read or has the wrong shape; 1 when after is worse or a run failed;
+    else 0."""
     loaded = []
     for p in (path_a, path_b):
         try:
@@ -447,7 +507,22 @@ class Browser:
             self.closed = True
             self.cond.notify_all()
 
-    def call(self, method: str, params: dict | None = None, session: str | None = None, wait: float = 30.0) -> dict:
+    def left(self) -> float:
+        """What is left of this Chrome's 5 minutes."""
+        return CHROME_CAP_S - (self.clock() - self.started)
+
+    def allowed_wait(self, wait: float, force: bool = False) -> float:
+        """How long one command may wait: never past what is left of the 5 minutes, and never past the 2 minutes of any one wait. Once the 5
+        minutes are over nothing is sent any more, except the closing (``force``)."""
+        if force:
+            return wait
+        left = self.left()
+        if left <= 0:
+            raise Stop("the 5 minutes of this Chrome are over")
+        return min(wait, left, WAIT_CAP_S)
+
+    def call(self, method: str, params: dict | None = None, session: str | None = None, wait: float = 30.0, force: bool = False) -> dict:
+        wait = self.allowed_wait(wait, force)
         with self.lock:
             self.next_id += 1
             ident = self.next_id
@@ -473,13 +548,13 @@ class Browser:
         return reply.get("result") or {}
 
     def over(self) -> bool:
-        return self.clock() - self.started > CHROME_CAP_S
+        return self.left() <= 0
 
     def close(self) -> None:
         if self.proc is None:
             return
         try:
-            self.call("Browser.close", wait=5)
+            self.call("Browser.close", wait=5, force=True)
         except Stop:
             pass
         try:
@@ -708,15 +783,30 @@ class Walker:
 
     # -- a task ----------------------------------------------------------------------------------------------------------------
 
-    def begin(self, hash_: str) -> None:
-        """Start a task at an address (opening it is not a step: it is where the person is)."""
+    def begin(self, hash_: str, load: float = FIRST_LOAD_S) -> None:
+        """Start a task at an address (opening it is not a step: it is where the person is). The screen is waited for, up to ``load`` seconds: a
+        new state folder's first screen can stay empty for 20 seconds, and nothing is judged before it is drawn."""
         self.steps = []
         self.page.goto(hash_)
+        end = self.clock() + load
+        while not str(self.page.main_text()).strip() and self.clock() < end:
+            self.sleep(0.5)
         self.page.to_top()
         self.route_seen = self.page.route()
 
+    def dead_end(self, why: str) -> dict:
+        """The person reached a box that cannot be used: stuck (not a step of theirs)."""
+        step = {"kind": "dead-end", "target": why, "scrolls": 0, "read": None, "bad": [], "stuck": judge_step({"dead_end": True}), "why": why}
+        self.steps.append(step)
+        return step
+
     def _bad(self) -> list:
         return bad_words(self.page.main_text(), self.tables.get("avoid", []), self.tables.get("errors", []))
+
+    def present(self, sel: str, patience: float = 3.0) -> bool:
+        """Whether ``sel`` is on the screen (after a short wait for a page that is still drawing). Nothing is recorded: it is only looking."""
+        info = self._wait_for(sel, patience)
+        return bool(info.get("found") and info.get("shown"))
 
     def _arrived(self) -> None:
         now = self.page.route()
@@ -831,6 +921,7 @@ class Walker:
 # Written down by hand and found only by ``data-*`` attributes, ``href`` and the dialog's classes, never by the words on the screen.
 # A step: ``kind`` press / fill / ensure / look / search, ``sel`` (a selector, or a list of them for ``look``), ``value`` (fill), ``ai`` (only with
 # --haiku: it sends something to Claude), ``then`` (what the script itself does after the step), ``unable`` (what a search that finds nothing means).
+# ``optional`` (press): done only when the thing is on the screen once the screen is drawn; if it is not, the person is already past it.
 # ``start`` is where the person is when the task begins (not a step). v0.20.0 has no ``data-nav`` for the new pages; its own ids are used.
 
 DIALOG_OK = '.modal-backdrop .modal-actions .btn.primary'
@@ -845,10 +936,10 @@ CHAT_INPUT = '[data-chat="input"]'
 PATHS = {
     "before": {
         "first": {"start": "#/", "steps": [
-            {"kind": "press", "sel": LEAVE, "unable": "no AI tool is ready on this computer, so the start button stays off"},
+            {"kind": "press", "sel": LEAVE, "optional": True, "unable": "no AI tool is ready on this computer, so the start button stays off"},
             {"kind": "press", "sel": '[data-ceo="create-invite"] a[href="#/ceo"]'},
             {"kind": "press", "sel": CEO_GO, "then": "ceo_made"},
-            {"kind": "look", "sel": [CHAT_INPUT, '[data-chat="verify"]']},
+            {"kind": "look", "sel": [CHAT_INPUT, '[data-chat="verify"]'], "then": "chat_usable"},
             {"kind": "press", "sel": SEND, "ai": True, "then": "first_reply"},
         ]},
         "limit": {"start": "#/", "steps": [
@@ -889,10 +980,10 @@ PATHS = {
     },
     "after": {
         "first": {"start": "#/", "steps": [
-            {"kind": "press", "sel": LEAVE, "unable": "no AI tool is ready on this computer, so the start button stays off"},
+            {"kind": "press", "sel": LEAVE, "optional": True, "unable": "no AI tool is ready on this computer, so the start button stays off"},
             {"kind": "press", "sel": '[data-home-step="2"] a[href="#/ceo"]'},
             {"kind": "press", "sel": CEO_GO, "then": "ceo_made"},
-            {"kind": "look", "sel": [CHAT_INPUT, '[data-chat="prep-action"]']},
+            {"kind": "look", "sel": [CHAT_INPUT, '[data-chat="prep-action"]'], "then": "chat_usable"},
             {"kind": "press", "sel": SEND, "ai": True, "then": "first_reply"},
         ]},
         "limit": {"start": "#/", "steps": [
@@ -963,6 +1054,9 @@ class Run:
         self.notice = {}
         self.spent_calls = 0
         self.other = None
+        self.other_state = "none"                    # "none" (the first of the pair), "known" (its result was read) or "unknown" (it began and left no usable result)
+        self.last_look = None
+        self.dead_end = None
         self.shot_dir = self.out_dir / f"shots-{label}"
 
     # -- small helpers ---------------------------------------------------------------------------------------------------------
@@ -971,7 +1065,7 @@ class Run:
         return self.clock() - self.started > WALL_CAP_S
 
     def wait(self, what: str, probe, cap: float = WAIT_CAP_S, every: float = 1.0):
-        end = self.clock() + cap
+        end = self.clock() + min(cap, WAIT_CAP_S)           # no single wait is longer than 2 minutes, whatever asks for more
         while True:
             got = probe()
             if got:
@@ -996,11 +1090,19 @@ class Run:
         code, data = self.c.call("/api/agent-profiles")
         return [p for p in (data or {}).get("profiles", []) if isinstance(p, dict)] if code == 200 and isinstance(data, dict) else []
 
+    def other_ledger(self) -> float | None:
+        """The other version's day, in dollars: 0 only for the first of the pair; None (unknown, which is never a yes) when the other version began
+        and its result is missing, broken, or has no readable amount."""
+        if self.other_state == "none":
+            return 0.0
+        other = self.other if isinstance(self.other, dict) else {}
+        return money((other.get("money") or {}).get("ledger_end")) if self.other_state == "known" else None
+
     def money_ok(self, step_cap: float, checks: int | None = None) -> bool:
         """The cap before a step that spends: the day's ledger of this folder, the other folder's day (from its result file), the chat checks
         (kept at US$0.05 each) and this step's own limit."""
         other = self.other if isinstance(self.other, dict) else {}
-        ledgers = [self.ledger(), (other.get("money") or {}).get("ledger_end", 0.0) if other else 0.0]
+        ledgers = [self.ledger(), self.other_ledger()]
         others_checks = 1 if other and other.get("mode") == "haiku" else 0
         spent = claude_spent(ledgers, (1 if checks is None else checks) + others_checks)
         return claude_allowed(spent, step_cap, self.cap)
@@ -1027,13 +1129,38 @@ class Run:
         self.c.ok("/api/setup/daily-limit", "POST", {"daily_usd": DAILY_START})
         self.c.ok("/api/config", "POST", {"chat_limits": {"per_turn_usd": PER_TURN_CLAUDE}, "welcome_seen": True})
         self.check.ok("the day's limit is US$2.00 and the per-turn limit US$0.03 (put back at the end)")
-        try:
-            with open(self.out_dir / f"qa47-{'after' if self.label == 'before' else 'before'}.json", encoding="utf-8") as fh:
-                self.other = json.load(fh)
-        except (OSError, ValueError):
-            self.other = None
+        self.read_other()
+        self.mark_started()
         if self.haiku:
             self.verify_chat()
+
+    def other_label(self) -> str:
+        return "after" if self.label == "before" else "before"
+
+    def read_other(self) -> None:
+        """Find out what the other version spent. Its result file is read (and has to hold a readable amount of money); without one, its start
+        marker says whether it ever began: if it did, the amount is unknown, and if it did not, this is the first of the pair."""
+        other = self.other_label()
+        try:
+            with open(self.out_dir / f"qa47-{other}.json", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            data = None
+        if data is not None:
+            self.other = data
+            self.other_state = "known" if result_ok(data) and data.get("label") == other and money((data.get("money") or {}).get("ledger_end")) is not None else "unknown"
+        elif (self.out_dir / f"started-{other}.txt").exists():
+            self.other, self.other_state = None, "unknown"
+        else:
+            self.other, self.other_state = None, "none"
+        if self.other_state == "unknown":
+            self.check.warn(f"what the {other} run spent is not known, so no step that spends Claude's money will be done")
+
+    def mark_started(self) -> None:
+        try:
+            (self.out_dir / f"started-{self.label}.txt").write_text("started\n", encoding="utf-8")
+        except OSError:
+            self.check.warn("the start marker could not be written")
 
     def verify_chat(self) -> None:
         """The chat check of Claude Code (the person's own login; about US$0.01 to 0.05, not counted in the day's limit): reserved first."""
@@ -1046,7 +1173,7 @@ class Run:
             return
         self.c.ok("/api/chat-support/verify", "POST", {"engine": "claude"})
         self.wait("the chat check", lambda: (lambda d: ((d or {}).get("support") or {}).get("state") == "verified")(self.c.call("/api/chat-support")[1]),
-                  cap=WAIT_CAP_S * 2, every=3.0)
+                  cap=WAIT_CAP_S, every=3.0)
         self.check.ok("Claude Code's chat check passed")
 
     # -- the tasks ---------------------------------------------------------------------------------------------------------------
@@ -1093,6 +1220,8 @@ class Run:
                 self.check.fail("the Claude cap would be passed by this step: not done", st.get("sel", ""))
                 raise Unable("the Claude cap would have been passed")
             kind, sel = st["kind"], st["sel"]
+            if st.get("optional") and not self.w.present(sel):
+                continue                                   # the screen is already past this one
             if kind == "press":
                 got = self.w.press(sel)
                 if got is None:
@@ -1107,6 +1236,7 @@ class Run:
                     raise Unable(f"{sel} is not on the page")
             elif kind == "look":
                 got, found = self.w.look(sel)
+                self.last_look = found
                 if got is None:
                     raise Unable(f"{sel if isinstance(sel, str) else ' / '.join(sel)} is not on the page")
             elif kind == "search":
@@ -1120,6 +1250,8 @@ class Run:
     def task_first(self) -> None:
         try:
             self.play("first")
+            if self.dead_end and isinstance(self.tasks.get("first"), dict):
+                self.tasks["first"]["dead_end"] = self.dead_end
         except Unable as exc:
             # nothing can be done without a ready AI tool: the console is told the start-up is over so the other tasks begin at the home page
             self.c.call("/api/config", "POST", {"setup_done": True})
@@ -1178,6 +1310,26 @@ class Run:
             self.chat = mine[0].get("id")
             self.made["chats"].append(self.chat)
 
+    def chat_state(self):
+        """What GET /api/chat-support says of Claude Code's chat: its state word, or None when it cannot be read."""
+        code, data = self.c.call("/api/chat-support")
+        support = (data or {}).get("support") if code == 200 and isinstance(data, dict) else None
+        state = support.get("state") if isinstance(support, dict) else None
+        return state if isinstance(state, str) else None
+
+    def then_chat_usable(self) -> None:
+        """Without a model the walk ends at the chat box or at the prepare page's one action. A chat box that cannot be used (the tool is not
+        checked for chat, an administrator's policy holds it back, or the state cannot be read) is a dead end, whatever the box looks like."""
+        self.dead_end = None
+        if self.haiku or self.last_look != CHAT_INPUT:
+            return
+        state = self.chat_state()
+        if state == "verified":
+            return
+        self.dead_end = f"the chat box was reached, but the chat cannot be used ({'the state could not be read' if state is None else 'state ' + state})"
+        self.w.dead_end(self.dead_end)
+        self.check.warn("task 1 ends in a chat box that cannot be used", self.dead_end)
+
     def then_first_reply(self) -> None:
         chat = self.chat or self.find_chat()
         if not chat:
@@ -1224,6 +1376,7 @@ class Run:
         self.page.settle()
         code, data = self.c.call("/api/routines")
         mine = [r for r in (data or {}).get("routines", []) if isinstance(r, dict) and str(r.get("name", "")).startswith("QA47")] if code == 200 and isinstance(data, dict) else []
+        mine = [r for r in mine if r.get("id") not in self.orig.get("routines", set())]       # one that was there before the run began is not this run's
         for r in mine:
             if r.get("id") not in self.made["routines"]:
                 self.made["routines"].append(r.get("id"))
@@ -1265,7 +1418,7 @@ class Run:
             return code in (200, 201, 202, 204, 404)
         code, data = self.c.call("/api/routines")
         for r in ((data or {}).get("routines") or []) if code == 200 and isinstance(data, dict) else []:
-            if isinstance(r, dict) and (r.get("id") in self.made["routines"] or str(r.get("name", "")).startswith("QA47")):
+            if isinstance(r, dict) and r.get("id") in self.made["routines"] and r.get("id") not in self.orig.get("routines", set()):
                 drop(f"/api/routines/{r.get('id')}/delete", "POST", {})
         code, data = self.c.call("/api/chats")
         for c in ((data or {}).get("chats") or []) if code == 200 and isinstance(data, dict) else []:
@@ -1287,8 +1440,10 @@ class Run:
 
     def result(self) -> dict:
         ledger_end = self.ledger()
+        if ledger_end is None:                       # not known is not zero: it stays null, is a FAIL, and the other version then spends nothing
+            self.check.fail("the day's ledger could not be read at the end, so the amount spent is not known")
         return {"label": self.label, "mode": "haiku" if self.haiku else "no-ai", "ui": self.ui, "tasks": self.tasks, "phone": self.phone,
-                "money": {"ledger_end": ledger_end if ledger_end is not None else 0.0, "claude_cap": self.cap, "chat_check_reserve": CHAT_CHECK_RESERVE if self.haiku else 0.0},
+                "money": {"ledger_end": ledger_end, "claude_cap": self.cap, "chat_check_reserve": CHAT_CHECK_RESERVE if self.haiku else 0.0},
                 "shots": self.shots, "checks": {"ok": self.check.passed, "warn": self.check.warned, "fail": self.check.failed}}
 
 

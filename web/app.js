@@ -2683,7 +2683,7 @@ function homeToday(state) {
   const seen = new Set();
   const recent = [];
   for (const c of chats ? chats.chats.slice().sort((a, b) => (Number(b.last_at) || 0) - (Number(a.last_at) || 0)) : []) {
-    if (!c || c.problem || routineIds.has(c.id) || !(c.turns > 0) || seen.has(c.profile_id) || !names.has(c.profile_id)) continue;
+    if (!c || c.problem || routineIds.has(c.id) || typeof c.routine_title === "string" || !(c.turns > 0) || seen.has(c.profile_id) || !names.has(c.profile_id)) continue;
     seen.add(c.profile_id);
     recent.push(`${names.get(c.profile_id)}（${homeWhen(c.last_at, now)}）`);
     if (recent.length >= 3) break;
@@ -2836,7 +2836,7 @@ async function viewEmployees() {
     el("section", { class: "section", "data-employees": "shared" },
       sectionHead("大家共用的", null),
       el("ul", { class: "work-links" },
-        link("#/memory", "記憶", "每位員工都會知道的幾句話：關於你、你的工作、你的決定。"),
+        link("#/memory", "記憶", "可以讓員工帶著的幾句話：關於你、你的工作、你的決定。你可以選哪些員工帶著。"),
         link("#/shared", "共用資料夾", "讓員工看同一個資料夾裡的檔案。"),
         link("#/chat", "對話紀錄", "和員工聊過的對話，也能接著聊。"),
         link("#/office", "辦公室", "像遊戲的樣子看大家。")),

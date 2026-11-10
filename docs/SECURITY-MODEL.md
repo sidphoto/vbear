@@ -2296,7 +2296,7 @@ no route, no key of `config.json`, no data file, no kind of chat event, and no k
 - **The home page's box sends one message, by the person's press.** 「想做什麼？跟 CEO 說」 sends with 送出, the same request (`POST /api/chats/<id>/messages`)
   as the chat page's 送出, under the same per-turn and daily limits. Drawing the page, typing and switching to it send nothing (guard rule 15c). When the CEO is
   answering, a card waits, or the chat cannot start, nothing is sent: the words are put in the chat's box.
-- **The spending limits are folded away, not weaker.** The menu has no spending page and the home page shows no amount; the day's limit and the day's use
+- **The spending limits are folded away, not weaker.** The menu has no spending page and the new home blocks show no amount (the old home that advanced mode calls unchanged can show the amounts on its cards); the day's limit and the day's use
   are in the settings section 「用量與上限」, which is closed until opened (`#/settings?open=limits` opens it). Every check of the server is as it was: the
   per-turn limit, the daily limit, the routines' own limit, and the red-lamp stop. When a limit stops a message, a routine, a group or a dispatch, the
   screen says in plain words that nothing was sent or spent, that the count starts again at 0:00, and gives a button to the settings. **The AI still cannot

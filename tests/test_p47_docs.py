@@ -147,9 +147,20 @@ class ChangelogTests(unittest.TestCase):
             self.assertIn(word, self.first, word)
 
     def test_it_says_what_did_not_change_and_the_five_rules(self):
-        for word in ("What did not change (safety)", "No route, setting, data file, kind of chat event or `localStorage` key was added", "15a", "15b", "15c", "15d", "15e",
+        for word in ("What did not change (safety)", "No server route (API), setting, data file, kind of chat event or `localStorage` key was added", "15a", "15b", "15c", "15d", "15e",
                      "Advanced mode is not a permission", "the AI still cannot raise a limit", "Money.", "Known limits."):
             self.assertIn(word, self.first, word)
+
+    def test_it_does_not_overstate_the_money_the_routes_or_the_sweep(self):
+        for word in ("There is no amount of money in the new home blocks", "so its cards can still show amounts", "port 7802 only", "for both versions together",
+                     "never counted as zero", "the page has two new addresses", "17 normal pages", "not by that sweep"):
+            self.assertIn(word, self.first, word)
+        self.assertNotIn("There is no amount of money on the home page", self.first)
+        self.assertNotIn("refuses the ports 7788 and 7789", self.first)
+        adr = flat(raw("docs", "adr", "0013-plain-navigation.md"))
+        self.assertIn("新的一般首頁區塊沒有金額", adr)
+        self.assertNotIn("首頁沒有金額；", adr)
+        self.assertIn("the new home blocks show no amount", flat(raw("docs", "SECURITY-MODEL.md")))
 
     def test_it_describes_the_real_machine_walk_with_its_caps(self):
         for word in ("tools/qa_p47.py", "--remote-debugging-pipe", "no TCP port", "--no-ai", "--haiku", "US$0.30", "7788", "7789", "tests/test_qa_p47.py", "tests/test_p47_docs.py"):

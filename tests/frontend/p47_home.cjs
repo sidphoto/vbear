@@ -630,6 +630,13 @@ function check15c(log, phase, typed, messages) {
     assert.strictEqual(page.location.hash, "#/chat/c1");
   });
 
+  await test("fix47 employees: the memory entry does not say every employee knows it (Codex and AGY employees have it off until the person says yes)", async () => {
+    const page = await home(world(), "#/employees");
+    const t = text(page.main);
+    assert.ok(t.includes("可以讓員工帶著的幾句話") && t.includes("你可以選哪些員工帶著"), t);
+    assert.ok(!t.includes("每位員工都會知道"));
+  });
+
   await test("employees: 刪除 asks first (nothing is sent until the person agrees); no employees: a plain sentence and the ways to add", async () => {
     const page = await home(world({ chats: [] }), "#/employees");
     all(one(page.main, "data-employee", "p-acc"), (n) => n.getAttribute && n.getAttribute("data-employee-action") === "delete")[0].click(); await tick(20);
