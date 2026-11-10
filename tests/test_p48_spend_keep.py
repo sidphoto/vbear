@@ -1,4 +1,5 @@
 """P48-5 / 16f: deleted records still count. No daemon or real CLI."""
+import fcntl
 import os
 import stat
 import tempfile
@@ -7,7 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 from unittest import mock
 
-from vbear import chief, meetings as mt, staffing as st, memory_suggest as ms, skillbook_suggest as ks
+from vbear import chief, meetings as mt, staffing as st, memory_suggest as ms, skillbook_suggest as ks, spend_keep
 from vbear.meeting_runner import MeetingRunner
 from tests.test_meetings import record, evidence
 from tests.test_staffing import staffing_record
@@ -119,6 +120,124 @@ class SpendKeepTests(unittest.TestCase):
                 with self.assertRaises(mt.MeetingError):
                     mod.delete(rec['id'])
             self.assertTrue(store.path().exists())
+
+    def temp_file(self, rec):
+        folder = spend_keep._folder(create=True)
+        kind = next(kind for kind, prefix in spend_keep.KINDS.items() if rec['id'].startswith(prefix + '-'))
+        fd, name = tempfile.mkstemp(dir=folder, prefix=f"{kind}-{rec['id']}.json.", suffix='.tmp')
+        os.close(fd)
+        os.utime(name, (self.now, self.now))
+        return Path(name)
+
+    def test_interrupted_temp_and_hidden_files_keep_original_cost_known(self):
+        for mod, store_cls in CASES:
+            with self.subTest(kind=mod.__name__):
+                rec, store = self.make(mod, store_cls)
+                before = self.runner._day()
+                path = self.temp_file(rec)
+                path.write_text('{interrupted')
+                os.utime(path, (self.now, self.now))
+                self.assertEqual(self.runner._day(), before)
+                for name in ('.DS_Store', '.fictional-metadata'):
+                    (path.parent / name).write_bytes(b'not a tombstone')
+                self.assertTrue(store.path().exists())
+                self.assertGreater(before, 0)
+                self.assertEqual(self.runner._day(), before)
+                self.assertEqual(self.runner.ledger({})['spent_usd'], mt.fmt(before))
+                self.assertTrue(path.exists())
+
+    def test_only_exact_atomic_temp_names_are_ignored(self):
+        rec, _ = self.make(mt, mt.MeetingStore)
+        path = self.temp_file(rec)
+        for name in ('unrecognized.tmp', f"meeting-{rec['id']}.json.tmp",
+                     f"meeting-{rec['id']}.json.abcdefg.tmp",
+                     f"meeting-{rec['id']}.json.abcdefghi.tmp",
+                     f"meeting-{rec['id']}.json.ABCDEFGH.tmp",
+                     f"meeting-{rec['id']}.json.abcdefgh.tmp.extra",
+                     'meeting-s-0123456789ab.json.abcdefgh.tmp', 'unrecognized.json'):
+            with self.subTest(name=name):
+                bad = path.parent / name
+                bad.write_text('{broken')
+                try:
+                    with self.assertRaises(mt.MeetingError) as got:
+                        self.runner._day()
+                    self.assertEqual(got.exception.code, mt.SPEND_UNKNOWN)
+                    with self.assertRaises(mt.MeetingError) as blocked:
+                        self.runner._blockers(Decimal('.1'), Decimal('1'), mt.DEFAULT_LIMITS)
+                    self.assertEqual(blocked.exception.code, mt.SPEND_UNKNOWN)
+                    self.assertTrue(bad.exists())
+                finally:
+                    bad.unlink()
+
+    def test_stale_temp_cleanup_preserves_original_and_active_temp(self):
+        rec, store = self.make(mt, mt.MeetingStore)
+        before = self.runner._day()
+        fresh, stale, active = (self.temp_file(rec) for _ in range(3))
+        old = self.now - 86401
+        os.utime(fresh, (self.now, self.now))
+        for path in (stale, active):
+            os.utime(path, (old, old))
+        with active.open('r') as out:
+            fcntl.flock(out.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertEqual(self.runner._day(), before)
+            self.assertFalse(stale.exists())
+            self.assertTrue(fresh.exists())
+            self.assertTrue(active.exists())
+        self.assertEqual(self.runner._day(), before)
+        self.assertFalse(active.exists())
+        self.assertTrue(store.path().exists())
+
+    def test_writer_holds_temp_lock_until_publication(self):
+        rec, store = self.make(mt, mt.MeetingStore)
+        before = self.runner._day()
+        replace = os.replace
+
+        def scan_before_publish(src, dst):
+            path = Path(src)
+            old = self.now - 86401
+            os.utime(path, (old, old))
+            with path.open('r') as reader:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(reader.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertEqual(self.runner._day(), before)
+            self.assertTrue(path.exists())
+            self.assertTrue(store.path().exists())
+            return replace(src, dst)
+
+        with mock.patch.object(spend_keep.os, 'replace', side_effect=scan_before_publish):
+            mt.delete(rec['id'])
+        self.assertEqual(self.runner._day(), before)
+        self.assertFalse(store.path().exists())
+
+    def test_temp_cleanup_refusal_does_not_make_original_cost_unknown(self):
+        rec, _ = self.make(mt, mt.MeetingStore)
+        before = self.runner._day()
+        path = self.temp_file(rec)
+        old = self.now - 86401
+        os.utime(path, (old, old))
+        with mock.patch.object(Path, 'unlink', side_effect=PermissionError('fake cleanup refusal')):
+            self.assertEqual(self.runner._day(), before)
+        self.assertTrue(path.exists())
+
+    def test_temp_cleanup_never_removes_symlink_hardlink_or_public_file(self):
+        rec, _ = self.make(mt, mt.MeetingStore)
+        before = self.runner._day()
+        target = self.base / 'fictional-source'
+        target.write_text('keep this')
+        link, hardlink, public = (self.temp_file(rec) for _ in range(3))
+        link.unlink()
+        link.symlink_to(target)
+        hardlink.unlink()
+        os.link(target, hardlink)
+        public.chmod(0o644)
+        old = self.now - 86401
+        for path in (target, public):
+            os.utime(path, (old, old))
+        self.assertEqual(self.runner._day(), before)
+        self.assertTrue(link.is_symlink())
+        self.assertTrue(hardlink.exists())
+        self.assertTrue(public.exists())
+        self.assertEqual(target.read_text(), 'keep this')
 
     def test_every_board_counts_kept_spend(self):
         from vbear.staffing_runner import StaffingRunner

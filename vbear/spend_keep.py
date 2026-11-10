@@ -5,6 +5,7 @@ count twice; it can never lower the day. Damaged evidence never expires silently
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -19,8 +20,11 @@ from .jsonstore import _fsync_dir
 
 DIR = 'spend-keep'
 KEEP = 2 * 86400
+TEMP_KEEP = 86400
 KINDS = {'meeting': 'm', 'staffing': 's', 'chief': 'cos', 'memory_suggest': 'ms', 'skill_suggest': 'ks'}
-NAME_RE = re.compile(r'^(meeting-m|staffing-s|chief-cos|memory_suggest-ms|skill_suggest-ks)-[0-9a-f]{12}\.json\Z')
+_NAME = r'(meeting-m|staffing-s|chief-cos|memory_suggest-ms|skill_suggest-ks)-[0-9a-f]{12}\.json'
+NAME_RE = re.compile(_NAME + r'\Z')
+TEMP_RE = re.compile(_NAME + r'\.[a-z0-9_]{8}\.tmp\Z')
 MAX_FILE = 1 << 20
 
 
@@ -71,14 +75,34 @@ def _write(path, tomb):
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + '.', suffix='.tmp')
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as out:
+            fcntl.flock(out.fileno(), fcntl.LOCK_EX)
             json.dump(tomb, out, ensure_ascii=False)
             out.flush()
             os.fsync(out.fileno())
-        os.replace(tmp, path)
-        _fsync_dir(path.parent)
+            os.replace(tmp, path)
+            _fsync_dir(path.parent)
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
+
+
+def _prune_temp(path):
+    """Best effort: only old, private, unlocked files from our atomic writer."""
+    fd = None
+    try:
+        fd, _ = strictjson.open_owned(path, max_bytes=MAX_FILE)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        st = os.fstat(fd)
+        if st.st_nlink != 1 or st.st_mode & 0o077 or st.st_mtime >= time.time() - TEMP_KEEP:
+            return
+        current = path.lstat()
+        if (current.st_dev, current.st_ino) == (st.st_dev, st.st_ino):
+            path.unlink()
+    except (OSError, strictjson.ReadRefused):
+        pass
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 def _load(path):
@@ -125,10 +149,13 @@ def with_kept(kind, kinds):
             except FileNotFoundError:
                 return original
             for path in sorted(folder.iterdir()):
+                if path.name.startswith('.'):
+                    continue
+                if TEMP_RE.fullmatch(path.name):
+                    # Before publication the original still accounts for the cost.
+                    _prune_temp(path)
+                    continue
                 if not NAME_RE.fullmatch(path.name):
-                    # An atomic write's temporary file is not published evidence.
-                    if path.name.endswith('.tmp'):
-                        continue
                     raise _unknown()
                 rec = _load(path)
                 if all(t['ended_at'] < time.time() - KEEP for t in rec['turns']):
