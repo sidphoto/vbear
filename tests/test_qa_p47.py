@@ -854,6 +854,37 @@ class RunTests(unittest.TestCase):
         run.read_other()
         self.assertEqual(run.other_state, "unknown", "a file that is not the other version's")
 
+    def test_a_result_file_that_is_there_but_cannot_be_read_is_unknown_even_without_a_start_marker(self):
+        run, page, console = self.run_for(haiku=True, console=FakeConsole(ledger="0.01"))
+        path = self.root / "qa47-before.json"
+        for what, make in (("not json", lambda: path.write_text("{not json")), ("empty", lambda: path.write_text("")),
+                           ("null", lambda: path.write_text("null")), ("a list", lambda: path.write_text("[]")),
+                           ("a folder", lambda: path.mkdir())):
+            if path.is_dir():
+                path.rmdir()
+            elif path.exists():
+                path.unlink()
+            make()
+            self.assertFalse((self.root / "started-before.txt").exists())
+            run.read_other()
+            self.assertEqual(run.other_state, "unknown", what)
+            self.assertIsNone(run.other_ledger(), what)
+            self.assertFalse(run.money_ok(0.0), f"{what}: no step that spends Claude's money")
+        if path.is_dir():
+            path.rmdir()
+        run.read_other()
+        self.assertEqual(run.other_state, "none", "no file at all and no marker is the first of the pair")
+        self.assertTrue(run.money_ok(0.03))
+
+    def test_a_start_marker_that_cannot_be_written_refuses_every_step_that_spends(self):
+        run, page, console = self.run_for(haiku=True, console=FakeConsole(ledger="0.00"))
+        run.read_other()
+        self.assertTrue(run.money_ok(0.03), "the first of the pair spends when the marker is kept")
+        (self.root / "started-after.txt").mkdir()                    # a folder where the marker has to be: the write fails
+        run.mark_started()
+        self.assertFalse(run.money_ok(0.03), "no evidence of the start is kept: the next run could not know this one began")
+        self.assertTrue([line for line in self.lines if line.startswith("warn") and "marker" in line])
+
     def test_a_ledger_that_cannot_be_read_at_the_end_is_null_with_a_fail_and_the_next_run_then_spends_nothing(self):
         class Gone(FakeConsole):
             def call(self, path, method="GET", body=None):
@@ -902,6 +933,81 @@ class RunTests(unittest.TestCase):
         with self.assertRaises(qa.Stop):
             run.wait("something that never comes", lambda: False, cap=10 ** 6, every=1.0)
         self.assertLess(clock.now, qa.WAIT_CAP_S + 30)
+
+    def test_a_wait_by_api_polling_stops_when_the_five_minutes_of_the_chrome_are_over(self):
+        # No Chrome is started: a Browser object built without its program, on a clock that moves by hand. The probes are API calls, so no
+        # Chrome command is there to find out that the 5 minutes are over.
+        b = qa.Browser.__new__(qa.Browser)
+        b.now, b.started, b.proc, b.sent = 0.0, 0.0, None, []
+        b.clock = lambda: b.now
+        run, page, console = self.run_for()
+        page.b = b
+        run.clock = lambda: b.now
+        probes, sleeps = [], []
+
+        def probe():
+            probes.append(b.now)
+            b.now += 1.0
+            return False
+
+        def sleep(sec):
+            sleeps.append(sec)
+            b.now += sec
+        run.sleep = sleep
+        run.started = b.now
+        b.now = qa.CHROME_CAP_S - 2.0                           # the Chrome has two seconds left
+        with self.assertRaises(qa.Stop):
+            run.wait("something that never comes", probe, cap=qa.WAIT_CAP_S, every=5.0)
+        self.assertLessEqual(max(probes), qa.CHROME_CAP_S, "no probe after the 5 minutes")
+        self.assertLessEqual(b.now, qa.CHROME_CAP_S + 1.0)
+        for before, sec in zip(probes, sleeps):
+            self.assertLessEqual(before + 1.0 + sec, qa.CHROME_CAP_S + 1e-9, "no sleep goes past what is left of the 5 minutes")
+
+    def test_a_wait_that_begins_after_the_five_minutes_probes_nothing(self):
+        b = qa.Browser.__new__(qa.Browser)
+        b.now, b.started, b.proc = qa.CHROME_CAP_S + 10.0, 0.0, None
+        b.clock = lambda: b.now
+        run, page, console = self.run_for()
+        page.b = b
+        run.clock = lambda: b.now
+        run.started = b.now
+        probes = []
+        with self.assertRaises(qa.Stop):
+            run.wait("anything", lambda: probes.append(1) or True)
+        self.assertEqual(probes, [])
+
+    def test_the_http_call_of_a_wait_never_waits_longer_than_what_is_left_and_is_back_to_normal_after_it(self):
+        import unittest.mock as mock
+        b = qa.Browser.__new__(qa.Browser)
+        b.now, b.started, b.proc = qa.CHROME_CAP_S - 7.0, 0.0, None
+        b.clock = lambda: b.now
+        console = qa.Console(7802, "t")                         # the real class: only the network call underneath is replaced
+        seen = []
+
+        class Reply:
+            status = 200
+
+            def __enter__(inner):
+                return inner
+
+            def __exit__(inner, *a):
+                return False
+
+            def read(inner):
+                return b"{}"
+
+        def fake_urlopen(req, timeout=None):
+            seen.append(timeout)
+            return Reply()
+        run, page, _ = self.run_for(console=console)
+        page.b = b
+        run.clock = lambda: b.now
+        run.started = b.now
+        with mock.patch.object(qa.urllib.request, "urlopen", fake_urlopen):
+            run.wait("an answer", lambda: console.call("/api/x")[0] == 200)
+            self.assertLessEqual(seen[-1], 7.0, "inside a wait the call is held to what is left")
+            console.call("/api/x")
+            self.assertEqual(seen[-1], console.timeout, "outside a wait (the clean-up) it is the normal limit")
 
     def test_the_chat_check_does_not_ask_for_more_than_one_wait(self):
         source = SOURCE.read_text(encoding="utf-8")
