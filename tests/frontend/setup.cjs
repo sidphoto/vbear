@@ -250,7 +250,7 @@ test("home: a person who has not finished and has no ready tool is sent to the s
   const main = await open("#/");
   assert.strictEqual(global.location.hash, "#/setup");
   assert(calls.some((c) => c[1] === "/api/setup/settle" && c[0] === "POST"));
-  assert(!text(main).includes("冒險者大廳"), "the lobby was not drawn first");
+  assert(!text(main).includes("等你決定"), "the home page was not drawn first");
 });
 
 test("home: an upgrader with a ready tool stays on the lobby and is told once", async () => {
@@ -264,7 +264,8 @@ test("home: an upgrader with a ready tool stays on the lobby and is told once", 
   setPage({ config: { setup_done: true, setup_notice: false, onboarding_dismissed: true } });
   const again = await open("#/");
   assert.strictEqual(byAttr(again, "data-setup", "upgrade-notice").length, 0);
-  assert(!calls.some((c) => c[1].startsWith("/api/setup/")), "no tool was asked");
+  // (P47-2: a home page with no employee reads the start-up's tool list, from the server's own cache, to tick its first step; it never asks a tool itself)
+  assert(!calls.some((c) => c[1].startsWith("/api/setup/") && (c[0] !== "GET" || c[1].includes("force"))), "no tool was asked");
 });
 
 test("home: the server saying nothing (no setup_done, no config, a failed settle) forces nobody anywhere", async () => {
@@ -282,10 +283,10 @@ test("home: the server saying nothing (no setup_done, no config, a failed settle
 });
 
 test("the first game stays on the lobby, after the start-up (the lobby is where it is drawn)", async () => {
-  setPage({ config: { setup_done: true, onboarding_dismissed: false }, tools: [ready("claude")] });
+  setPage({ config: { setup_done: true, onboarding_dismissed: false, advanced_mode: true }, tools: [ready("claude")] });
   const main = await open("#/");
   assert.strictEqual(global.location.hash, "#/");
-  assert(text(main).includes("冒險者大廳") && text(main).includes("新手第一局"), "the first game is still on the lobby");
+  assert(text(main).includes("首頁") && text(main).includes("新手第一局"), "the first game is still on the home page (P47-2: in its advanced part)");
 });
 
 test("the terminal of the start-up page is named after the tool and the action, and explained in plain words", () => {

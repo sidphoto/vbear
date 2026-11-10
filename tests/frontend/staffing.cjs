@@ -104,7 +104,7 @@ function setPage(over = {}) {
     }
     if (p === "/api/agent-profiles") return jsonResponse({ ok: true, profiles: page.profiles });
     if (p === "/api/tasks") return jsonResponse({ ok: true, tasks: page.tasks });
-    if (p === "/api/config") return jsonResponse({ ok: true, config: {} });
+    if (p === "/api/config") return jsonResponse({ ok: true, config: { advanced_mode: true } });   // P47-2: the board is the advanced part of the home page
     if (p === "/api/agent-builder/catalog") return jsonResponse(page.catalog);
     if (p === "/api/meetings" && method === "GET") return jsonResponse({ meetings: [] });
     if (p === "/api/meetings/ledger") return jsonResponse(page.ledger);
@@ -977,6 +977,8 @@ test("home: a staffing proposal waiting for the chairman is on the 'your turn' b
   assert(card.find((n) => n.tag === "a" && n.getAttribute("href") === "#/staffing/" + SID));
   assert(text(card).includes("官網改版") && text(card).includes("組隊提案"), text(card));
   assert(text(main).includes("1 份組隊提案等你"), text(main).slice(0, 600));
+  const waitRow = main.find((n) => n.getAttribute && n.getAttribute("data-home-row") === "staffing");
+  assert(waitRow && text(waitRow).includes("官網改版") && waitRow.find((n) => n.tag === "a" && n.getAttribute("href") === "#/staffing/" + SID), "and a row of 等你決定");
   noMarkup(main);
   setRecord({}, { staffingError: "壞了" });
   const bad = await open("#/");

@@ -85,6 +85,7 @@ function setPage(over = {}) {
   setHandler((url, opts) => {
     const p = url.split("?")[0];
     const method = (opts && opts.method) || "GET";
+    if (p === "/api/config") return jsonResponse({ ok: true, config: { advanced_mode: true } });   // P47-2: the board is the advanced part of the home page
     if (p === "/api/overview") return jsonResponse({ ok: true, totals: { active: 0 }, generated_at: 1, stale: false, skills_with_problems: [] });
     if (p === "/api/skills") return jsonResponse({ skills: [], categories: [] });
     if (p === "/api/roles") return jsonResponse({ roles: [] });
@@ -783,7 +784,9 @@ test("the home page asks for the groups and puts the ones that wait on the board
   setPage({ groups: { groups: [row({ waiting: true, state: "running" })], problems: [] } });
   const main = await open("#/");
   assert(FETCH_LOG.some((c) => c.url === "/api/groups"), "the lobby reads the groups");
-  assert(q(main, "board-card"), "a card on the board");
+  assert(q(main, "board-card"), "a card on the board (the advanced part of the home page)");
+  const row0 = main.find((x) => x.getAttribute && x.getAttribute("data-home-row") === "group_waiting");
+  assert(row0, "and a row of 等你決定, the first thing on the page");
 });
 
 test("a member's own chat opened by its address says it belongs to the group, links to it, and has no box to talk in", async () => {
