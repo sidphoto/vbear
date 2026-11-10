@@ -44,10 +44,17 @@ def _can_chat(profile) -> bool:
     return isinstance(profile, dict) and chat_service.card_gate(profile)[0]
 
 
-def _ready_tool(rows):
-    """(tool id, name, row) of the first ready tool that can chat, or None."""
+def _not_ready_reason(name: str) -> str:
+    return f"你選的 {name} 還沒準備好，回開始設定把它準備好，或換一家。"
+
+
+def _ready_tool(rows, wanted=None):
+    """(tool id, name, row) of the first ready tool that can chat, or None. With ``wanted`` only that tool is looked at: it is
+    never swapped for another one (P48-3)."""
     by_id = {r.get("id"): r for r in rows if isinstance(r, dict)}
     for tool_id, name in TOOLS:
+        if wanted is not None and tool_id != wanted:
+            continue
         row = by_id.get(tool_id)
         if row and row.get("ready") is True:
             return tool_id, name, row
@@ -59,17 +66,23 @@ def needed(profiles) -> bool:
     return not any(_can_chat(p) for p in profiles if isinstance(p, dict))
 
 
-def plan(profiles, tool_rows) -> dict:
-    """``tool_rows`` are ai_tool_status.report rows; they are only read when the step is needed (pass [] otherwise)."""
+def plan(profiles, tool_rows, wanted=None) -> dict:
+    """``tool_rows`` are ai_tool_status.report rows; they are only read when the step is needed (pass [] otherwise).
+
+    ``wanted`` (P48-3, ADR 0014): the AI the person picked in the start-up (``claude``, ``codex`` or ``agy``). The card is
+    planned on that one or not at all: when it is not ready the plan says so plainly (``reason``) and goes back to the
+    start-up, it never picks another tool for the person. Anything else raises ValueError. ``None`` keeps the old order."""
+    if wanted is not None and wanted not in dict(TOOLS):
+        raise ValueError("tool 必須是 claude、codex 或 agy")
     needed_now = needed(profiles)
     out = {"ok": True, "needed": needed_now, "can_create": False, "go": None, "reason": "", "tool": None, "tool_name": None,
            "name": NAME, "position": POSITION, "launch_mode": LAUNCH_MODE, "instructions": INSTRUCTIONS, "opening": OPENING,
            "chat_ready": None, "chat_note": ""}
     if not needed_now:
         return out
-    found = _ready_tool(tool_rows)
+    found = _ready_tool(tool_rows, wanted)
     if found is None:
-        out.update(go="setup", reason=SETUP_REASON)
+        out.update(go="setup", reason=SETUP_REASON if wanted is None else _not_ready_reason(dict(TOOLS)[wanted]))
         return out
     tool_id, name, row = found
     out.update(can_create=True, tool=tool_id, tool_name=name)
