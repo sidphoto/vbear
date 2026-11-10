@@ -159,10 +159,10 @@ class SkillsAndRoutinesDocsTests(unittest.TestCase):
         self.assertIn("5 minutes", self.section)
 
     def test_the_words_the_documents_quote_are_the_ones_the_page_uses(self):
-        for words in ("現在開始", "這次跳過", "補做", "不用了", "用技能", "存成技能", "整理成技能", "從技能帶入", "讓 Mac 保持清醒", "有工作在跑時不讓 Mac 睡著",
-                      "VBear 的視窗要開著、Mac 要醒著，例行工作才會做", "沒有打開「自己動手」第 3 項"):
+        for words in ("現在開始", "這次跳過", "補做", "不用了", "用技能", "存成技能", "整理成技能", "從常用做法帶入", "讓 Mac 保持清醒", "有工作在跑時不讓 Mac 睡著",
+                      "VBear 的視窗要開著、Mac 要醒著，定時工作才會做", "沒有打開「自己動手」第 3 項"):
             self.assertIn(words, self.app, words)
-        for words in ("這段是員工寫的，存成技能後，你用它時會變成你對員工說的話", "之後改技能，不會改這個例行工作"):
+        for words in ("這段是員工寫的，存成技能後，你用它時會變成你對員工說的話", "之後改常用做法，不會改這個定時工作"):
             self.assertIn(words, self.app, words)
         self.assertIn("這段是員工寫的，存成技能後，你用它時會變成你對員工說的話", self.adr_raw)
 

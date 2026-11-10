@@ -161,7 +161,7 @@ test("a group alone links to the group, and routine reminders and these share th
     { kind: "group_resume", group_id: GID, name: "市集準備", state: "unknown", until: null, text: UNKNOWN.text }];
   serve({ dview: dview(null, { state: "running" }), waiting: both });
   await open("#/dispatch/" + DID);
-  assert(text(b).includes("例行工作「市集日報」08:00到時間了") && text(b).includes("群組「市集準備」AI 工具沒說什麼時候恢復"), text(b));
+  assert(text(b).includes("定時工作「市集日報」08:00到時間了") && text(b).includes("群組「市集準備」AI 工具沒說什麼時候恢復"), text(b));
   assert.strictEqual(attr(find(b, "data-waiting", "link"), "href"), "#/routines");
 });
 

@@ -254,7 +254,7 @@ async function test(name, fn) {
     const box = () => walk(page.main).find((n) => n.getAttribute && n.getAttribute("data-setting") === "show-mcode");
     assert.ok(box(), "the switch is on the settings page");
     assert.ok(page.main.textContent.includes("顯示 MCODE"));
-    assert.ok(page.main.textContent.includes("關掉不會刪除已有的 MCODE 角色卡"));
+    assert.ok(page.main.textContent.includes("關掉不會刪除已有的 MCODE 員工"));
     assert.ok(!box().checked, "off by default");
     box().checked = true;
     box().dispatch("change", { target: box() });

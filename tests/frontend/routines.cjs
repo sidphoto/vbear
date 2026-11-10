@@ -1,4 +1,4 @@
-// P44-2: the 例行工作 page (#/routines), the line over every page for what waits for the person, the routine rows of
+// P44-2: the 定時工作 page (#/routines), the line over every page for what waits for the person, the routine rows of
 // 「AI 自己做了什麼」 and the routine title of a chat in the list. The real web/app.js on a synthetic DOM, fetch answered by the test;
 // every name and text here is made up and the page shows them as text only.
 // Run: node tests/frontend/routines.cjs   (exit code 0 = pass)
@@ -86,11 +86,11 @@ const test = (name, fn) => tests.push([name, fn]);
 test("the page lists a routine with its employee, days, times, next time, limit and text, as text", async () => {
   setServer();
   const main = await open();
-  assert(text(main.find((n) => n.tag === "h1")).includes("例行工作"));
+  assert(text(main.find((n) => n.tag === "h1")).includes("定時工作"));
   const card = by(main, "data-routine", "card");
   assert(card, "a card");
   const t = text(card);
-  for (const s of ["市集日報", "文案小編", "每週一、二、三、四、五", "08:00、13:00", "請整理昨天的銷售。", "US$0.50", "開啟"]) assert(t.includes(s), s);
+  for (const s of ["市集日報", "文案小編", "每週一、二、三、四、五", "08:00、13:00", "請整理昨天的銷售。", "US$0.50", "開著"]) assert(t.includes(s), s);
   assert(text(by(card, "data-routine", "next")).includes("下一次"));
 });
 
@@ -98,7 +98,7 @@ test("the money line says what was spent, the limit, the default rule and who st
   setServer();
   const main = await open();
   const t = text(by(main, "data-routines", "money"));
-  for (const s of ["US$0.20", "US$1.50", "每天上限 US$3.00 的一半", "不會超過每天上限", "共用每天上限"]) assert(t.includes(s), s);
+  for (const s of ["US$0.20", "US$1.50", "花費上限 US$3.00 的一半", "不會超過花費上限", "共用花費上限"]) assert(t.includes(s), s);
   assert(text(by(main, "data-routines", "auto-line")).includes("沒有打開"));
   setServer({ auto: true });
   const again = await open();
@@ -168,7 +168,7 @@ test("delete asks first and posts to /delete", async () => {
 test("the new-routine form lists only employees who can chat and posts exactly the six fields", async () => {
   setServer({ routines: [] });
   const main = await open();
-  assert(text(main).includes("還沒有例行工作"));
+  assert(text(main).includes("還沒有定時工作"));
   await click(act(main, "new"));
   const form = by(main, "data-routines", "form");
   const who = by(form, "data-routine-field", "profile");
@@ -179,19 +179,19 @@ test("the new-routine form lists only employees who can chat and posts exactly t
   const [call] = posts();
   assert.strictEqual(call[1], "/api/routines");
   assert.deepStrictEqual(Object.keys(call[2]).sort(), ["days", "enabled", "name", "profile_id", "text", "times"]);
-  assert.deepStrictEqual([call[2].name, call[2].profile_id, call[2].days, call[2].times, call[2].enabled], ["晨間整理", "p-writer", [0, 1, 2, 3, 4], ["08:00"], false]);
+  assert.deepStrictEqual([call[2].name, call[2].profile_id, call[2].days, call[2].times, call[2].enabled], ["晨間整理", "p-writer", [0, 1, 2, 3, 4, 5, 6], ["08:00"], true]);
 });
 
-test("the form has 從技能帶入; opening it reads the skills and posts nothing, and the picker lists names as text", async () => {
+test("the form has 從常用做法帶入; opening it reads the skills and posts nothing, and the picker lists names as text", async () => {
   setServer({ routines: [] });
   const main = await open();
   await click(act(main, "new"));
   const form = by(main, "data-routines", "form");
-  assert(text(form).includes("之後改技能不會改這個例行工作"));
+  assert(text(form).includes("之後改常用做法不會改這個定時工作"));
   await click(act(form, "from-skill"));
   const pick = h.dom().bodyEl.find((n) => attr(n, "data-skill") === "picker");
   assert(pick, "a picker");
-  assert(text(pick).includes("從技能帶入"));
+  assert(text(pick).includes("從常用做法帶入"));
   assert(text(pick).includes("市集日報") && text(pick).includes("<b>粗體</b>"), "names as text");
   assert.strictEqual(pick.findAll((n) => n.tag === "b").length, 0, "markup stays text");
   assert.deepStrictEqual(calls.filter((c) => c[0] === "GET" && c[1] === "/api/my-skills").length, 1);
@@ -311,7 +311,8 @@ test("a run's state, the reason in words, who decided and a link to its chat are
   assert.strictEqual(items.length, 3);
   assert(text(items[0]).includes("完成") && text(items[0]).includes("自己動手第 3 項") && text(items[0]).includes("US$0.12"));
   assert.strictEqual(items[0].find((n) => n.tag === "a").getAttribute("href"), "#/chat/c-0123456789abcdef");
-  assert(text(items[1]).includes("今天的額度用完了"));
+  assert(text(items[1]).includes("今天的用量到你設的上限了"));
+  assert.strictEqual(attr(by(items[1], "data-limit", "go"), "href"), "#/settings?open=limits");
   assert(text(items[2]).includes("不確定有沒有送出") && text(items[2]).includes("不會自己再送一次"));
 });
 
@@ -327,7 +328,7 @@ test("the line over every page names the routine and its time and nothing of its
   setServer({ waiting: [WAITING, { ...WAITING, run_id: "rr-bbbbbbbbbbbb", name: "第二件", slot: "2026-11-09T13:00" }] });
   await open("#/routines");
   assert.strictEqual(bar.hidden, false);
-  assert.strictEqual(text(bar).includes("等你決定：例行工作「市集日報」08:00到時間了，另外還有 1 件"), true, text(bar));
+  assert.strictEqual(text(bar).includes("等你決定：定時工作「市集日報」08:00到時間了，另外還有 1 件"), true, text(bar));
   assert.strictEqual(attr(by(bar, "data-waiting", "link"), "href"), "#/routines");
   assert(!text(bar).includes("請整理"));
   setServer({ waiting: [] });
@@ -407,17 +408,17 @@ test("a reminder and a missed row sit together; the line over every page counts 
   setServer({ waiting: [WAITING, MISSED, { ...MISSED, routine_id: "r-ba9876543210", name: "第二件" }] });
   const main = await open("#/routines");
   assert(by(main, "data-routine-waiting", WAITING.run_id) && by(main, "data-routine-missed", ROUTINE.id) && by(main, "data-routine-missed", "r-ba9876543210"));
-  assert.strictEqual(text(bar), "等你決定：例行工作「市集日報」08:00到時間了；VBear 剛才沒在看，錯過了 2 件例行工作 去處理");
+  assert.strictEqual(text(bar), "等你決定：定時工作「市集日報」08:00到時間了；VBear 剛才沒在看，錯過了 2 件定時工作 去處理");
   setServer({ waiting: [MISSED] });
   await open("#/routines");
-  assert.strictEqual(text(bar), "等你決定：VBear 剛才沒在看，錯過了 1 件例行工作 去處理");
+  assert.strictEqual(text(bar), "等你決定：VBear 剛才沒在看，錯過了 1 件定時工作 去處理");
   assert(!text(bar).includes("請整理"));
 });
 
 test("the page says VBear must be open and the Mac awake, and the switch for keeping the Mac awake posts only keep_awake", async () => {
   setServer();
   const main = await open();
-  assert(text(by(main, "data-routines", "awake-line")).includes("VBear 的視窗要開著、Mac 要醒著，例行工作才會做"));
+  assert(text(by(main, "data-routines", "awake-line")).includes("VBear 的視窗要開著、Mac 要醒著，定時工作才會做"));
   const panel = by(main, "data-routines", "awake");
   const box = by(panel, "data-routine-field", "keep-awake");
   assert(box && box.checked === false, "off by default");

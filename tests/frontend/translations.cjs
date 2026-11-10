@@ -136,7 +136,7 @@ const translated = {description_zh:"<img src=x onerror=alert(1)>中文審查",su
   assert(confirmations.at(-1)[1].includes("每次重新掃描最多會自動翻譯 20 張技能卡"));
   assert(confirmations.at(-1)[1].includes("每張通常不到 1 美分"));
   assert(confirmations.at(-1)[3].details.includes("每次重新掃描最多自動翻譯 20"));
-  const clean=findButton(settings,"清除孤兒翻譯");
+  const clean=findButton(settings,"清除找不到原技能的翻譯");
   answers.push(true,false);await clean.listeners.click();assert(!calls.some(c=>c[0]==="DELETE"));
   answers.push(true,true);await clean.listeners.click();assert(calls.some(c=>c[0]==="DELETE"));
   assert(run("translationDisclosure(2,'codex')").includes("費用上限未知"));

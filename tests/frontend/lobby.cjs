@@ -771,7 +771,7 @@ test("settings: the block can be brought back (or put away) from the settings pa
   const hidden = app.onboardingSettings({ onboarding_dismissed: true }, saveConf);
   assert(text(hidden).includes("新手第一局") && text(hidden).includes("目前已收起"));
   const showBtn = hidden.find((n) => n.getAttribute && n.getAttribute("data-onboard") === "show");
-  assert.strictEqual(text(showBtn), "重新顯示大廳的新手第一局");
+  assert.strictEqual(text(showBtn), "重新顯示首頁的新手第一局");
   const shown = app.onboardingSettings({ onboarding_dismissed: false }, saveConf);
   const hideBtn = shown.find((n) => n.getAttribute && n.getAttribute("data-onboard") === "hide");
   assert.strictEqual(text(hideBtn), "不要再顯示新手第一局");

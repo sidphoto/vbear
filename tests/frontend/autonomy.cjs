@@ -26,20 +26,20 @@ const BLOCK = SRC.slice(SRC.indexOf(START), SRC.indexOf("// ---------- end of th
 
 // the plan's words (plan.md, P40 「自己動手」), and the table the server sends
 const TITLE_1 = "幕僚長可以自己建新員工";
-const EFFECT_1 = "幕僚長提議要新員工時，VBear 不等你確認就建好（一律安全模式），你可以在「AI 自己做了什麼」撤回。";
-const TITLE_2 = "幕僚長可以自己派工給員工";
-const EFFECT_2 = "幕僚長的提議一到就開始派工，不再停在提議卡；員工照舊每個指令都問你。提議要新員工（而第 1 項沒勾）、VBear 拿掉了東西、或幕僚長有問題要問你時，還是會停下來等你。";
-const TITLE_3 = "例行工作可以自己啟用、定時執行";
-const EFFECT_3 = "例行工作到時間時 VBear 自己開始；Mac 醒來或 VBear 打開時，12 小時內錯過的也自己補做一次（每次醒來最多 3 件）。不勾時，到時間只提醒你，由你按「現在開始」。員工要跑指令、改檔案時照舊問你；你不在電腦前時，卡片 5 分鐘沒人按就當作拒絕。例行工作不會自己建立或啟用，只有你能。";
+const EFFECT_1 = "幕僚長提議要新員工時，VBear 不等你確認就建好（一律每件事先問我），你可以在「AI 自己做了什麼」撤回。";
+const TITLE_2 = "幕僚長可以自己分配工作給員工";
+const EFFECT_2 = "幕僚長的提議一到就開始分配工作，不再停在提議卡；員工照舊每個指令都問你。提議要新員工（而第 1 項沒勾）、VBear 拿掉了東西、或幕僚長有問題要問你時，還是會停下來等你。";
+const TITLE_3 = "定時工作到時間可以自己開始";
+const EFFECT_3 = "定時工作到時間時 VBear 自己開始；Mac 醒來或 VBear 打開時，12 小時內錯過的也自己補做一次（每次醒來最多 3 件）。不勾時，到時間只提醒你，由你按「現在開始」。員工要跑指令、改檔案時照舊問你；你不在電腦前時，卡片 5 分鐘沒人按就當作拒絕。定時工作不會自己建立或啟用，只有你能。";
 const TITLE_5 = "碰到上限暫停的工作，倒數結束後自動接續";
-const EFFECT_5 = "派工碰到每天上限或 AI 工具的方案用量上限暫停時，到了恢復時間 VBear 自己按「繼續」（每份派工最多 3 次，全部加起來每天最多 5 次）。被打斷的那一步不會重做，下一步會被告知上一步可能不完整。AI 工具沒說恢復時間時（Claude Code 目前都沒說）不會自己接續；群組不會自己接續。";
+const EFFECT_5 = "分配工作碰到花費上限或 AI 工具的方案用量上限暫停時，到了恢復時間 VBear 自己按「繼續」（每份分配工作最多 3 次，全部加起來每天最多 5 次）。被打斷的那一步不會重做，下一步會被告知上一步可能不完整。AI 工具沒說恢復時間時（Claude Code 目前都沒說）不會自己接續；群組不會自己接續。";
 const LATER = "第 4 項（不必每次問）會在之後的版本加入。";
-const NEVER = ["AI 不能自己調高每天的花費上限。", "AI 不能自己讓員工用完整模式出發。", "AI 不能自己從網路安裝新技能。"];
+const NEVER = ["AI 不能自己調高每天的花費上限。", "AI 不能自己讓員工用「完全交給他（有風險）」開始工作。", "AI 不能自己從網路安裝新技能。"];
 const ITEMS = [
   { id: 1, adr: "0003", key: "create_cards", active: true, title: TITLE_1, effect: EFFECT_1 },
   { id: 2, adr: "0003", key: "dispatch", active: true, title: TITLE_2, effect: EFFECT_2 },
   { id: 3, adr: "0003", key: "routines", active: true, title: TITLE_3, effect: EFFECT_3 },
-  { id: 4, adr: "0003", key: null, active: false, title: "員工在安全模式裡跑指令、改檔案時不必每次問", effect: "還沒有；聊天照舊每個指令、每個檔案修改都問你。" },
+  { id: 4, adr: "0003", key: null, active: false, title: "員工在保護範圍裡跑指令、改檔案時不必每次問", effect: "還沒有；聊天照舊每個指令、每個檔案修改都問你。" },
   { id: 5, adr: "0003", key: "auto_continue", active: true, title: TITLE_5, effect: EFFECT_5 },
 ];
 
@@ -137,7 +137,7 @@ test("ticking opens a dialog first: nothing is sent until 「我了解，打開�
   assert(t.includes(EFFECT_1), t);
   assert(t.includes("US$0.30"), "what the chief of staff costs at most: " + t);
   assert(t.includes("US$0.50"), "what a step costs at most: " + t);
-  assert(t.includes("US$3.00") && t.includes("每天上限"), "and the day they all share: " + t);
+  assert(t.includes("US$3.00") && t.includes("花費上限"), "and the day they all share: " + t);
   assert(t.includes("AI 自己做了什麼") && /停止|撤回/.test(t), t);
   for (const s of NEVER) assert(t.includes(s), s);
   assert(button(d, "我了解，打開"), "the button says what it does");
@@ -166,7 +166,7 @@ test("the third item (routines) has its own dialog words and sends all four valu
   await tick(box(main, "routines"), true);
   const d = dialog();
   assert(text(d).includes(TITLE_3) && text(d).includes(EFFECT_3));
-  assert(text(d).includes("另外在「例行工作」頁設定"), "says where the routines' own daily limit is set");
+  assert(text(d).includes("另外在「定時工作」頁設定"), "says where the routines' own daily limit is set");
   assert.strictEqual(posts().length, 0);
   button(d, "我了解，打開").dispatch("click");
   await settle();
@@ -180,7 +180,7 @@ test("the fifth item (auto_continue) has its own dialog words, says the limits, 
   await tick(box(main, "auto_continue"), true);
   const d = dialog();
   assert(text(d).includes(TITLE_5) && text(d).includes(EFFECT_5));
-  assert(text(d).includes("每份派工最多自己接續 3 次") && text(d).includes("每天") && text(d).includes("10 分鐘"), "says the limits it keeps: " + text(d));
+  assert(text(d).includes("每份分配工作最多自己接續 3 次") && text(d).includes("每天") && text(d).includes("10 分鐘"), "says the limits it keeps: " + text(d));
   assert(text(d).includes("群組"), "says a group never goes on by itself");
   assert.strictEqual(posts().length, 0);
   button(d, "我了解，打開").dispatch("click");
