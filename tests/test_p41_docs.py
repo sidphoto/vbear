@@ -106,7 +106,7 @@ class GroupDocsTests(unittest.TestCase):
             self.assertIn(word, self.adr, word)
 
     def test_the_glossary_has_the_new_terms(self):
-        for term in ("**群組**：", "**點名**：", "_避免_：群聊、聊天室、room、多人會議", "_避免_：tag、mention、標記", "「會議」", "「派工」"):
+        for term in ("**群組**：", "**點名**：", "_避免_：群聊、聊天室、room、多人會議", "_避免_：tag、mention、標記", "「會議」", "「分配工作」"):
             self.assertIn(term, self.glossary, term)
 
     def test_the_numbers_the_documents_quote_are_the_codes(self):
