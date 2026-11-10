@@ -806,7 +806,9 @@ class Console:
             shut_all()                                      # past the time left (or done): no socket stays open, none can be opened
             conn.close()
             worker.join(1.0)                                # the read was cut: the thread ends at once
-            del conn.connect                                # no reference loop keeps the connection alive
+            if not worker.is_alive():
+                del conn.connect                            # no reference loop keeps the connection alive (only once the worker is gone:
+                                                            # a worker still running stays held to the cancel, so it can never reconnect)
         if late or not box or self.budget() <= 0:
             return 0, None
         return box[0]
