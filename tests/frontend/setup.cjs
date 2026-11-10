@@ -39,6 +39,9 @@ const ready = (id) => installed(id, { state: "ready", ready: true, login: id ===
 let page;
 let calls;
 function setPage(over = {}) {
+  // P48-1: the start-up page opens only the tool the person chose (the others are folded into 「其他 AI 工具」). These tests look at the rows, so a
+  // choice is remembered first (the way a returning person has one); the picker itself is in p48_setup.cjs.
+  global.localStorage._store = { "vbear-setup-pick": "claude" };
   page = { tools: ["claude", "codex", "agy", "grok"].map((i) => row(i)), setup_done: false, ...over };
   calls = [];
   setHandler((url, opts = {}) => {

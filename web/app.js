@@ -13557,12 +13557,12 @@ const SETUP_STATE = {
   not_logged_in: ["還沒登入", "b-warn"],
   ready: ["就緒", "b-ok"],
 };
-const SETUP_LEDE = "VBear 借用裝在你電腦上的 AI 工具，用你自己的帳號與方案。挑你有方案的準備就好，只要有一個就緒，就能開始用。";
-const SETUP_NONE_READY = "目前還沒有就緒的 AI 工具。先從下面挑一個你有方案的，按「安裝」，裝好再按「登入」。";
+const SETUP_LEDE = "先選一家你要用的 AI。選了才會展開那一家的準備步驟；其他的之後隨時可以加。VBear 借用裝在你電腦上的 AI 工具，用你自己的帳號與方案。";
+const SETUP_NONE_READY = "目前還沒有就緒的 AI 工具。先選一家你有方案的，再照那一家的步驟安裝、登入。";
 const SETUP_REOPEN_HINT = "安裝好之後如果這裡還是顯示「還沒安裝」，可能要重新打開 VBear，它才找得到剛裝好的程式。";
 const SETUP_ACTION_WORD = { install: "安裝", login: "登入", chat_login: "聊天登入" };
-const SETUP_LEAVE_LABEL = "開始使用";
-const SETUP_LEAVE_BLOCKED = "要先有一個 AI 工具就緒，才能開始使用。";
+const SETUP_LEAVE_LABEL = "下一步：建立 CEO";
+const SETUP_LEAVE_BLOCKED = "要先有一個 AI 工具就緒，才能建立 CEO。";
 const SETUP_UPGRADE_NOTICE = "VBear 多了「開始設定」頁：可以在那裡看每個 AI 工具的狀態，也能補裝其他的。你已經有就緒的 AI 工具，不用重新設定。";
 // The choice of the daily limit (US$): the amounts, and one plain sentence each in terms of the default limits (a chat turn
 // costs at most US$0.5, a meeting at most US$1.5). The default is the server's, US$3.
@@ -13745,31 +13745,281 @@ async function openSetupTerminal(toolId, action, region) {
   location.hash = `#/term/${encodeURIComponent(r.session.session_id)}`;
 }
 
+// ---------- setup picker (v0.22, P48-1) ---------------------------------------------------------------------------------
+// The start-up page first asks one thing: which AI the person wants to use. Three cards, always in this order (the order of the AI tool table,
+// never the order of how ready they are), each with a sentence about the account it needs and what this Mac says about it. Choosing a card
+// only writes that choice to this browser (one key) and opens that one tool; nothing is sent, no terminal is opened, nothing is logged in.
+// The tools the person did not choose are folded into 「其他 AI 工具」. xAI Grok cannot chat with VBear yet: it is one grey line, not a button.
+// The state comes from GET /api/setup/tools (installed, logged in, the chat login of Codex) and from the `support` of GET /api/chats (may this
+// tool chat, has this version passed the chat safety check, is a check running). An answer that did not come is 「讀不到」, never a guess.
+// One button does both checks (「試一下」 and the chat safety check). Its first press only opens the confirmation, with the whole sentence of
+// what the safety check costs; only 「確認，開始」 sends: the try first, and the safety check only when the try passed and the server says this
+// version has not passed yet. The result is listed item by item. Nothing about a check is kept in the browser.
+const SETUP_PICK_KEY = "vbear-setup-pick";
+const SETUP_VENDORS = [
+  { id: "claude", maker: "Anthropic Claude", tool: "Claude Code", use: "用 Claude Code", account: "要有 Claude 的付費方案" },
+  { id: "codex", maker: "OpenAI ChatGPT", tool: "Codex", use: "用 Codex", account: "用你的 ChatGPT 帳號登入" },
+  { id: "agy", maker: "Google Gemini", tool: "AGY", use: "用 AGY（Antigravity）", account: "用你的 Google 帳號登入" },
+];
+const SETUP_LATER_TEXT = "xAI Grok：之後支援（現在還不能用來聊天）";
+const SETUP_LOOKING = "正在看這台 Mac…";
+const SETUP_OTHERS_TITLE = "其他 AI 工具（之後隨時可以加）";
+const SETUP_CHECK_GO = "試一下，並做聊天安全檢查";
+const SETUP_RESULT_WORD = { pass: ["通過", "b-ok"], fail: ["沒過", "b-bad"], todo: ["還沒做", "b-mute"], running: ["進行中", "b-warn"], unknown: ["讀不到", "b-warn"] };
+const SETUP_CHAT_BACKGROUND = "安全檢查在背景做，你可以先按「" + SETUP_LEAVE_LABEL + "」；做完會自己更新。";
+const SETUP_CHECK_RUNNING_TEXT = "在背景做，通常要幾分鐘。可以先去建立 CEO。";
+const SETUP_CHAT_UNREAD = "讀不到聊天的狀態。按「重新檢查」再讀一次。";
+const SETUP_CHANGE_HINT = "可以按上面的「換一家」選別家。";
+const SETUP_TRY_CHAT_STATES_BLOCKED = new Set(["policy", "unsupported", "hooks", "folder", "version_unreadable", "unknown"]);
+
+function setupVendorOf(id) { return SETUP_VENDORS.find((v) => v.id === id) || null; }
+function setupPickRead() {
+  try { const v = localStorage.getItem(SETUP_PICK_KEY); return setupVendorOf(v) ? v : ""; } catch (_) { return ""; }
+}
+function setupPickWrite(id) {
+  if (!setupVendorOf(id)) return;
+  try { localStorage.setItem(SETUP_PICK_KEY, id); } catch (_) { /* the choice is only a convenience */ }
+}
+function setupVerifyCost(id) {
+  return id === "codex" ? CHAT_VERIFY_COST_CODEX : id === "agy" ? CHAT_AGY_VERIFY_COST : CHAT_VERIFY_COST_CLAUDE;
+}
+function setupRowOf(toolsRes, id) {
+  const rows = toolsRes && typeof toolsRes === "object" && Array.isArray(toolsRes.tools) ? toolsRes.tools : [];
+  return rows.find((r) => r && typeof r === "object" && r.id === id) || null;
+}
+
+// What GET /api/chats says about the chat of one of the three tools (the Claude Code part is the top of `support`, the others sit under
+// `codex` and `agy`). -> null when the answer has none | { state, version, why, running, result, resultMessage, resultVersion, passed }.
+function setupSupportOf(id, chats) {
+  const sup = chats && typeof chats === "object" && chats.support && typeof chats.support === "object" ? chats.support : null;
+  if (!sup) return null;
+  const part = id === "codex" ? sup.codex : id === "agy" ? sup.agy : id === "claude" ? sup : null;
+  if (!part || typeof part !== "object" || typeof part.state !== "string") return null;
+  const claude = id === "claude";
+  const verify = part.verify && typeof part.verify === "object" ? part.verify : null;
+  const version = claude ? part.detected : part.version;
+  const why = claude ? part.message : part.why;
+  return {
+    state: part.state, version: typeof version === "string" ? version : "", why: typeof why === "string" ? why : "",
+    running: !!verify && verify.running === true,
+    result: verify && typeof verify.result === "string" ? verify.result : "",
+    resultMessage: verify && typeof verify.message === "string" ? verify.message : "",
+    resultVersion: verify && typeof verify.version === "string" ? verify.version : "",
+    passed: part.state === (claude ? "verified" : "ready"),
+  };
+}
+
+// The one line a card of the picker says about this Mac. toolsRes: the answer of /api/setup/tools (null: not read); chats: of /api/chats (null: not read).
+// -> { kind, text }
+function setupVendorStatus(vendor, toolsRes, chats) {
+  const v = vendor || {};
+  if (!toolsRes || typeof toolsRes !== "object") return { kind: "unread", text: "讀不到這台 Mac 的狀況" };
+  const row = setupRowOf(toolsRes, v.id);
+  if (!row) return { kind: "unread", text: "讀不到這台 Mac 的狀況" };
+  if (row.installed !== true) {
+    return { kind: "not_installed", text: row.install_problem === "version_unreadable" ? "讀不出版本，先當作還沒安裝" : "還沒安裝" };
+  }
+  if (row.state !== "ready") {
+    return { kind: "not_logged_in", text: row.login === "unknown" ? "裝好了，查不出有沒有登入" : "裝好了，還沒登入" };
+  }
+  if (v.id === "codex") {
+    const cl = row.chat_login && typeof row.chat_login === "object" ? row.chat_login : null;
+    if (!cl || cl.state === "unknown") return { kind: "chat_login", text: "已登入；查不出聊天用的 Codex 有沒有登入" };
+    if (cl.state === "folder_problem") return { kind: "chat_login", text: "已登入；聊天用的 Codex 暫時不能用" };
+    if (cl.state !== "logged_in") return { kind: "chat_login", text: "已登入，還要登入聊天用的 Codex" };
+  }
+  const sup = setupSupportOf(v.id, chats);
+  if (!sup) return { kind: "unread", text: "已登入；聊天的狀態讀不到" };
+  if (sup.passed) return { kind: "ready", text: "可以聊天了" };
+  if (sup.state === "unverified") return sup.running
+    ? { kind: "running", text: "已登入，聊天安全檢查還在做" }
+    : { kind: "unverified", text: "已登入，第一次聊天前要做一次安全檢查" };
+  if (sup.state === "policy") return { kind: "policy", text: "這台 Mac 有管理員設定，不能用它聊天" };
+  if (sup.state === "not_installed") return { kind: "not_installed", text: "還沒安裝" };
+  if (sup.state === "not_logged_in") return { kind: "chat_login", text: "已登入，還要登入聊天用的 Codex" };
+  if (sup.state === "unknown" || sup.state === "version_unreadable") return { kind: "unread", text: "已登入；讀不到版本，聊天的狀態不明" };
+  return { kind: "blocked", text: "已登入，但現在不能聊天" };
+}
+
+// The server's sentence as a plain line and, when the table knows it, the original kept for 「技術細節」.
+function setupPlainLine(raw) {
+  const w = plainWords(raw);
+  return { text: w.text + w.next, raw: w.known ? w.detail : "" };
+}
+
+// The list of the checks of one tool and the one button. row: the tool's row of /api/setup/tools; chats: /api/chats (null: not read); st: what this page
+// did with it ({ phase: "confirm" | "trying" | "verifying" | "done", try, verifyError, version }).
+// -> { items: [{ key, label, result, text, next, raw }], canGo, needsVerify, goLabel }
+function setupCheckView(id, row, chats, st) {
+  const r = row && typeof row === "object" ? row : {};
+  const s = st && typeof st === "object" ? st : {};
+  const tool = (setupVendorOf(id) || {}).tool || "這個 AI 工具";
+  const sup = setupSupportOf(id, chats);
+  const items = [];
+  const add = (key, label, result, text, extra) => items.push({ key, label, result, text: text || "", next: (extra && extra.next) || "", raw: (extra && extra.raw) || "" });
+  const installedOk = r.installed === true;
+  add("installed", "裝好了", installedOk ? "pass" : (r.install_problem === "version_unreadable" ? "unknown" : "todo"),
+    installedOk ? (r.version ? `版本 ${r.version}` : "") : (r.install_problem === "version_unreadable" ? "找得到程式，但讀不出它的版本" : "還沒裝好"));
+  const loggedIn = installedOk && r.state === "ready";
+  add("login", "登入了", loggedIn ? "pass" : (installedOk && r.login === "unknown" ? "unknown" : "todo"),
+    loggedIn ? "" : (!installedOk ? "要先裝好" : r.login === "unknown" ? "查不出有沒有登入，按「重新檢查」再讀一次" : "還沒登入"));
+  let chatLoginOk = true;
+  if (id === "codex") {
+    const cl = r.chat_login && typeof r.chat_login === "object" ? r.chat_login : null;
+    chatLoginOk = !!cl && cl.state === "logged_in";
+    const state = chatLoginOk ? "pass" : !cl || cl.state === "unknown" ? "unknown" : cl.state === "folder_problem" ? "fail" : "todo";
+    add("chat-login", "聊天用的 Codex 登入了", state,
+      chatLoginOk ? "" : state === "unknown" ? "查不出聊天用的 Codex 有沒有登入" : state === "fail" ? String((cl && cl.problem) || "聊天用的 Codex 資料夾有問題") : "要按上面的「讓聊天用的 Codex 登入」");
+  }
+  // 「試一下」
+  if (s.phase === "trying") add("try", "會回話（試一下）", "running", `正在試 ${tool}……最多等一分鐘，請不要關掉這一頁。`);
+  else if (s.try && s.try.success === true) add("try", "會回話（試一下）", "pass", String(s.try.message || ""));
+  else if (s.try) {
+    const line = setupPlainLine(s.try.message);
+    add("try", "會回話（試一下）", "fail", line.text, { raw: line.raw });
+  } else add("try", "會回話（試一下）", "todo", "");
+  // the chat safety check
+  let chatLabel = "聊天安全檢查";
+  let chat;
+  if (!sup) chat = ["unknown", SETUP_CHAT_UNREAD, {}];
+  else if (sup.passed) chat = ["pass", sup.version ? `這個版本（${sup.version}）已經通過` : "這個版本已經通過", {}];
+  else if (sup.running) chat = ["running", SETUP_CHECK_RUNNING_TEXT, {}];
+  else if (s.phase === "verifying") chat = ["running", "正在開始聊天安全檢查……", {}];
+  else if (s.verifyError) { const line = setupPlainLine(s.verifyError); chat = ["fail", line.text, { raw: line.raw }]; }
+  else if (sup.state === "policy") {
+    chatLabel = "可以聊天";
+    chat = ["fail", `這台 Mac 的 ${tool} 有管理員設定，VBear 不能用它聊天。`, { next: SETUP_CHANGE_HINT }];
+  } else if (sup.state === "unverified") {
+    const sameVersion = !sup.resultVersion || sup.resultVersion === sup.version;
+    if ((sup.result === "failed" || sup.result === "error") && sup.resultMessage && sameVersion) {
+      const line = setupPlainLine(sup.resultMessage);
+      chat = ["fail", line.text, { raw: line.raw }];
+    } else chat = ["todo", "每個新版本第一次聊天前都要做一次。", {}];
+  } else if (sup.state === "not_installed" || sup.state === "not_logged_in") chat = ["todo", "", {}];
+  else if (sup.state === "unknown" || sup.state === "version_unreadable") chat = ["unknown", "讀不到版本，所以不知道這個版本通過了沒有。", {}];
+  else { const line = setupPlainLine(sup.why || `${tool} 現在不能聊天。`); chat = ["fail", line.text, { raw: line.raw, next: SETUP_CHANGE_HINT }]; }
+  add("chat", chatLabel, chat[0], chat[1], chat[2]);
+  const working = s.phase === "trying" || s.phase === "verifying";
+  const ready = loggedIn && chatLoginOk;
+  const needsVerify = !!sup && sup.state === "unverified" && !sup.running;
+  const canGo = ready && !working && !!sup && (sup.passed || needsVerify) && !SETUP_TRY_CHAT_STATES_BLOCKED.has(sup.state);
+  return { items, canGo, needsVerify, goLabel: s.try || s.verifyError ? "再試一次" : SETUP_CHECK_GO };
+}
+
+// The sentences of the confirmation: nothing is sent before 「確認，開始」, so this says what that press does and what it costs.
+function setupCheckConfirmLines(id, needsVerify) {
+  const tool = (setupVendorOf(id) || {}).tool || "這個 AI 工具";
+  const tryLine = `試一下：送一句很短的話給 ${tool}，確認它真的會回應。${SETUP_TRY_ESTIMATE}，並計入花費上限。`;
+  return needsVerify
+    ? { head: "按「確認，開始」會做兩件事：", tryLine: "1. " + tryLine, chatLine: "2. 聊天安全檢查：" + setupVerifyCost(id), background: SETUP_CHAT_BACKGROUND }
+    : { head: "按「確認，開始」會做這件事：", tryLine: tryLine, chatLine: "聊天安全檢查：這個版本已經通過，這次不會再做。", background: "" };
+}
+
+function setupResultBadge(result) {
+  const w = SETUP_RESULT_WORD[result] || SETUP_RESULT_WORD.unknown;
+  return badge(w[0], w[1]);
+}
+
+// The three cards. `status(vendor)` -> { kind, text } | null (null: still looking); `onPick(id)` is called by the press of 「選這個」 (no button while still looking).
+function setupPickerNode(status, onPick) {
+  const cards = SETUP_VENDORS.map((v) => {
+    const st = status(v);
+    const body = [
+      el("h2", null, v.maker),
+      el("p", { class: "setup-text" }, v.use),
+      el("p", { class: "small muted setup-text" }, v.account),
+      st ? el("p", { class: "setup-text setup-pick-state", "data-setup-status": st.kind }, "這台 Mac：" + st.text)
+        : el("p", { class: "setup-text setup-pick-state", "data-setup": "loading" }, "這台 Mac：" + SETUP_LOOKING),
+    ];
+    if (st) body.push(el("button", { class: "btn small primary", type: "button", "data-setup-pick-go": v.id, on: { click: () => onPick(v.id) } }, "選這個"));
+    return el("div", { class: "setup-pick", "data-setup-pick": v.id }, body);
+  });
+  return el("div", null,
+    el("div", { class: "setup-picker", "data-setup": "picker" }, cards),
+    el("p", { class: "small muted setup-text", "data-setup-later": "xai" }, SETUP_LATER_TEXT));
+}
+
+// The list of checks and the button of the chosen tool. on: { ask, cancel, confirm } (the page's own functions).
+function setupCheckNode(id, row, chats, st, on) {
+  const v = setupCheckView(id, row, chats, st);
+  const list = el("ul", { class: "setup-check-list", "data-setup": "check-list" }, v.items.map((it) =>
+    el("li", { class: "setup-check-item", "data-setup-check-item": it.key, "data-result": it.result },
+      el("div", { class: "setup-check-head" }, setupResultBadge(it.result), el("span", { class: "setup-check-label" }, it.label)),
+      it.text ? el("p", { class: "small setup-text setup-check-text" }, it.text) : null,
+      it.next ? el("p", { class: "small muted setup-text", "data-setup": "check-next" }, "提示：" + it.next) : null,
+      it.raw ? plainTechFold(it.raw) : null)));
+  const confirming = st && st.phase === "confirm" && v.canGo;
+  const parts = [el("h3", { class: "setup-check-title" }, "檢查能不能用"), list];
+  if (confirming) {
+    const c = setupCheckConfirmLines(id, v.needsVerify);
+    parts.push(el("div", { class: "setup-check-confirm", "data-setup": "check-confirm" },
+      el("p", { class: "setup-text" }, c.head),
+      el("p", { class: "small muted setup-text" }, c.tryLine),
+      el("p", { class: "small muted setup-text" }, c.chatLine),
+      c.background ? el("p", { class: "small setup-text" }, c.background) : null));
+    parts.push(el("div", { class: "setup-actions" },
+      el("button", { class: "btn small primary", type: "button", "data-setup-check": "confirm", on: { click: () => on.confirm(id) } }, "確認，開始"),
+      el("button", { class: "btn small", type: "button", "data-setup-check": "cancel", on: { click: () => on.cancel(id) } }, "取消")));
+  } else if (v.canGo) {
+    parts.push(el("div", { class: "setup-actions" },
+      el("button", { class: "btn small primary", type: "button", "data-setup-check": "go", on: { click: () => on.ask(id) } }, v.goLabel)));
+  }
+  return el("div", { class: "setup-check", "data-setup": "check" }, parts);
+}
+
+// What one check of the page remembers while the page is open: nothing of it is kept in the browser.
+const setupCheck = new Map();          // tool id -> { phase, try, verifyError, version }
+// ---------- end of the setup picker -------------------------------------------------------------------------------------
+
 async function viewSetup() {
   const token = seq;
-  let data;
   setupTry.clear();
-  try { data = await api.get("/api/setup/tools?force=1"); }      // coming in is a fresh look; the refresh below may be a kept one
-  catch (e) {
-    const main = claim(token);
-    if (token === seq) setKids(main, el("h1", null, SETUP_TITLE), notice("bad", "讀不到 AI 工具的狀態：" + e.message));
-    return;
-  }
-  let dailyNow = null;             // the daily limit in force (a number), or null when it could not be read
-  try { const d = await api.get("/api/setup/daily-limit"); dailyNow = typeof d.daily_usd === "number" ? d.daily_usd : null; }
-  catch (e) { dailyNow = null; }
+  setupCheck.clear();
+  let picked = setupPickRead();
+  const first = claim(token);
+  if (token !== seq) return;
+  // The frame first: the title, the sentence and the cards (or the chosen tool) are drawn before any answer is back; what is still being read says so.
+  const frame = () => {
+    const vendor = setupVendorOf(picked);
+    return vendor
+      ? el("div", { "data-setup": "page" }, el("p", { class: "setup-text", "data-setup": "picked" }, `你選了：${vendor.maker}（${vendor.tool}）`),
+        el("p", { class: "small muted", "data-setup": "loading" }, SETUP_LOOKING))
+      : el("div", { "data-setup": "page" }, setupPickerNode(() => null, () => {}));
+  };
+  setKids(first, el("h1", null, SETUP_TITLE), el("p", { class: "lede" }, SETUP_LEDE), frame());
+  const got = (p) => p.then((value) => ({ value }), (error) => ({ error }));
+  const [toolsGot, chatsGot, dailyGot] = await Promise.all([got(api.get("/api/setup/tools?force=1")), got(api.get("/api/chats")), got(api.get("/api/setup/daily-limit"))]);
   const main = claim(token);
   if (token !== seq) return;
-  let shown = data;
+  if (toolsGot.error) {          // coming in is a fresh look; a tool list that cannot be read is said so
+    setKids(main, el("h1", null, SETUP_TITLE), notice("bad", "讀不到 AI 工具的狀態：" + toolsGot.error.message));
+    return;
+  }
+  let shown = toolsGot.value;
+  let chats = chatsGot.error ? null : chatsGot.value;          // null: the chat state could not be read
+  let dailyNow = !dailyGot.error && typeof dailyGot.value.daily_usd === "number" ? dailyGot.value.daily_usd : null;      // the daily limit in force, or null when it could not be read
   let busy = false;
   const host = el("div", { "data-setup": "page" });
+  const chatsKey = (c) => JSON.stringify(SETUP_VENDORS.map((v) => { const s = setupSupportOf(v.id, c); return s ? [s.state, s.version, s.running, s.result, s.resultMessage, s.resultVersion] : null; }));
+  const checkRunning = () => { const s = picked ? setupSupportOf(picked, chats) : null; return !!s && s.running; };
+  const readChats = async () => {
+    let next = null;
+    try { next = await api.get("/api/chats"); } catch (e) { next = null; }
+    if (token !== seq) return false;
+    const changed = chatsKey(next) !== chatsKey(chats);
+    chats = next;
+    return changed;
+  };
   const refresh = async (quiet, force) => {
     try {
       const next = await api.get(force ? "/api/setup/tools?force=1" : "/api/setup/tools");
       if (token !== seq) return;
-      const changed = setupToolKey(next.tools) !== setupToolKey(shown.tools) || next.setup_done !== shown.setup_done;
+      const toolsChanged = setupToolKey(next.tools) !== setupToolKey(shown.tools) || next.setup_done !== shown.setup_done;
       shown = next;
-      if (changed || !quiet) draw();
+      // the chat state is read again when the person asked, when a tool changed, and while a safety check runs (reads only)
+      const chatsChanged = (!quiet || force || toolsChanged || checkRunning()) ? await readChats() : false;
+      if (token !== seq) return;
+      if (toolsChanged || chatsChanged || !quiet) draw();
       if (!quiet) toast("已重新檢查");
     } catch (e) { if (!quiet) toast("重新檢查失敗：" + e.message); }
   };
@@ -13780,7 +14030,7 @@ async function viewSetup() {
     catch (e) { toast(e.message); }
     finally { busy = false; btn.disabled = false; }
   };
-  const toolCard = (row) => {
+  const toolCard = (row, isPicked) => {
     const v = setupToolView(row);
     const buttons = v.buttons.map((b) => {
       const btn = el("button", { class: `btn small${b.kind === "install" || b.kind === "login" || b.kind === "chat_login" ? " primary" : ""}`, type: "button",
@@ -13803,7 +14053,7 @@ async function viewSetup() {
       el("p", { class: "setup-text", "data-setup": "blurb" }, row.blurb || ""),
       v.note ? el("p", { class: "small muted setup-text", "data-setup": "note" }, v.note) : null,
       buttons.length ? el("div", { class: "setup-actions" }, buttons) : null,
-      el("div", { "data-setup-slot": "try" }, tryBox(row)));
+      el("div", { "data-setup-slot": "try" }, isPicked ? setupCheckNode(row.id, row, chats, setupCheck.get(row.id), checkOn) : tryBox(row)));
   };
   const tryBox = (row) => {
     const v = setupTryView(row, setupTry.get(row.id));
@@ -13835,6 +14085,39 @@ async function viewSetup() {
     await refresh(true, true);
     draw();
   };
+  // The one button of the chosen tool. The first press only opens the confirmation; 「確認，開始」 is the only press that sends. The try goes first; the safety
+  // check is asked for only when the try passed and the server (read again just now) still says this version has not passed; its `version` is the one on screen.
+  const checkOn = {
+    ask: (id) => { setupCheck.set(id, { ...(setupCheck.get(id) || {}), phase: "confirm" }); draw(); },
+    cancel: (id) => { const old = setupCheck.get(id) || {}; setupCheck.set(id, { ...old, phase: "idle" }); draw(); },
+    confirm: async (id) => {
+      if (busy) return;
+      busy = true;
+      const before = setupSupportOf(id, chats);
+      const st = { phase: "trying", version: before ? before.version : "", try: null, verifyError: "" };
+      setupCheck.set(id, st);
+      draw();
+      try {
+        try {
+          const r = await api.post(`/api/setup/tools/${encodeURIComponent(id)}/try`, { confirmed: true });
+          st.try = { success: r.success === true, message: String(r.message || "") };
+        } catch (e) { st.try = { success: false, message: e.message }; }
+        if (token === seq && st.try.success) {
+          st.phase = "verifying";
+          draw();
+          await readChats();
+          const now = setupSupportOf(id, chats);
+          if (token === seq && now && now.state === "unverified" && !now.running) {
+            try { await api.post("/api/chat-support/verify", { engine: id, version: st.version || undefined }); }
+            catch (e) { st.verifyError = e.message; }
+          }
+        }
+      } finally { st.phase = "done"; busy = false; }
+      if (token !== seq) return;
+      await refresh(true, true);
+      draw();
+    },
+  };
   const dailySummary = el("summary");
   const updateDailySummary = () => { dailySummary.textContent = dailyNow === null
     ? "每天最多花多少（目前的值：未知；預設 US$3）"
@@ -13844,6 +14127,7 @@ async function viewSetup() {
     el("p", { class: "small muted" }, "之後可以在『設定』的『用量與上限』改。"),
     dailyLimitEditor({ current: dailyNow, onSaved: (res) => { dailyNow = res.daily_usd; updateDailySummary(); } }));
   const dailySection = () => dailyBox;
+  const choose = (id) => { setupPickWrite(id); picked = id; draw(); };
   const draw = () => {
     const rows = Array.isArray(shown.tools) ? shown.tools : [];
     const anyReady = rows.some((r) => r && r.ready === true);
@@ -13855,10 +14139,21 @@ async function viewSetup() {
     }));
     const recheck = el("button", { class: "btn", type: "button", "data-setup": "recheck" }, "重新檢查");
     recheck.addEventListener("click", () => run(recheck, () => refresh(false, true)));
+    const vendor = setupVendorOf(picked);
+    const pickedRow = vendor ? setupRowOf(shown, vendor.id) : null;
+    const top = vendor
+      ? [el("div", { class: "setup-picked", "data-setup": "picked" },
+          el("p", { class: "setup-text" }, `你選了：${vendor.maker}（${vendor.tool}）`),
+          el("button", { class: "btn small", type: "button", "data-setup": "change-pick", on: { click: () => { picked = ""; draw(); } } }, "換一家")),
+        pickedRow ? el("ul", { class: "setup-list" }, toolCard(pickedRow, true)) : notice("warn", `讀不到 ${vendor.maker} 這個 AI 工具的狀態。`)]
+      : [setupPickerNode((v) => setupVendorStatus(v, shown, chats), choose)];
+    const others = vendor ? rows.filter((r) => r && r.id !== vendor.id) : [];
     setKids(host,
       anyReady ? null : notice("info", SETUP_NONE_READY),
-      el("ul", { class: "setup-list" }, rows.map(toolCard)),
+      top,
       dailySection(),
+      others.length ? el("details", { class: "section setup-others", "data-setup": "others" }, el("summary", null, SETUP_OTHERS_TITLE),
+        el("ul", { class: "setup-list" }, others.map((r) => toolCard(r, false)))) : null,
       el("section", { class: "section setup-foot" },
         el("div", { class: "row" }, leave, recheck),
         canLeave ? el("p", { class: "small muted" }, "之後隨時可以從「設定」的「AI 工具」回到這一頁，加其他 AI 工具。")
@@ -20740,6 +21035,8 @@ if (typeof module !== "undefined" && module.exports) {
     SETUP_UPGRADE_NOTICE,
     SETUP_REOPEN_HINT,
     setupToolView,
+    SETUP_TRY_ESTIMATE, CHAT_VERIFY_COST_CLAUDE, CHAT_VERIFY_COST_CODEX, CHAT_AGY_VERIFY_COST,
+    setupPickRead, setupPickWrite, setupSupportOf, setupVendorStatus, setupCheckView, setupCheckConfirmLines, SETUP_VENDORS,
     setupTryView,
     setupDailyResultWords,
     claudeCodeNeed,

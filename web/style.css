@@ -1934,6 +1934,32 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .home-ask-row textarea, input[data-limit-input] { padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); font: inherit; resize: vertical; }
 input[data-limit-input] { width: 100%; box-sizing: border-box; resize: none; }
 
+/* P48-1: the start-up page asks first which AI to use (three cards), opens only the chosen tool, and lists its checks item by item. */
+.setup-picker { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0 0 8px; }
+.setup-pick { border: 1px solid var(--line-2); border-radius: var(--radius); background: var(--panel); padding: 14px; display: grid; gap: 6px; align-content: start; min-width: 0; }
+.setup-pick h2 { margin: 0; font-size: 17px; overflow-wrap: anywhere; }
+.setup-pick p { margin: 0; overflow-wrap: anywhere; }
+.setup-pick .btn { justify-self: end; margin-top: 4px; }
+.setup-pick-state { padding-top: 4px; }
+.setup-pick-state[data-setup-status="ready"] { color: var(--ok); }
+.setup-pick-state[data-setup-status="policy"], .setup-pick-state[data-setup-status="blocked"] { color: var(--bad); }
+.setup-picked { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; justify-content: space-between; margin: 0 0 12px; }
+.setup-picked p { margin: 0; overflow-wrap: anywhere; }
+.setup-others { margin: 0 0 16px; }
+.setup-check { display: grid; gap: 8px; min-width: 0; border-top: 1px solid var(--line-2); padding-top: 8px; }
+.setup-check-title { margin: 0; font-size: 14px; color: var(--ink-2); }
+.setup-check-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; min-width: 0; }
+.setup-check-item { display: grid; gap: 2px; min-width: 0; }
+.setup-check-head { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; min-width: 0; }
+.setup-check-label { overflow-wrap: anywhere; }
+.setup-check-text, .setup-check-item .plain-tech { margin: 0 0 0 4px; overflow-wrap: anywhere; }
+.setup-check-confirm { display: grid; gap: 6px; min-width: 0; border: 1px solid var(--line-2); border-radius: var(--radius); padding: 10px 12px; }
+.setup-check-confirm p { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .setup-picker { grid-template-columns: 1fr; }
+  .setup-check .setup-actions .btn { flex: 1 1 100%; }
+}
+
 /* P48-3 (v0.22.0): the page that makes the CEO folds its long explanations; the CEO's conversation has two opening choices and a hint
    under the plan. Plain boxes and the colours the page already has. */
 .ceo-more { margin: 8px 0 0; }
