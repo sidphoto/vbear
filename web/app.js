@@ -2467,9 +2467,9 @@ async function viewHome() {
     update();
   });
 
-  state.refreshWaiting = async () => {
+  state.refreshWaiting = async (force) => {       // `force`: the person's own press (a row's button) asks for the chats again at once
     if (state.token !== seq) return;
-    const m = await waitingModel({ store: true });
+    const m = await waitingModel({ store: true, force: !!force });
     if (state.token !== seq) return;
     state.waitingList = m.list; state.lamp = m.lamp; state.chats = m.chats || state.chats;
     waiting.paint(m);
@@ -2489,7 +2489,7 @@ async function viewHome() {
     state.profiles = r && Array.isArray(r.profiles) ? r.profiles.filter((p) => p && typeof p === "object" && typeof p.id === "string") : null;
   });
   fetchInto("catalog", "/api/agent-builder/catalog", (r) => { state.catalogRes = r; state.catalog = r && r.ok ? r : null; });
-  fetchInto("chats", "/api/chats", (r) => { state.chats = r; });
+  fetchInto("chats", "/api/chats", (r) => { state.chats = r; waitingChatsNote(r); });
   fetchInto("routines", "/api/routines", (r) => { state.routines = r; });
   fetchInto("waiting", "/api/waiting", (r) => { state.waitingList = r && Array.isArray(r.waiting) ? r.waiting : null; });
   fetchInto("ledger", "/api/meetings/ledger", (r) => { state.lamp = r && typeof r.lamp === "string" ? r.lamp : ""; });
@@ -2774,7 +2774,7 @@ function homeWaiting(state) {
   const done = { "wait-start": "已開始", "wait-skip": "這次跳過了", "missed-run": "已開始補做", "missed-dismiss": "不補做了" };
   const act = async (key, id) => {
     try { await requests[key](id); toast(done[key]); } catch (e) { toast(e.message); }
-    await state.refreshWaiting();
+    await state.refreshWaiting(true);
     refreshWaitingBar();
   };
   const paint = (m) => {
@@ -3060,7 +3060,11 @@ function waitingToApp(count) {
 }
 // The number goes to the title and the app, and to the listeners. A read that was not whole shows no number: it is not guessed.
 let waitingLast = null;            // { m, at }: the last model that was worked out
-const WAITING_REUSE_MS = 25000;
+const WAITING_REUSE_MS = 30000;
+// GET /api/chats makes the server run the AI tools' --version (about 2 seconds, no cache of its own), so it is read at most every 30 seconds by the
+// waiting model (the page's other reads stay at their own pace); a read the person's own press asks for (`force`) and the home page's first read go at once.
+let waitingChatsRead = null;       // { at, body }: the last whole answer
+function waitingChatsNote(body) { if (body && typeof body === "object") waitingChatsRead = { at: Date.now(), body }; }
 function waitingPublish(m) {
   waitingLast = { m, at: Date.now() };
   const count = m.complete ? Math.min(m.rows.length, 999) : 0;
@@ -3089,16 +3093,19 @@ function waitingSources(store) {
     groups: store ? loadGroupList : own("groups", "/api/groups", (m) => ({ error: m, groups: [] })),
     list: () => api.get("/api/waiting").then((w) => (w && Array.isArray(w.waiting) ? w.waiting : null)).catch(() => null),
     ledger: () => api.get("/api/meetings/ledger").catch(() => null),
-    chats: () => api.get("/api/chats").catch(() => null),
+    chats: (force) => {
+      if (!force && waitingChatsRead && Date.now() - waitingChatsRead.at < WAITING_REUSE_MS) return Promise.resolve(waitingChatsRead.body);
+      return api.get("/api/chats").catch(() => null).then((b) => { waitingChatsNote(b); return b; });
+    },
   };
 }
-// Reads everything that can wait (GETs only), works the rows out, publishes the number. -> the model of waitingFold.
+// Reads everything that can wait (GETs only), works the rows out, publishes the number. -> the model of waitingFold. `opts.force`: read /api/chats now.
 async function waitingModel(opts = {}) {
   const src = waitingSources(!!opts.store);
   // /api/flows reads live state from the cache /api/live fills, so live goes first
   const liveAndFlows = src.live().then(async (live) => [live, await src.flows()]);
   const [[live, flows], meetings, staffing, dispatch, groups, list, ledger, chats] =
-    await Promise.all([liveAndFlows, src.meetings(), src.staffing(), src.dispatch(), src.groups(), src.list(), src.ledger(), src.chats()]);
+    await Promise.all([liveAndFlows, src.meetings(), src.staffing(), src.dispatch(), src.groups(), src.list(), src.ledger(), src.chats(!!opts.force)]);
   const lamp = ledger && typeof ledger.lamp === "string" ? ledger.lamp : "";
   const m = waitingFold({ g: boardGroups(live, flows, meetings, staffing, dispatch, groups), list, lamp, chats });
   waitingPublish(m);
@@ -13270,7 +13277,7 @@ async function refreshWaitingBar(reuse) {
   // P48-2: the same reads as the home page's list (waitingModel: GETs only, nothing written into D), so the cards of the chats count here too
   // and the title of the page has the number on every page
   // `reuse` (a move to another page): the line's own rows (/api/waiting, one cheap read) are read fresh as before, but the cards of the chats come from what
-  // was read in the last 25 seconds instead of asking the server for everything at every click (the 30-second timer always reads all of it)
+  // was read in the last 30 seconds instead of asking the server for everything at every click (the 30-second timer always reads all of it)
   let m = null;
   let rows = [];
   let cards = [];
@@ -13278,7 +13285,7 @@ async function refreshWaitingBar(reuse) {
     try { const r = await api.get("/api/waiting"); rows = r && Array.isArray(r.waiting) ? r.waiting : []; } catch (_) { rows = []; }
     cards = waitingLast.m.rows.filter((r) => r.kind === "chat_card");
   } else {
-    try { m = await waitingModel(); } catch (_) { m = null; }
+    try { m = await waitingModel({ force: true }); } catch (_) { m = null; }       // the timer is the 30-second pace itself; a press asks at once
     rows = m && Array.isArray(m.list) ? m.list : [];
     cards = m ? m.rows.filter((r) => r.kind === "chat_card") : [];
   }

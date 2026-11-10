@@ -129,7 +129,7 @@ function boot(hash, W, extra = {}) {
     const method = options.method || "GET";
     const p = String(url).split("?")[0];
     const b = options.body ? JSON.parse(options.body) : null;
-    log.push([method, String(url), b]);
+    log.push([method, String(url), b, clock.now]);       // the 4th is the page's clock, for the tests that look at the pace of a read
     for (const h of holds) if (h.path === p) await h.promise;
     if (extra.fetch) { const r = await extra.fetch(String(url), method, b, W); if (r) return r; }
     if (W.fail[`${method} ${p}`]) return reply(W.fail[`${method} ${p}`].status || 500, W.fail[`${method} ${p}`].body || { error: "壞了" });
@@ -252,6 +252,13 @@ function check16d(title, log, sent) {
     if (!s || typeof s !== "object" || Object.keys(s).sort().join() !== "count,notify") bad.push("a message with keys " + (s ? Object.keys(s).join() : s));
     else if (!Number.isInteger(s.count) || s.count < 0 || s.count > 999 || typeof s.notify !== "boolean") bad.push("a message with a wrong type " + JSON.stringify(s));
   }
+  return bad;
+}
+
+// 16d pace: the times (ms) a page read /api/chats; each must be 30 seconds after the one before, except the ones the person asked for (`forced`).
+function check16dPace(times, forced) {
+  const bad = [];
+  for (let i = 1; i < times.length; i++) if (times[i] - times[i - 1] < 30000 && !forced.includes(times[i])) bad.push(`a read of the chats ${times[i] - times[i - 1]} ms after the one before`);
   return bad;
 }
 
@@ -463,20 +470,51 @@ function check16d(title, log, sent) {
     assert.strictEqual(page.doc.title, "VBear");
   });
 
-  await test("16d: the home page every 5 seconds: a card that began to wait shows up (title and app), and goes away when it is answered; only GETs", async () => {
+  await test("16d: the home page every 5 seconds: the other reads go every tick; a card that began to wait shows up (title and app) at the next read of the chats, and goes away when it is answered; only GETs", async () => {
     const W = world();
     const page = await home(W, "#/", { bridge: true });
     assert.strictEqual(page.doc.title, "VBear");
     W.chats = [cardWaiting("c1", "p-ceo")];
-    await page.tickHome();
+    await page.advance(5000); await page.tickHome();
+    assert.strictEqual(rowsOf(page.main).length, 0, "the chats are not read again within 30 seconds");
+    await page.advance(25000); await page.tickHome();
     assert.strictEqual(rowsOf(page.main).length, 1);
     assert.strictEqual(page.doc.title, "(1) VBear");
     W.chats = [chatRow("c1", "p-ceo")];
-    await page.tickHome();
+    await page.advance(30000); await page.tickHome();
     assert.strictEqual(rowsOf(page.main).length, 0);
     assert.strictEqual(page.doc.title, "VBear");
     assert.strictEqual(JSON.stringify(page.sent), JSON.stringify([{ count: 0, notify: false }, { count: 1, notify: false }, { count: 0, notify: false }]));
     assert.deepStrictEqual(check16d(page.doc.title, page.log, page.sent), []);
+  });
+
+  await test("16d pace: the home page reads /api/chats at most every 30 seconds (the server runs the AI tools' --version at each read) while its other reads go every 5 seconds; the person's own press and a new visit read at once", async () => {
+    const W = world({ waiting: [DUE] });
+    const page = await home(W);
+    const at = (re) => page.log.filter(([, u]) => re.test(u.split("?")[0])).map((e) => e[3]);
+    for (let i = 0; i < 14; i++) { await page.advance(5000); await page.tickHome(); }        // 70 seconds of ticks
+    const chats = at(/^\/api\/chats$/);
+    assert.deepStrictEqual(check16dPace(chats, []), [], "chats read at " + chats.join());
+    assert.strictEqual(chats.length, 3, "at the page's first read, after 30 and after 60 seconds: " + chats.join());
+    assert.strictEqual(at(/^\/api\/waiting$/).length, 15, "every other read still goes at every tick");
+    assert.strictEqual(at(/^\/api\/meetings$/).length, 15);
+    // the press of a button of a row: the chats are read again at once
+    const before = at(/^\/api\/chats$/).length;
+    await page.advance(5000);
+    one(one(page.main, "data-home-row", "routine_due"), "data-home-action", "wait-start").click();
+    await tick(40);
+    assert.strictEqual(at(/^\/api\/chats$/).length, before + 1, "the press reads the chats at once");
+    assert.deepStrictEqual(check16dPace(at(/^\/api\/chats$/), [at(/^\/api\/chats$/).slice(-1)[0]]), []);
+    // a new visit to the home page reads at once
+    await page.go("#/work"); await page.go("#/");
+    assert.strictEqual(at(/^\/api\/chats$/).length, before + 2);
+  });
+
+  await test("16d pace: the checker trips on a read of the chats less than 30 seconds after the last one (unless it was asked for by the person), and on none being allowed to repeat", () => {
+    assert.deepStrictEqual(check16dPace([0, 30000, 60000], []), []);
+    assert.ok(check16dPace([0, 5000, 10000], []).length >= 1, "a read at every tick");
+    assert.ok(check16dPace([0, 29999], []).length >= 1, "a hair too soon");
+    assert.deepStrictEqual(check16dPace([0, 5000], [5000]), [], "a forced one is allowed");
   });
 
   await test("16d: the same number is not handed to the app twice in a row", async () => {
@@ -502,16 +540,22 @@ function check16d(title, log, sent) {
     assert.ok(page.bar.hidden, "the home page lists them itself");
   });
 
-  await test("16d: moving between pages does not ask the server for everything at each click: what was read in the last 25 seconds is drawn again; the 30-second timer always asks", async () => {
+  await test("16d: moving between pages does not ask the server for everything at each click: the cards of the chats read in the last 30 seconds are drawn again (the line's own rows are read each time); the 30-second timer always asks", async () => {
     const page = await home(world({ chats: [cardWaiting("c1", "p-ceo")] }), "#/work");
     const reads = () => page.log.filter(([, u]) => u === "/api/chats").length;
+    const waits = () => page.log.filter(([, u]) => u === "/api/waiting").length;
     assert.strictEqual(reads(), 1);
+    const w0 = waits();
     await page.go("#/work"); await page.go("#/work");
     assert.strictEqual(reads(), 1, "the clicks reuse it");
+    assert.strictEqual(waits(), w0 + 2, "but the line's own rows are read at each click");
     assert.ok(text(page.bar).includes("小執"), "and the line is still there");
-    await page.advance(26000);
+    await page.advance(29000);
     await page.go("#/work");
-    assert.strictEqual(reads(), 2, "after 25 seconds a click asks again");
+    assert.strictEqual(reads(), 1, "still within 30 seconds");
+    await page.advance(1000);
+    await page.go("#/work");
+    assert.strictEqual(reads(), 2, "after 30 seconds a click asks again");
     await page.tickBar();
     assert.strictEqual(reads(), 3, "the timer always asks");
   });
@@ -532,7 +576,7 @@ function check16d(title, log, sent) {
     const page = await home(W);
     evalIn(page, "globalThis.__seen = []; onWaitingCount((m) => __seen.push(m));");
     W.chats = [cardWaiting("c1", "p-ceo")];
-    await page.tickHome();
+    await page.advance(30000); await page.tickHome();
     const seen = JSON.parse(evalIn(page, "JSON.stringify(__seen)"));
     assert.deepStrictEqual(seen, [{ count: 1, complete: true }]);
   });
