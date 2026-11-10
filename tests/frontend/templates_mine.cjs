@@ -332,7 +332,7 @@ test("source: the saving code posts only to the person's own routes, never build
   assert(!/innerHTML|insertAdjacentHTML|outerHTML/.test(BLOCK));
   const mine = BLOCK.slice(BLOCK.indexOf("// ---- the person's own team templates (P45-3)"));
   assert(mine.length > 3000, "the P45-3 part is marked");
-  const urls = Array.from(BLOCK.matchAll(/api\.(?:post|get)\(\s*[`"]([^`"]+)/g)).map((m) => m[1]).filter((u) => u !== "/api/templates" && u !== "/api/templates/preview" && u !== "/api/agent-profiles" && !u.startsWith("/api/templates/appl"));   // P45-2's apply and undo are checked in templates.cjs
+  const urls = Array.from(BLOCK.matchAll(/api\.(?:post|get)\(\s*[`"]([^`"]+)/g)).map((m) => m[1]).filter((u) => u !== "/api/templates" && u !== "/api/templates/preview" && u !== "/api/agent-profiles" && u !== "/api/agent-builder/catalog" && !u.startsWith("/api/templates/appl"));   // P45-2's apply and undo are checked in templates.cjs
   assert.deepStrictEqual(urls.sort(), ["/api/templates/mine", "/api/templates/mine/${encodeURIComponent(template.id)}", "/api/templates/mine/${encodeURIComponent(template.id)}/delete"]);
   assert(!/export|匯入|上傳|下載/.test(mine.replace(/不能匯出|不會上傳/g, "")), "no way to export, import, upload or download");
 });

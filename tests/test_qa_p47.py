@@ -1169,6 +1169,117 @@ class RunTests(unittest.TestCase):
             srv.close()
             t.join(3.0)
 
+    @staticmethod
+    def late_worker_scenario(q):
+        """R8: a worker that is held back before its first connection, past the second the call waits for it after the time left is over,
+        and let go only after the call has returned. Returns what could be seen of it; always shuts everything it made."""
+        import http.client
+        import socket
+        import time as _time
+        import unittest.mock as mock
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(2)
+        srv.settimeout(0.1)
+        port = srv.getsockname()[1]
+        stop, entered, release = threading.Event(), threading.Event(), threading.Event()
+        got, workers, errors, serving = [], [], [], []
+
+        def serve_one(conn):
+            try:
+                conn.settimeout(1.0)
+                got.append(conn.recv(65536))
+                conn.sendall(b"HTTP/1.0 200 OK\r\nConnection: close\r\nContent-Length: 1000000\r\n\r\n")
+                while not stop.is_set():                    # a body that trickles on (short of the socket timeout) until the reader goes
+                    conn.sendall(b" ")
+                    _time.sleep(0.01)
+            except OSError:
+                pass
+            finally:
+                conn.close()
+
+        def serve():
+            while not stop.is_set():
+                try:
+                    conn, _ = srv.accept()
+                except socket.timeout:
+                    continue
+                except OSError:
+                    return
+                t = threading.Thread(target=serve_one, args=(conn,), daemon=True)
+                serving.append(t)
+                t.start()
+
+        class Held(http.client.HTTPConnection):
+            def request(inner, *args, **kwargs):
+                workers.append(threading.current_thread())
+                entered.set()
+                release.wait(10.0)                          # the worker is not scheduled until the call has returned
+                return super().request(*args, **kwargs)
+        listener = threading.Thread(target=serve, daemon=True)
+        before = set(threading.enumerate())
+        old_hook, threading.excepthook = threading.excepthook, lambda args: errors.append(args.exc_type)
+        seen = {}
+        try:
+            listener.start()
+            console = q.Console(port, "t", timeout=5.0)
+            end = _time.monotonic() + 0.1
+            console.budget = lambda: end - _time.monotonic()
+            with mock.patch.object(q.http.client, "HTTPConnection", Held):
+                began = _time.monotonic()
+                result = console.call("/api/x")
+                seen["took"] = _time.monotonic() - began
+                seen["result"] = result
+                seen["entered"] = entered.is_set()
+                seen["alive_at_return"] = bool(workers) and workers[0].is_alive()
+                release.set()                               # the call is over: now the worker goes on
+                if workers:
+                    workers[0].join(1.0)
+                seen["alive_after_release"] = bool(workers) and workers[0].is_alive()
+                seen["sent"] = len(got)
+        finally:
+            release.set()
+            stop.set()
+            for t in [listener] + serving + workers:
+                t.join(3.0)
+            srv.close()
+            threading.excepthook = old_hook
+        seen["left_threads"] = [t for t in threading.enumerate() if t not in before and t.is_alive()]
+        seen["errors"] = errors
+        return seen
+
+    @staticmethod
+    def tool_with_unconditional_connect_removal():
+        """The tool as it was before a242e98: the guard of the call is dropped as soon as the wait for the worker is over, worker or not."""
+        import types
+        source = SOURCE.read_text(encoding="utf-8")
+        guarded = re.compile(r"if not worker\.is_alive\(\):\n\s+del conn\.connect")
+        old, count = guarded.subn("del conn.connect", source)
+        assert count == 1, "the lines of the call that are to be put back to the old way were not found"
+        module = types.ModuleType("qa_p47_unconditional")
+        module.__file__ = str(SOURCE)
+        exec(compile(old, str(SOURCE), "exec"), module.__dict__)
+        return module
+
+    def test_a_worker_held_back_past_the_time_left_sends_nothing_when_it_goes_on_and_ends_soon(self):
+        # R8: it is not enough that the call returns; a worker that was not yet connected when it was cut must stay cut after the return.
+        seen = self.late_worker_scenario(qa)
+        self.assertTrue(seen["entered"], "the worker did start")
+        self.assertEqual(seen["result"], (0, None))
+        self.assertTrue(seen["alive_at_return"], "the worker was still held back when the call returned (the case under test)")
+        self.assertGreaterEqual(seen["took"], 1.0, "the call went past the second it waits for the worker")
+        self.assertLess(seen["took"], 3.0)
+        self.assertEqual(seen["sent"], 0, "nothing was sent once the time left was over")
+        self.assertFalse(seen["alive_after_release"], "the worker ends soon after it goes on: nothing is left reading")
+        self.assertEqual(seen["left_threads"], [], "no thread of the call is left")
+        self.assertEqual(seen["errors"], [], "no exception was raised in a background thread")
+
+    def test_the_old_way_of_dropping_the_guard_at_once_is_what_this_test_catches(self):
+        # The counterfactual: with the guard dropped whether or not the worker has ended, the same worker connects, sends and reads on.
+        seen = self.late_worker_scenario(self.tool_with_unconditional_connect_removal())
+        self.assertTrue(seen["alive_at_return"], "the case under test happened")
+        self.assertTrue(seen["sent"] > 0 and seen["alive_after_release"], f"the old way is caught: {seen['sent']} request(s), still reading: {seen['alive_after_release']}")
+
     def test_a_probe_that_answers_after_the_deadline_is_not_taken(self):
         b = qa.Browser.__new__(qa.Browser)
         b.now, b.started, b.proc = qa.CHROME_CAP_S - 1.0, 0.0, None

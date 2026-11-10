@@ -1043,6 +1043,9 @@ const PLAIN_ERRORS = [
   { key: "chat_admin_policy", re: /這台 Mac 上有管理員政策或系統設定，可能蓋過 VBear 的設定，所以不啟動聊天/,
     text: "這台電腦的 AI 工具有管理員設定，VBear 不能用它聊天。", next: "可以到「AI 工具」看看有沒有別的工具能用。" },
   { key: "orphan", re: /孤兒翻譯/, label: true, swaps: [[/孤兒翻譯/g, "找不到原技能的翻譯"]] },
+  // P48-6: the browser's own words when a request never reached the server (Chrome, WebKit in the Mac app, Firefox); the server says none of them.
+  { key: "server_lost", re: /^(?:TypeError:\s*)?(?:Failed to fetch|Load failed|NetworkError when attempting to fetch resource\.?)$/i,
+    text: "連不上 VBear 的伺服器，可能剛關掉或正在重新啟動。", next: "等一下再重新整理。" },
 ];
 // x: the original (a string, or an Error or a server answer that carries it).
 // -> { text, next, detail, known, limit }. Known: `text` is the plain words and `detail` the original, whole. Not known: `text` is the
@@ -1502,6 +1505,11 @@ async function startTranslation(id, which) {
     await refreshTranslations();
   } catch (e) { toast("無法翻譯：" + e.message); }
 }
+// The line over a card when the state of the translations could not be read: the person's words if the table knows the sentence, the original kept behind 「技術細節」.
+function translationStateNotice() {
+  const w = plainWords(T.error);
+  return w.known ? notice("warn", [`翻譯狀態未知：${w.text}${w.next}`, w.detail ? plainTechFold(w.detail) : null]) : notice("warn", "翻譯狀態未知：" + T.error);
+}
 function translationPanel(id, original) {
   const box = el("section", { class: "translation-panel", "aria-label": "技能中文化" });
   let showOriginal = false;
@@ -1520,7 +1528,7 @@ function translationPanel(id, original) {
     const originalView = el("div", { class: "translation-original" }, original);
     originalView.hidden = !!e && !showOriginal;
     setKids(box,
-      T.error ? notice("warn", "翻譯狀態未知：" + T.error) : null,
+      T.error ? translationStateNotice() : null,
       failure ? el("div", { class: "translation-failure notice warn", "data-translation": "failure" },
         el("span", null, "暫時無法翻譯，原文已保留"), " · ",
         el("button", { class: "btn small", type: "button", "data-translation-action": "retry", on: { click: () => { if (!T.error) startTranslation(id); } } }, "重試"), " · ",
@@ -7487,17 +7495,21 @@ async function viewSettings(params) {   // params: the address's ?key=value (P47
   const day = daily && typeof daily.daily_usd === "number" ? daily.daily_usd : null;
   let dayNow = day;
   const spent = ledger && (typeof ledger.spent_usd === "number" || typeof ledger.spent_usd === "string" && /^\d+(?:\.\d+)?$/.test(ledger.spent_usd)) && isFinite(Number(ledger.spent_usd)) ? Number(ledger.spent_usd) : null;
+  let lamp = ledger && typeof ledger.lamp === "string" ? ledger.lamp : "";
   const summary = el("summary");
   const summaryText = () => {
-    const state = spent === null ? "今天的用量：未知"
-      : dayNow === null ? "狀態：未知" : spent >= dayNow ? "今天已到上限" : "今天還可以用";
-    summary.textContent = `用量與上限：每天最多 ${dayNow === null ? "未知" : setupUsd(dayNow)}（${state}）`;
+    // the state is the server's own lamp (the one that stops a send), not a sum the page makes: a lamp it did not read is not guessed
+    const state = lamp === "red" ? "今天已到上限" : lamp === "green" || lamp === "yellow" ? "今天還可以用" : "";
+    summary.textContent = `用量與上限：每天最多 ${dayNow === null ? "未知" : setupUsd(dayNow)}${state ? `（${state}）` : ""}`;
   };
   summaryText();
   const limits = el("details", { class: "panel pad", "data-settings": "limits", open: !!params && params.open === "limits" }, summary,
     spent !== null ? el("p", { class: "small" }, `今天已花 ${usdText(spent)}。聊天、會議、分配工作、定時工作都算；Codex 和 AGY 是 VBear 的估計，不是帳單；用的是你的方案。`)
       : el("p", { class: "small muted" }, "讀不到今天的用量"),
-    dailyLimitEditor({ current: day, onSaved: (res) => { dayNow = res.daily_usd; summaryText(); } }));
+    dailyLimitEditor({ current: day, onSaved: (res) => {
+      dayNow = res.daily_usd; lamp = ""; summaryText();                      // the lamp was for the old limit: said again only when read again
+      api.get("/api/meetings/ledger").then((l) => { lamp = l && typeof l.lamp === "string" ? l.lamp : ""; summaryText(); }).catch(() => {});
+    } }));
   setKids(main,
     el("h1", null, "設定"),
     c.corrupt ? corruptNotice() || notice("bad", "設定檔（config.json）無法讀取，設定暫時無法儲存。") : null,
@@ -7528,14 +7540,15 @@ async function viewSettings(params) {   // params: the address's ?key=value (P47
             el("div", null, el("div", { class: "t" }, "紀錄範圍"),
               el("select", { on: { change: (e) => saveConf({ usage_days: Number(e.target.value) }).then(() => loadLive(true)) } },
                 [7, 14, 30, 60, 90].map((n) => el("option", { value: n, selected: Number(conf.usage_days || 30) === n }, `最近 ${n} 天`)))))),
-        el("div", { class: "panel pad" },
+        el("div", { class: "panel pad", "data-settings": "dataflow" },
           el("h2", { style: "margin-bottom:8px" }, "資料流向"),
           el("ul", { class: "small", style: "margin:0;padding-left:18px;color:var(--ink-2)" },
-            el("li", null, "所有掃描都在這台電腦上完成；技能翻譯若啟用，會經你電腦上已登入的工具，將作者說明送到模型服務。"),
-            el("li", null, "網頁伺服器只接受本機（127.0.0.1）連線。"),
-            el("li", null, "技能內的腳本不會被執行；原始內容以純文字顯示。"),
-            el("li", null, "VBear 只寫入自己的狀態目錄", advanced ? [": ", el("span", { class: "mono" }, home(c.state_dir))] : "", "。"),
-            el("li", null, "員工由 VBear 的背景程式啟動與管理；開啟指令視窗預設只觀看，接管後才會送出輸入。"))),
+            el("li", null, "你的資料都在這台電腦上整理；只有你打開「技能中文化」時，技能的說明會經你自己登入的 AI 工具送到那家公司翻譯。"),
+            el("li", null, "VBear 只接受這台電腦自己的連線（127.0.0.1）。"),
+            el("li", null, "技能裡的程式不會被執行，只當文字顯示。"),
+            el("li", null, "VBear 只寫自己的資料夾", advanced ? ["：", el("span", { class: "mono" }, home(c.state_dir))] : "", "。"),
+            el("li", null, "員工由 VBear 在背後啟動；指令視窗預設只看不打字，你按「接手」才會送出你打的字。"),
+            el("li", null, "通知只在這台 Mac 上顯示，內容只有件數（要在「通知」打開）。"))),
     limits,
     advanced ? el("section", { "data-settings-advanced": "" },
       translationSettings(conf, saveConf), onboardingSettings(conf, saveConf),
@@ -20091,7 +20104,18 @@ function tplScheduleText(r) {
   const days = r.days.length === 7 ? "每天" : `每週${r.days.map((d) => ROUTINE_DAYS[d]).join("、")}`;
   return `${days}　${r.times.join("、")}`;
 }
-function tplModelText(card) { return card.claude_model ? `建議模型 ${card.claude_model}` : ""; }
+// The name a model is shown by (P48-6): the label the catalog's model_options gives that very model id, else the id as it is (nothing is guessed).
+const TPL_NO_POSITION = "沒有指定職位";
+function tplModelName(catalog, tool, id) {
+  const all = catalog && catalog.model_options;
+  const src = all && typeof all === "object" && cardHas(all, tool) && all[tool] && typeof all[tool] === "object" ? all[tool] : null;
+  for (const group of ["listed", "latest", "observed"]) {
+    const hit = src && Array.isArray(src[group]) ? src[group].find((o) => o && o.value === id && typeof o.label === "string" && o.label && o.label !== id) : null;
+    if (hit) return hit.label;
+  }
+  return id;
+}
+function tplModelText(card, catalog) { return card.claude_model ? `建議模型 ${tplModelName(catalog, "claude", card.claude_model)}` : ""; }
 
 // One team template as a block: its name, what it is for, and three rows of tick boxes. `ctx.sel` is the selection of the page; `ctx.boxes` collects
 // the boxes so that one call of `ctx.sync()` can redraw their state and the line at the bottom.
@@ -20106,7 +20130,7 @@ function templatesBlock(template, ctx) {
     box.checked = sel[kind].has(tplId(ref));
     ctx.boxes.push({ box, kind, id: tplId(ref) });
     const facts = kind === "cards"
-      ? [el("span", { class: "tag" }, CARD_POSITION_LABEL[item.position] || "未指定"), " ", el("span", { class: "small muted" }, tplModelText(item))]
+      ? [el("span", { class: "tag" }, CARD_POSITION_LABEL[item.position] || TPL_NO_POSITION), " ", el("span", { class: "small muted" }, tplModelText(item, ctx.catalog))]
       : kind === "routines"
         ? [el("span", { class: "small muted" }, `${tplScheduleText(item)}　交給：${item.who ? cardName(item.who) || "（這個團隊範本裡沒有）" : "套用時再選"}`)]
         : [];
@@ -20204,7 +20228,7 @@ function templatesMineSection(ctx) {
     box.checked = now[kind].has(item.id);
     return el("li", { class: "tpl-item", "data-tpl-now-item": kind },
       el("label", { class: "tpl-pick" }, box, " ", el("strong", null, item.name), " ",
-        kind === "cards" ? el("span", { class: "tag" }, CARD_POSITION_LABEL[item.position] || "未指定") : null));
+        kind === "cards" ? el("span", { class: "tag" }, CARD_POSITION_LABEL[item.position] || TPL_NO_POSITION) : null));
   };
   const empty = TPL_KINDS.every(([kind]) => (have[kind] || []).length === 0);
   const count = el("span", { class: "small", "data-templates": "now-count" });
@@ -20516,12 +20540,12 @@ function openTemplatesPreview(ctx) {
         ? el("p", { class: "small", "data-templates": "tool-not-ready" }, TPL_PREVIEW_LINES.notReady, chosen.why ? ` ${chosen.why}` : "") : null);
   };
   const cardLine = (c) => {
-    const input = el("input", { type: "text", maxlength: "40", value: c.name, "data-tpl-name": tplId(c.from), "aria-label": `員工的名字：${c.default_name}`,
+    const input = el("input", { type: "text", class: "input", maxlength: "40", value: c.name, "data-tpl-name": tplId(c.from), "aria-label": `員工的名字：${c.default_name}`,
       on: { change: (e) => { const entry = ctx.sel.cards.get(tplId(c.from)); if (entry) { entry.name = e.target.value; ask(); } } } });
     input.value = c.name;
     return el("li", { "data-tpl-preview": "card" }, input, " ",
-      el("span", { class: "tag" }, CARD_POSITION_LABEL[c.position] || "未指定"), " ",
-      el("span", { class: "small muted" }, `${TPL_TOOL_LABEL[state.preview.tool]}${c.model_id ? `　${c.model_id}` : "　工具自己的預設模型"}`),
+      el("span", { class: "tag" }, CARD_POSITION_LABEL[c.position] || TPL_NO_POSITION), " ",
+      el("span", { class: "small muted" }, `${TPL_TOOL_LABEL[state.preview.tool]}${c.model_id ? `　${tplModelName(ctx.catalog, state.preview.tool, c.model_id)}` : "　工具自己的預設模型"}`),
       c.instructions_head ? el("p", { class: "small tpl-text", "data-tpl-preview": "head" }, c.instructions_head + (c.instructions_cut ? "…" : "")) : null,
       c.same_in_batch ? el("p", { class: "small muted", "data-tpl-preview": "same-batch" }, `這次有不只一位叫「${c.name}」，只是提醒。`) : null,
       c.same_existing ? el("p", { class: "small muted", "data-tpl-preview": "same-existing" }, `你已經有一位叫「${c.name}」，只是提醒。`) : null);
@@ -20629,11 +20653,11 @@ async function viewTemplates() {
   try { data = await api.get("/api/templates"); }
   catch (e) { setKids(claim(token), el("h1", null, "團隊範本"), notice("bad", "讀不到團隊範本：" + e.message)); return; }
   // the line about the CEO is for a person who has none: shown only when the employees were read and none of them is a CEO (not read: not said)
-  const staff = await api.get("/api/agent-profiles").catch(() => null);
+  const [staff, catalog] = await Promise.all([api.get("/api/agent-profiles").catch(() => null), api.get("/api/agent-builder/catalog").catch(() => null)]);
   if (token !== seq) return;
   const noCeo = !!staff && Array.isArray(staff.profiles) && !staff.profiles.some((p) => p && typeof p === "object" && cardPosition({ position: p.position }) === MEETING_CHAIR_POSITION);
   const main = claim(token);
-  const ctx = { data, sel: tplSelection(), boxes: [], reload: () => viewTemplates() };
+  const ctx = { data, sel: tplSelection(), boxes: [], catalog: catalog && catalog.ok ? catalog : null, reload: () => viewTemplates() };
   const count = el("span", { "data-templates": "count" });
   const preview = el("button", { class: "btn primary", type: "button", "data-tpl-action": "preview", on: { click: () => openTemplatesPreview(ctx) } }, "預覽並套用");
   ctx.sync = () => {
