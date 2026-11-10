@@ -468,8 +468,8 @@ function findModalInBody() {
     await settle();
     let dlg = findModalInBody();
     assert.ok(dlg, "deleting a role card opens an in-page confirmation");
-    assert.ok(walk(dlg).some((n) => n.tag === "h2" && n.textContent === "刪除角色卡"), "plain title");
-    assert.ok(walk(dlg).some((n) => n.tag === "p" && n.textContent === "確定要刪除角色卡「First」嗎？刪除後無法復原。"),
+    assert.ok(walk(dlg).some((n) => n.tag === "h2" && n.textContent === "刪除員工"), "plain title");
+    assert.ok(walk(dlg).some((n) => n.tag === "p" && n.textContent === "確定要刪除員工「First」嗎？刪除後無法復原。"),
               "the dialog names the card and says it cannot be undone");
     assert.deepStrictEqual(posts, [], "nothing is sent before the dialog is answered");
     dialogButton(dlg, "取消").dispatch("click");
@@ -943,12 +943,12 @@ function findModalInBody() {
     assert.ok(modal, "skill card dialog opened");
     assert.ok(!walk(modal).some((n) => n.tag === "img" || n.tag === "script"), "no element is built from text");
     assert.ok(findText(modal, hostile), "the hostile name is shown as text");
-    assert.ok(walk(modal).some((n) => n.tag === "span" && (n.textContent || "") === "出發時不會載入"), "出發時不會載入 is fixed");
+    assert.ok(walk(modal).some((n) => n.tag === "span" && (n.textContent || "") === "開始工作時不會載入"), "開始工作時不會載入 is fixed");
     assert.ok(findText(modal, "效果是作者的描述，不是 VBear 驗證過的能力，只適用於你自己啟動並載入這張技能的工具"));
     assert.ok(findText(modal, "未提供"), "a missing field reads 未提供");
     assert.ok(findText(modal, "a.py") && findText(modal, "存在") && findText(modal, "缺少") && findText(modal, "VBear 不會執行這些檔案"));
     assert.ok(!findText(modal, "可執行腳本"), "no script count");
-    assert.ok(findText(modal, "收藏在 1 張角色卡上：First（出發時不會載入）"));
+    assert.ok(findText(modal, "收藏在 1 張角色卡上：First（開始工作時不會載入）"));
     assert.ok(findText(modal, "目前沒有觀察紀錄（最近 30 天；來源：執行觀察）"));
     assert.ok(findText(modal, "市集有其他副本（1 個，尚未安裝）"));
     assert.ok(findText(modal, "已安裝（可使用）：位於使用者技能目錄"), "the status names the state and the reason");

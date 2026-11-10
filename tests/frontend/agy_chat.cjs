@@ -537,7 +537,7 @@ test("a role card of an AGY employee can chat and says what AGY is for; a card o
   const agy = mk("agy");
   const btn = agy.find((n) => n.getAttribute && n.getAttribute("data-pcard") === "chat");
   assert.notStrictEqual(btn.disabled, true);
-  assert.strictEqual(text(agy.find((n) => n.getAttribute && n.getAttribute("data-pcard") === "agy-note")), "AGY 的員工可以聊天（每個指令都問你）；要在終端機出發請選完整模式。");
+  assert.strictEqual(text(agy.find((n) => n.getAttribute && n.getAttribute("data-pcard") === "agy-note")), "AGY 的員工可以聊天（每個指令都問你）；要在指令視窗開始工作請選「完全交給他（有風險）」。");
   const grok = mk("grok");
   assert.strictEqual(grok.find((n) => n.getAttribute && n.getAttribute("data-pcard") === "chat").disabled, true);
   assert.strictEqual(grok.find((n) => n.getAttribute && n.getAttribute("data-pcard") === "agy-note"), null);

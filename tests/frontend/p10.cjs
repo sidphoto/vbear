@@ -146,7 +146,7 @@ const roleLive = () => liveWith({ sessions: [{ terminal_id: PANE, pane_id: PANE,
 test("F3 a role terminal's way back is 回角色卡池, and the old name is gone", async () => {
   const main = await openTerminal(PANE, { live: roleLive(), tasks: [] });
   const back = byData(main, "data-term", "back")[0];
-  assert.strictEqual(text(back), "回角色卡池");
+  assert.strictEqual(text(back), "回員工詳細資料");
   assert.strictEqual(back.getAttribute("href"), "#/team");
   assert.strictEqual(byData(main, "data-term", "back-task").length, 0, "no task card tracks it: no button for one");
   assert(!text(main).includes("返回團隊"));
@@ -160,13 +160,13 @@ test("F3 a terminal tracked on a task card also gets 回任務卡, to that card"
   assert(toTask, "the button is there");
   assert.strictEqual(text(toTask), "回任務卡");
   assert.strictEqual(toTask.getAttribute("href"), "#/workbench?task=t-mine");
-  assert.strictEqual(text(byData(main, "data-term", "back")[0]), "回角色卡池", "the pool button stays");
+  assert.strictEqual(text(byData(main, "data-term", "back")[0]), "回員工詳細資料", "the pool button stays");
 });
 
 test("F3 the built-in terminal keeps 所有終端機 and never gets 回任務卡", async () => {
   const live = liveWith({ panes: [{ pane_id: PANE, kind: "shell", cwd: "/tmp/x" }] });
   const main = await openTerminal(PANE, { live, tasks: [{ id: "t-mine", associated_pane_id: PANE }] });
-  assert.strictEqual(text(byData(main, "data-term", "back")[0]), "所有終端機");
+  assert.strictEqual(text(byData(main, "data-term", "back")[0]), "所有指令視窗");
   assert.strictEqual(byData(main, "data-term", "back")[0].getAttribute("href"), "#/terminals");
   assert.strictEqual(byData(main, "data-term", "back-task").length, 0);
 });
@@ -178,7 +178,7 @@ test("F3 if the task list cannot be read the terminal page still has its back bu
     global.fetch = async (url, opts) => { if (String(url).startsWith("/api/tasks")) throw new Error("down"); return orig(url, opts); };
     try { return await openTerminal(PANE, { live: roleLive(), tasks: [] }); } finally { global.fetch = orig; }
   })();
-  assert.strictEqual(text(byData(main, "data-term", "back")[0]), "回角色卡池");
+  assert.strictEqual(text(byData(main, "data-term", "back")[0]), "回員工詳細資料");
 });
 
 // ---- F5: plain words for the engineering ones ------------------------------------------------------------------

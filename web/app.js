@@ -659,7 +659,7 @@ function termDimsForRequest(term) {
 
 function initTerminalInstance({ TerminalClass, FitAddonClass, termElem, options = {} }) {
   if (!TerminalClass || !FitAddonClass) {
-    return { ok: false, error: "無法載入終端機模組 (xterm.js)", term: null, fitAddon: null };
+    return { ok: false, error: "無法載入指令視窗模組 (xterm.js)", term: null, fitAddon: null };
   }
   let term = null;
   let fitAddon = null;
@@ -708,7 +708,7 @@ function initTerminalInstance({ TerminalClass, FitAddonClass, termElem, options 
     if (term && typeof term.dispose === "function") {
       try { term.dispose(); } catch (_) {}
     }
-    return { ok: false, error: err ? err.message : "終端機初始化失敗", term: null, fitAddon: null };
+    return { ok: false, error: err ? err.message : "指令視窗初始化失敗", term: null, fitAddon: null };
   }
 }
 
@@ -930,7 +930,7 @@ function authRequiredView() {
   return el("div", { class: "section" },
     el("h1", null, "請從 VBear 開啟"),
     notice("warn", "VBear 只接受從它自己打開的視窗。這個分頁沒有通行證，可能是直接輸入了網址，或 VBear 重新啟動過。"),
-    el("p", null, "打開 VBear App，或在終端機執行 ", el("code", null, "python3 -m vbear launch"), "，會自動開一個可以使用的分頁。"));
+    el("p", null, "打開 VBear App，或在指令視窗執行 ", el("code", null, "python3 -m vbear launch"), "，會自動開一個可以使用的分頁。"));
 }
 
 let toastTimer;
@@ -1029,27 +1029,30 @@ const LIMIT_REACHED_TEXT = "今天的用量到你設的上限了，所以這則�
 // text and codes are not changed (a test finds each sentence in the Python sources). `re`: finds it; `text` (+ `next`): the plain words
 // that take the place of the whole sentence; `swaps`: instead, change only some words of it and keep the rest; `limit`: the day's
 // spending limit stopped it (it gets limitReachedNotice's sentence and a way to the settings); `label`: a vocabulary change only,
-// nothing to hide, so no 「技術細節」. The original is kept whole in `detail`. A sentence this table does not know is shown as it is.
+// nothing to hide, so no 「技術細節」; `normalOnly`: not on an advanced page (onAdvancedPage). The original is kept whole in `detail`. A sentence this table does not know is shown as it is.
 const PLAIN_ERRORS = [
   { key: "limit_red", limit: true, re: /今天的額度已用完（亮紅燈）|額度用完（亮紅燈）/ },
   { key: "limit_budget", limit: true, re: /今天剩下的額度不到 US\$0\.01|^額度不夠，沒有送出[。.]?$/ },
   { key: "runtime_down", re: /無法連線到 VBear runtime|VBear runtime 背景程序(?:無法連線|無法使用|無法啟動或連線|沒有在執行)|VBear runtime (?:未連線|未啟動或無法連線|無法連線)|與 VBear runtime 的連線中斷/,
     text: "VBear 的背景程式沒有在跑，員工現在不能回話。", next: "關掉 VBear 再打開通常就好。" },
   { key: "cli_version", re: /Agent CLI 版本檢查/, text: "VBear 沒能確認這個 AI 工具的版本，所以先不啟動它。", next: "請到「AI 工具」看看它有沒有裝好、能不能開。" },
-  { key: "manual_review", re: /manual_review|(?:待|需要|等待)人工處理/, next: "VBear 不確定這件事有沒有收尾，先停下來等你看。",
+  { key: "manual_review", normalOnly: true, re: /manual_review|(?:待|需要|等待)人工處理/, next: "VBear 不確定這件事有沒有收尾，先停下來等你看。",
     swaps: [[/[（(]\s*manual_review\s*[）)]/g, ""], [/manual_review/g, "要你檢查"], [/(?:等待|需要|待)人工處理/g, "要你檢查"]] },
   { key: "orphan", re: /孤兒翻譯/, label: true, swaps: [[/孤兒翻譯/g, "找不到原技能的翻譯"]] },
 ];
 // x: the original (a string, or an Error or a server answer that carries it).
 // -> { text, next, detail, known, limit }. Known: `text` is the plain words and `detail` the original, whole. Not known: `text` is the
 // original as it came, `detail` is empty, and nothing is guessed.
+// An advanced page (指令視窗, 工作台, 流程, 專案資料夾, AI 工具的外掛清單, 員工詳細資料) changes only its menu name and its title this version, so a rule
+// marked `normalOnly` leaves what such a page says as it is. Before any page is drawn (navTop is still empty) it applies.
+function onAdvancedPage() { return navTop !== "" && ADVANCED_NAV.has(navOf(navTop) || ""); }
 function plainWords(x) {
   const raw = typeof x === "string" ? x.trim()
     : x && typeof x.message === "string" ? x.message.trim()
     : x && typeof x.error === "string" ? x.error.trim() : "";
   const none = { text: raw, next: "", detail: "", known: false, limit: false };
   if (!raw) return none;
-  const hit = PLAIN_ERRORS.find((e) => e.re.test(raw));
+  const hit = PLAIN_ERRORS.find((e) => e.re.test(raw) && !(e.normalOnly && onAdvancedPage()));
   if (!hit) return none;
   if (hit.limit) return { text: LIMIT_REACHED_TEXT, next: "", detail: raw, known: true, limit: true };
   if (hit.swaps) {
@@ -1606,7 +1609,7 @@ function translationSettings(conf, saveConf) {
     el("p", { class: "small muted" }, "第一次開啟需確認資料送出、額度與費用。更換引擎會關閉自動重翻，請重新同意。關閉時也會停止目前工作。"),
     el("p", null, `找不到原技能的翻譯：${T.error ? "未知" : T.counts.orphan || 0}`),
     el("p", { class: "small", "data-translation": "roles" }, RT.error || !RT.loaded ? "職業名稱翻譯：狀態未知"
-      : `職業名稱翻譯：已翻 ${RT.counts.fresh || 0} · 未翻 ${roleUntranslated()}（在角色卡精靈的「職業」裡翻譯）`),
+      : `職業名稱翻譯：已翻 ${RT.counts.fresh || 0} · 未翻 ${roleUntranslated()}（在員工精靈的「職業」裡翻譯）`),
     el("button", { class: "btn small", type: "button", on: { click: async () => {
       if (T.error) return;
       if (!(await confirmInPage("檢查找不到原技能的翻譯", `目前有 ${T.counts.orphan || 0} 個索引已找不到的翻譯；只清除快取，不會刪除技能。`, "繼續"))) return;
@@ -2245,7 +2248,7 @@ function terminalClosedNotice(reason, sessionGone, goneAdvice) {
   const v = terminalClosedView(reason);
   const next = sessionGone ? goneAdvice : "如需重新開啟請點選右上方「重新連線」。";
   const said = v.text && !/[。！？.!?]$/.test(v.text) ? v.text + "。" : v.text;
-  return notice("info", [`終端機連線已關閉${said ? "：" + said : ""}${next}`,
+  return notice("info", [`指令視窗連線已關閉${said ? "：" + said : ""}${next}`,
     v.detail ? el("details", { class: "small term-tech", "data-term": "tech" },
       el("summary", null, "技術細節"), el("code", { class: "term-tech-raw" }, v.detail)) : null]);
 }
@@ -2257,7 +2260,7 @@ function staleNotice() {
 }
 function corruptNotice() {
   if (!D.overview || !D.overview.config_corrupt) return null;
-  return notice("bad", "設定檔（config.json）無法讀取。你原本選的掃描範圍目前不明，所以主控台已關閉所有掃描來源，也不會重新掃描，畫面上是先前的索引。請修復或刪除 ~/.vbear/config.json 後重新啟動主控台；原檔不會被覆寫。");
+  return notice("bad", "設定檔（config.json）無法讀取。你原本選的掃描範圍目前不明，所以 VBear 已關閉所有掃描來源，也不會重新掃描，畫面上是先前的索引。請修復或刪除 ~/.vbear/config.json 後重新啟動 VBear；原檔不會被覆寫。");
 }
 function runtimeNotice() {
   const h = D.live && D.live.runtime;
@@ -2278,7 +2281,7 @@ function herdrMigrationNotice() {
   } } }, "知道了");
   const wrap = el("div", { class: "notice info" },
     el("span", { class: "ico", "aria-hidden": "true" }, "i"),
-    el("div", null, "主控台已改用內建的 VBear runtime，不再支援 Herdr，設定已自動切換。在 Herdr 或其他終端自行啟動的 Agent 不會出現在這裡；請從角色卡的「出發通行證」開啟。 ", ack));
+    el("div", null, "VBear 已改用內建的背景程式，不再支援 Herdr，設定已自動切換。在 Herdr 或其他終端自行啟動的 AI 工具不會出現在這裡；請從員工的「開始前的檢查」開啟。 ", ack));
   return wrap;
 }
 function sectionHead(title, sub, action) {
@@ -3020,7 +3023,7 @@ function questCard(f, yourTurn) {
       el("div", { style: "min-width:0" },
         el("div", { class: "card-title" },
           el("a", { class: "quest-link", href: `#/flows/${encodeURIComponent(f.id)}` },
-            f.task_missing ? "（任務卡已刪除或無法讀取）" : f.task_title)),
+            f.task_missing ? "（專案已刪除或無法讀取）" : f.task_title)),
         hintLine(flowTitleHint(f)),
         el("div", { class: "card-sub" }, f.attention_reason || ph.reason || "")),
       el("span", { class: `badge ${flowPhaseClass(ph.key)} quest-type`, title: ph.reason || "" },
@@ -3055,12 +3058,12 @@ function boardSection(g, opts = {}) {
     return el("section", { class: "section", "data-board": "start" },
       sectionHead("任務告示板", "每 5 秒更新"),
       el("div", { class: "empty-state quest-start" },
-        el("strong", null, "大廳目前沒有任務。想開始第一個任務？"),
-        el("a", { class: firstGame ? "btn" : "btn primary", href: "#/workbench", "data-board": "workbench" }, "到終端工作台"),
-        el("span", null, "在那裡挑角色出發；想讓多個角色合作，先按下方「＋ 任務卡（導入專案）」挑一個專案資料夾，再把角色卡放上任務卡的隊伍位置。"),
+        el("strong", null, "目前沒有任務。想開始第一個任務？"),
+        el("a", { class: firstGame ? "btn" : "btn primary", href: "#/workbench", "data-board": "workbench" }, "到工作台"),
+        el("span", null, "在那裡挑員工開始工作；想讓多位員工合作，先按下方「＋ 加入一個資料夾」挑一個專案資料夾，再把員工放上專案的隊伍位置。"),
         g.meetingsError ? notice("warn", `讀不到會議：${g.meetingsError}`) : null,
         g.staffingError ? notice("warn", `讀不到組隊會議：${g.staffingError}`) : null,
-        g.dispatchError ? notice("warn", `讀不到派工：${g.dispatchError}`) : null,
+        g.dispatchError ? notice("warn", `讀不到分配工作：${g.dispatchError}`) : null,
         g.groupsError ? notice("warn", `讀不到群組：${g.groupsError}`) : null));
   }
   const nTurn = g.yourTurnFlows.length;
@@ -3072,7 +3075,7 @@ function boardSection(g, opts = {}) {
   const nGroupWait = (g.yourTurnGroups || []).filter((r) => r.waiting === true).length;
   const nGroupPaused = (g.yourTurnGroups || []).length - nGroupWait;
   const counts = [nTurn ? `${nTurn} 則流程等你` : "", nMeetings ? `${nMeetings} 場會議等你` : "", nStaffing ? `${nStaffing} 份組隊提案等你` : "",
-    nProposed ? `${nProposed} 份派工提議等你` : "", nPaused ? `${nPaused} 件派工暫停` : "",
+    nProposed ? `${nProposed} 份分配工作提議等你` : "", nPaused ? `${nPaused} 件分配工作暫停` : "",
     nGroupWait ? `${nGroupWait} 個群組等你按允許` : "", nGroupPaused ? `${nGroupPaused} 個群組暫停` : "",
     nAgents ? `${nAgents} 個終端在等你` : ""].filter(Boolean).join("・");
   const cards = [...g.yourTurnFlows.map((f) => questCard(f, true)), ...(g.yourTurnMeetings || []).map(meetingTurnCard),
@@ -3081,28 +3084,28 @@ function boardSection(g, opts = {}) {
   if (cards.length) turnBody = el("div", { class: "grid" }, cards);
   else if (g.error) {
     turnBody = g.runtimeAvailable
-      ? emptyState("目前沒有可判斷為在等你的終端", "只有 VBear 受管啟動、且版本已驗證的 Claude Code 能判斷「工作中／等你回覆」；其他終端會顯示「狀態未知」，請到角色卡池查看。")
-      : emptyState("VBear runtime 未連線，無法判斷有沒有終端在等你", null);
-  } else if (!g.runtimeAvailable) turnBody = emptyState("VBear runtime 未連線，無法判斷有沒有終端在等你", null);
+      ? emptyState("目前沒有可判斷為在等你的終端", "只有 VBear 受管啟動、且版本已驗證的 Claude Code 能判斷「工作中／等你回覆」；其他終端會顯示「狀態未知」，請到員工詳細資料查看。")
+      : emptyState("VBear 的背景程式未連線，無法判斷有沒有終端在等你", null);
+  } else if (!g.runtimeAvailable) turnBody = emptyState("VBear 的背景程式未連線，無法判斷有沒有終端在等你", null);
   else turnBody = emptyState("告示板上目前沒有輪到你的任務",
-    "只有 VBear 受管啟動、且版本已驗證的 Claude Code 能判斷「工作中／等你回覆」；其他終端會顯示「狀態未知」，請到角色卡池查看。");
+    "只有 VBear 受管啟動、且版本已驗證的 Claude Code 能判斷「工作中／等你回覆」；其他終端會顯示「狀態未知」，請到員工詳細資料查看。");
   const goingBody = g.inProgress.length
     ? [el("div", { class: "grid" }, g.inProgress.map((f) => questCard(f, false))),
       g.moreInProgress ? el("a", { class: "btn quest-more", href: "#/flows" }, `還有 ${g.moreInProgress} 則 →`) : null]
     : (g.error ? null : emptyState("目前沒有其他進行中的任務", null));
   const missingFold = (g.missingFlows || []).length ? el("details", { class: "fold quest-missing", "data-board": "missing" },
-    el("summary", null, `有 ${(g.missingFlows.length + (g.moreMissing || 0))} 個舊任務讀不到任務卡（已收起）`),
+    el("summary", null, `有 ${(g.missingFlows.length + (g.moreMissing || 0))} 個舊任務讀不到專案（已收起）`),
     el("div", { class: "fold-body" },
-      el("p", { class: "small muted" }, "這些流程的任務卡已經刪除，或檔案讀不出來，所以先收起來。需要時可以點開看，或到「流程」頁處理。"),
+      el("p", { class: "small muted" }, "這些流程的專案已經刪除，或檔案讀不出來，所以先收起來。需要時可以點開看，或到「流程」頁處理。"),
       el("div", { class: "grid" }, g.missingFlows.map((f) => questCard(f, false))),
       g.moreMissing ? el("a", { class: "btn quest-more", href: "#/flows" }, `還有 ${g.moreMissing} 則 →`) : null)) : null;
   return [
     el("section", { class: "section", "data-board": "turn" },
-      sectionHead("輪到你", `${counts ? counts + "・" : ""}資料來自流程記錄與即時狀態，每 5 秒更新；「狀態未知」的 Agent 請到角色卡池頁查看`),
+      sectionHead("輪到你", `${counts ? counts + "・" : ""}資料來自流程記錄與即時狀態，每 5 秒更新；「狀態未知」的 Agent 請到員工詳細資料查看`),
       flowsError(),
       g.meetingsError ? notice("warn", `讀不到會議：${g.meetingsError}`) : null,
       g.staffingError ? notice("warn", `讀不到組隊會議：${g.staffingError}`) : null,
-      g.dispatchError ? notice("warn", `讀不到派工：${g.dispatchError}`) : null,
+      g.dispatchError ? notice("warn", `讀不到分配工作：${g.dispatchError}`) : null,
       g.groupsError ? notice("warn", `讀不到群組：${g.groupsError}`) : null,
       turnBody),
     el("section", { class: "section", "data-board": "going" },
@@ -3120,9 +3123,9 @@ function boardSection(g, opts = {}) {
 // nothing instead of a guess.
 const ONBOARD_TITLE = "新手第一局";
 const ONBOARD_STEPS = [
-  { key: "cards", text: "拿角色卡", hint: "用起手牌組一次拿三張，或自己建" },
-  { key: "task", text: "導入專案，建立任務卡", hint: "挑一個你電腦上現有的專案資料夾" },
-  { key: "team", text: "把隊伍放上任務卡", hint: "規劃、執行、審查各放一張角色卡" },
+  { key: "cards", text: "新增員工", hint: "一次新增三位常用的員工，或自己建" },
+  { key: "task", text: "加入一個資料夾，建立專案", hint: "挑一個你電腦上現有的專案資料夾" },
+  { key: "team", text: "把隊伍放上專案", hint: "規劃、執行、審查各放一位員工" },
 ];
 
 // input: { profiles, catalog, tasks, flows, dismissed }; a list that is not an array, or a dismissed that is not a
@@ -3166,15 +3169,15 @@ function onboardingSection(state, opts = {}) {
   }
   const current = state.steps.find((st) => !st.done);
   const action = (st) => {
-    if (st.key === "cards") return el("a", { class: "btn small primary", href: "#/team", "data-onboard-go": "cards" }, "到角色卡池");
+    if (st.key === "cards") return el("a", { class: "btn small primary", href: "#/team", "data-onboard-go": "cards" }, "到員工詳細資料");
     if (st.key === "task") return el("button", { class: "btn small primary", type: "button", "data-onboard-go": "task",
-      on: { click: () => { if (typeof opts.onImport === "function") opts.onImport(); } } }, "導入專案");
+      on: { click: () => { if (typeof opts.onImport === "function") opts.onImport(); } } }, "加入一個資料夾");
     return state.firstTaskId
       ? el("a", { class: "btn small primary", href: `#/workbench?task=${encodeURIComponent(state.firstTaskId)}`, "data-onboard-go": "team" }, "去放隊伍")
       : null;
   };
   return el("section", { class: "section onboard", "data-onboarding": "steps", "aria-label": ONBOARD_TITLE },
-    sectionHead(ONBOARD_TITLE, "三步組好一支隊伍：拿卡、導入專案、把隊伍放上去。", dismiss),
+    sectionHead(ONBOARD_TITLE, "三步組好一支隊伍：新增員工、加入一個資料夾、把隊伍放上去。", dismiss),
     el("ol", { class: "onboard-steps" }, state.steps.map((st) => el("li", { class: `onboard-step${st.done ? " onboard-done-step" : ""}`,
       "data-step": st.key, "data-done": String(st.done), "aria-current": current && current.key === st.key ? "step" : null },
       onboardMark(st.done),
@@ -4504,7 +4507,7 @@ async function viewSkills(params) {
 
   const actOptions = [["active", "可使用"], ["", "全部"], ...Object.entries(ACT).filter(([k]) => k !== "active").map(([k, v]) => [k, v[0]])];
   setKids(main, 
-    el("div", { class: "row" }, el("h1", null, "技能庫"), el("a", { class: "btn small", href: "#/armory" }, "技能四態總覽")),
+    el("div", { class: "row" }, el("h1", null, "AI 工具的外掛清單"), el("a", { class: "btn small", href: "#/armory" }, "技能四態總覽")),
     el("p", { class: "lede" }, "這裡是掃描到的技能清單。預設只顯示目前可使用的副本；想看安裝、加入角色與使用證據，請開啟「技能四態總覽」。 ", helpTip("技能庫", "技能庫只盤點掃描到的檔案與載入位置；它不會安裝、啟動或修改任何 Skill。")),
     corruptNotice(),
     staleNotice(),
@@ -4537,7 +4540,7 @@ async function viewArmory() {
   setKids(main, el("p", { class: "loading" }, "載入技能四態總覽…"));
   let data;
   try { data = await api.get("/api/armory"); await refreshTranslations(); }
-  catch (e) { setKids(main, crumbs([["技能庫", "#/skills"], ["四態總覽"]]), notice("bad", e.message)); return; }
+  catch (e) { setKids(main, crumbs([["AI 工具的外掛清單", "#/skills"], ["四態總覽"]]), notice("bad", e.message)); return; }
   if (token !== seq) return;
   const state = (label, value, source, hint, cls) => el("div", { class: "armory-state" },
     el("div", { class: "armory-label" }, badge(label, cls), helpTip(label, hint)),
@@ -4545,8 +4548,8 @@ async function viewArmory() {
   const rows = data.skills || [];
   const libraryById = D.byId || new Map();   // filled when the library was opened; empty before that
   setKids(main,
-    crumbs([["技能庫", "#/skills"], ["四態總覽"]]),
-    el("div", { class: "row" }, el("h1", null, "技能四態總覽"), el("a", { class: "btn small", href: "#/skills" }, "回技能庫")),
+    crumbs([["AI 工具的外掛清單", "#/skills"], ["四態總覽"]]),
+    el("div", { class: "row" }, el("h1", null, "技能四態總覽"), el("a", { class: "btn small", href: "#/skills" }, "回 AI 工具的外掛清單")),
     el("p", { class: "lede" }, "四種狀態是唯讀觀察。已安裝、收藏在角色卡上與曾觀察到使用是不同事情；沒有證據就顯示未知。"),
     data.unresolved_equipped && data.unresolved_equipped.length
       ? notice("warn", `有 ${data.unresolved_equipped.length} 張角色卡引用的技能卡，目前索引找不到；不會自動刪除。`) : null,
@@ -4585,7 +4588,7 @@ async function viewSkillDetail(id) {
   setKids(main, el("p", { class: "loading" }, "載入中…"));
   let d;
   try { d = await api.get(`/api/skills/${encodeURIComponent(id)}`); }
-  catch (e) { setKids(main, crumbs([["技能庫", "#/skills"]]), notice("bad", e.message)); return; }
+  catch (e) { setKids(main, crumbs([["AI 工具的外掛清單", "#/skills"]]), notice("bad", e.message)); return; }
   if (token !== seq) return;
   const s = d.skill;
   const pkg = s.origin_package || {};
@@ -4602,7 +4605,7 @@ async function viewSkillDetail(id) {
     r.status === "present" ? badge("存在", "b-ok") : r.status === "missing" ? badge("缺失", "b-bad", "指向技能內的資料夾，但檔案不存在") : badge("非套件檔案", "b-mute", "不在技能目錄內，可能只是文件中的範例路徑")))) : el("p", { class: "muted small" }, "沒有偵測到引用檔。");
 
   setKids(main, 
-    crumbs([["技能庫", "#/skills"], [s.name]]),
+    crumbs([["AI 工具的外掛清單", "#/skills"], [s.name]]),
     el("div", { class: "row" }, el("h1", null, (d.annotation && (d.annotation.aliases || [])[0]) || s.name), actBadge(s.activation), toolTag(s.tool)),
     d.annotation && (d.annotation.aliases || [])[0] ? el("p", { class: "small muted" }, "原名：", el("span", { class: "mono" }, s.name)) : null,
     s.invoke_name !== s.name ? el("p", { class: "small muted" }, "在工具中的呼叫名稱：", el("span", { class: "mono" }, s.invoke_name)) : null,
@@ -4778,12 +4781,12 @@ const CARD_RETIRED_POSITIONS = {
 };
 const CARD_POSITIONS = CARD_POSITION_TABLE.map((r) => r.id);
 const CARD_POSITION_LABEL = Object.fromEntries(CARD_POSITION_TABLE.map((r) => [r.id, r.label]));
-const CARD_REVIEW_PLACE_TEXT = "審查位或第二位審查（要和執行位不同陣營）";
-const CARD_STAFF_PLACE_TEXT = "不佔任務卡的位置，通常單獨出發";
-const CARD_STAFF_PLANNER_TEXT = "通常不上任務卡；沒有 CEO 時可以放規劃位";
-const CARD_STAFF_PLACE_NOTE = "這是幕僚卡，不佔任務卡的位置，通常單獨出發";
-const CARD_STAFF_PLANNER_NOTE = "這是幕僚卡，通常不上任務卡；沒有 CEO 時可以放規劃位";
-const CARD_GATE_NOTE = "這是 VBear 的品質關卡，不是公司職位；給任務卡的審查位用。";
+const CARD_REVIEW_PLACE_TEXT = "審查位或第二位審查（要和執行位不同的 AI 工具）";
+const CARD_STAFF_PLACE_TEXT = "不佔專案的位置，通常單獨開始工作";
+const CARD_STAFF_PLANNER_TEXT = "通常不上專案；沒有 CEO 時可以放規劃位";
+const CARD_STAFF_PLACE_NOTE = "這是幕僚卡，不佔專案的位置，通常單獨開始工作";
+const CARD_STAFF_PLANNER_NOTE = "這是幕僚卡，通常不上專案；沒有 CEO 時可以放規劃位";
+const CARD_GATE_NOTE = "這是 VBear 的品質關卡，不是公司職位；給專案的審查位用。";
 const CARD_SLOT_WORD = { planner: "規劃", executor: "執行", reviewer: "審查" };
 // Where a person suggested a card for is a front-end preference (design 3.3): it is not a profile field.
 const CARD_POSITION_KEY = "card.position.";
@@ -4797,7 +4800,7 @@ const PROFESSION_GROUP_OTHER = "other";   // the profession picker's group for a
 const SKILL_TRANSLATED_NOTE = "說明是機器翻譯，可能不準；點「看完整說明」可以對照原文";
 // The safe launch does not start Antigravity: in safe mode an AGY card is a record for building teams. Which skills AGY reads is judged by the
 // server from AGY's own files (the skills folders and ~/.gemini/config/skills.json) and arrives as read_by on a skill.
-const AGY_NOT_LAUNCHED = "安全模式不會啟動 AGY，要出發請選完整模式";
+const AGY_NOT_LAUNCHED = "「每件事先問我」不會啟動 AGY，要開始工作請選「完全交給他（有風險）」";
 // In full mode VBear does start an AGY, Grok or MCODE card (as a terminal, with the person's own settings); the safe launch never does.
 // The tools the safe launch never starts (the same list as agent_launch.UNLAUNCHABLE_TOOLS; a test keeps them equal): a card of
 // these has no launch, so the wizard does not ask whether its permission combination could be launched.
@@ -4808,24 +4811,24 @@ const UNLAUNCHABLE_TOOLS = ["shared", "agy", "grok", "mcode"];
 const SAFE_MODE_FALLBACK = ["claude"];
 const FULL_LAUNCH_TOOLS = ["claude", "codex", "agy", "grok", "mcode"];
 // The sentence on a card whose tool the safe mode never starts (GLOSSARY: 安全模式, 完整模式).
-const FULL_ONLY_MARK = "這個 AI 工具目前只能用完整模式";
-const FULL_ONLY_SHORT = "只能用完整模式";
-const FULL_ONLY_HELP = "完整模式可以從 VBear 出發，用你自己的設定與網路，VBear 不限制；職位指示請在開了終端、接管之後按「貼上職位指示」";
+const FULL_ONLY_MARK = "這個 AI 工具目前只能用「完全交給他（有風險）」";
+const FULL_ONLY_SHORT = "只能用「完全交給他（有風險）」";
+const FULL_ONLY_HELP = "「完全交給他（有風險）」可以從 VBear 開始工作，用你自己的設定與網路，VBear 不限制；職位指示請在開了終端、接管之後按「貼上職位指示」";
 const NO_PROFESSIONS = (tool) => `VBear 沒有掃描 ${CARD_TOOL_SHORT[tool]} 的 Agent 角色，沒有可選的職業標籤。`;
-const SHARED_NOT_LAUNCHED = "共用卡不能出發，權限意圖只是分工記錄";
+const SHARED_NOT_LAUNCHED = "共用卡不能開始工作，權限意圖只是分工記錄";
 const AGY_UNREAD_MARK = "AGY 不會讀";
 const AGY_NOT_READ = "AGY 不會讀這張技能卡（依這台電腦的 AGY 設定）";
-const AGY_SKILLS_NOTE = "這裡只列 AGY 依你電腦上的設定會讀到的技能（安全模式不啟動 AGY，完整模式會）。AGY 的內建與外掛技能不在這裡。";
+const AGY_SKILLS_NOTE = "這裡只列 AGY 依你電腦上的設定會讀到的技能（「每件事先問我」不啟動 AGY，「完全交給他（有風險）」會）。AGY 的內建與外掛技能不在這裡。";
 // Always beside the intents (design R3): an intent is a team marker, not a limit VBear applies.
 const CARD_INTENT_TITLE = "權限意圖（分工記號）";
-const CARD_INTENT_NOTE = "權限意圖是隊伍分工的標記，不代表 VBear 已經限制這個程式的真實能力；真正的限制，看出發通行證上的盾牌。";
+const CARD_INTENT_NOTE = "權限意圖是隊伍分工的標記，不代表 VBear 已經限制這個程式的真實能力；真正的限制，看開始前的檢查上的盾牌。";
 // Beside the suggested intents, after CARD_INTENT_NOTE (design v1.2 R10): why the suggestions are all the same set.
-const CARD_INTENT_LAUNCH_NOTE = "目前 VBear 能啟動的只有這一組權限。想讓規劃者或審查者不改檔案，VBear 現在無法強制，請在任務卡的目標裡寫清楚。";
-const CARD_SPECIES_NOTE = "種族只換外觀，不影響能力。";
+const CARD_INTENT_LAUNCH_NOTE = "目前 VBear 能啟動的只有這一組權限。想讓規劃者或審查者不改檔案，VBear 現在無法強制，請在專案的目標裡寫清楚。";
+const CARD_SPECIES_NOTE = "外觀只換樣子，不影響能力。";
 // What step 3 is, in plain words (P24): what a skill card is, what inserting one does, that VBear loads none of them
 // when a role departs (loadout._will_load is False for every tool), and that the step can be skipped.
 const CARD_SKILLS_NOTE = "技能卡是寫給 AI 的一份工作說明，例如怎麼做簡報、怎麼處理 PDF。插在這個角色上，是替它記下擅長什麼，排隊伍時看得出分工。"
-  + "VBear 讓角色出發時目前不會自動載入這些技能，只是記錄；這一步可以略過。";
+  + "VBear 讓角色開始工作時目前不會自動載入這些技能，只是記錄；這一步可以略過。";
 // Why a skill card is not in the default list of step 3. The keys are the index's activation values.
 const SKILL_UNUSED_REASON = {
   superseded: "舊版本，現在用的是新版",
@@ -4877,6 +4880,9 @@ function setCardPosition(id, position) {
   store.set(CARD_POSITION_KEY + id, CARD_POSITIONS.includes(position) ? position : null);
 }
 // The table row of a position; null for none, or for a value this page does not know (it is shown as not specified).
+// The duty of a position is the back end's sentence (the table above mirrors it word for word, and a test holds the two together); the
+// page says the one word of it that changed in v0.21.0 (陣營 -> AI 工具) when it draws it.
+function cardDutyText(duty) { return typeof duty === "string" ? duty.replace("不同陣營的模型", "不同 AI 工具的模型") : ""; }
 function cardPositionRow(position) {
   return typeof position === "string" ? CARD_POSITION_TABLE.find((r) => r.id === position) || null : null;
 }
@@ -4890,7 +4896,7 @@ function cardPositionPlaceText(row) {
 function cardPositionTitle(position) {
   const row = cardPositionRow(position);
   if (!row) return "位置未指定";
-  if (row.tier === "staff") return `你建議的位置是「${row.label}」（幕僚卡，通常不上任務卡）`;
+  if (row.tier === "staff") return `你建議的位置是「${row.label}」（幕僚卡，通常不上專案）`;
   const word = CARD_SLOT_WORD[row.slot] || row.label;
   return `你建議放「${word}」位${word === row.label ? "" : `（${row.label}）`}`;
 }
@@ -4906,12 +4912,12 @@ function cardFitsSlot(card, slotKind) {
 // safe mode on a version it verified; the pass shows what a launch really applies.
 const BOUNDARY_WORDS = { enforced_if_launched: "擋得住", reminder: "只是提醒", not_possible: "做不到", not_applicable: "不適用" };
 const BOUNDARY_HELP = {
-  enforced_if_launched: "VBear 出發這張卡時實際套上，限已驗證的版本",
+  enforced_if_launched: "VBear 讓這位員工開始工作時實際套上，限已驗證的版本",
   reminder: "寫給 AI 的話，VBear 沒有檢查",
   not_possible: "VBear 做不到，也擋不住",
-  not_applicable: "VBear 不幫這張卡出發，這一條用不上",
+  not_applicable: "VBear 不幫這位員工開始工作，這一條用不上",
 };
-const BOUNDARY_LEGEND = "「擋得住」只在 VBear 出發這張卡、而且版本已驗證時成立，實際以出發通行證為準；「只是提醒」是寫給 AI 的話，VBear 沒有檢查。";
+const BOUNDARY_LEGEND = "「擋得住」只在 VBear 讓這位員工開始工作、而且版本已驗證時成立，實際以開始前的檢查為準；「只是提醒」是寫給 AI 的話，VBear 沒有檢查。";
 // A resolved boundary view ({ mode_note, items: [{ id, text, kind }] }) as a list, or null when there is nothing to show.
 // attr is the data attribute the rows carry ("data-cw" in the wizard and the pass, "data-rc" on the card's back).
 function boundaryList(view, attr = "data-cw") {
@@ -5030,7 +5036,7 @@ function cardLight(p) {
   const undecided = CARD_INTENT_KEYS.filter(([k]) => intents[k] !== "allow" && intents[k] !== "deny").map(([, zh]) => zh);
   return undecided.length
     ? { state: "yellow", undecided, text: "還差一步：權限意圖還沒決定" }
-    : { state: "green", undecided: [], text: "可以出發（權限意圖都已決定）" };
+    : { state: "green", undecided: [], text: "可以開始工作（權限意圖都已決定）" };
 }
 
 // Another card already carries this name: a hint only, never a block (design 3.1).
@@ -5068,7 +5074,7 @@ function skillCompatible(skill, tool) {
   return typeof source === "string" && source === tool;
 }
 function skillIncompatibleNote(tool) {
-  return tool === "shared" ? "共用角色卡只能插共用的技能卡"
+  return tool === "shared" ? "共用員工只能插共用的技能卡"
     : tool === "agy" ? AGY_NOT_READ : `${CARD_TOOL_SHORT[tool] || "這個工具"} 不會讀這張卡`;
 }
 
@@ -5292,16 +5298,16 @@ function openCardWizard(opts) {
   const body = el("div", { class: "cw-body" });
   const stepper = el("ol", { class: "cw-steps", "aria-label": "步驟" });
   const foot = el("div", { class: "modal-actions cw-foot" });
-  const heading = el("h2", { id: titleId }, isNew ? "新角色卡" : `編輯角色卡：${existing.name || existing.id}`);
+  const heading = el("h2", { id: titleId }, isNew ? "新增員工" : `編輯員工：${existing.name || existing.id}`);
   const draftNote = draft ? el("p", { class: "small cw-hint", "data-cw": "draft-note" },
-    "這張卡是照 CEO 的組隊提案先填好的：名字、職位、陣營、模型和技能都可以改，按「建立」才會存。",
+    "這位員工是照 CEO 的組隊提案先填好的：名字、職位、AI 工具、模型和技能都可以改，按「建立」才會存。",
     draftDropped ? `CEO 建議的技能有 ${draftDropped} 張這張卡讀不到或找不到，沒有預選。` : "") : null;
   const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
     el("div", { class: "modal-box cw-box" }, heading, draftNote, stepper, body, foot));
   document.body.append(modal);
   const closeModal = withModalA11y(modal, () => modal.remove());
 
-  const STEP_TITLES = ["名字與外觀", "陣營與位置", "技能卡"];
+  const STEP_TITLES = ["名字與外觀", "AI 工具與位置", "技能卡"];
 
   function drawStepper() {
     setKids(stepper, STEP_TITLES.map((t, i) => {
@@ -5339,8 +5345,8 @@ function openCardWizard(opts) {
     hint.id = "cw-name-hint"; err.id = "cw-name-error";
     const tool = st.tool;
     const camp = campOf({ tool }).key;
-    const choices = [["", "依陣營"], ...OFFICE_SPECIES.map((sp) => [sp, OFFICE_SPECIES_LABEL[sp]])];
-    const species = el("div", { class: "cw-species", role: "group", "aria-label": "種族（外觀）" },
+    const choices = [["", "依 AI 工具"], ...OFFICE_SPECIES.map((sp) => [sp, OFFICE_SPECIES_LABEL[sp]])];
+    const species = el("div", { class: "cw-species", role: "group", "aria-label": "外觀" },
       choices.map(([v, label]) => {
         const sp = v || speciesFor({ tool });
         return el("button", { type: "button", class: "cw-choice", "data-species": v || "auto",
@@ -5349,7 +5355,7 @@ function openCardWizard(opts) {
       }));
     return [
       el("label", { class: "cw-field", for: "cw-name" }, el("span", null, "名字"), input, err, hint),
-      el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "種族（外觀）"), species,
+      el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "外觀"), species,
         el("p", { class: "small muted" }, CARD_SPECIES_NOTE)),
     ];
   }
@@ -5375,7 +5381,7 @@ function openCardWizard(opts) {
     if (intentIsVerified()) { box.setAttribute("hidden", ""); setKids(box); return; }
     box.removeAttribute("hidden");
     if (!entry || entry.state === "loading") {
-      setKids(box, el("p", { class: "small muted" }, "檢查這個組合能不能出發…"));
+      setKids(box, el("p", { class: "small muted" }, "檢查這個組合能不能開始工作…"));
       if (!entry) {
         intentChecks.set(key, { state: "loading" });
         const q = CARD_INTENT_KEYS.map(([k]) => `${k}=${encodeURIComponent(st.intents[k])}`).join("&");
@@ -5387,13 +5393,13 @@ function openCardWizard(opts) {
       return;
     }
     if (entry.state === "error") {
-      setKids(box, el("p", { class: "small muted" }, "讀不到這個組合的檢查，實際能不能出發以出發通行證為準。"));
+      setKids(box, el("p", { class: "small muted" }, "讀不到這個組合的檢查，實際能不能開始工作以開始前的檢查為準。"));
       return;
     }
     const reasons = entry.blockers.map((b) => (b && typeof b.message === "string" ? b.message : "")).filter(Boolean);
     if (!entry.blockers.length) { box.setAttribute("hidden", ""); setKids(box); return; }
     setKids(box, el("div", { class: "notice warn", role: "status" }, el("span", { class: "ico", "aria-hidden": "true" }, "!"),
-      el("div", null, el("strong", null, "這個組合目前不能出發"),
+      el("div", null, el("strong", null, "這個組合目前不能開始工作"),
         el("ul", { class: "small" }, (reasons.length ? reasons : ["原因未提供"]).map((r) => el("li", null, r))))));
   }
 
@@ -5437,7 +5443,7 @@ function openCardWizard(opts) {
     if (!r) return "目前索引找不到這個範本，標籤先保留。";
     if (r.kind === "cli") return "這是工具本身（等於不用範本）。";
     if (noTemplates()) return `${CARD_TOOL_SHORT[st.tool]} 沒有可選的職業，這是之前存下的標籤。`;
-    if (!roleCampOk(r)) return `這是 ${CARD_TOOL_SHORT[r.tool] || r.tool || "別的陣營"} 的範本，這張卡的陣營是 ${CARD_TOOL_SHORT[st.tool] || st.tool}。`;
+    if (!roleCampOk(r)) return `這是 ${CARD_TOOL_SHORT[r.tool] || r.tool || "別的 AI 工具"} 的範本，這位員工用的是 ${CARD_TOOL_SHORT[st.tool] || st.tool}。`;
     if (r.unavailable && !pk.showUnused) return `${r.unavailable}，這個範本目前用不到。`;
     return null;
   }
@@ -5507,11 +5513,11 @@ function openCardWizard(opts) {
     if (declared.length) {
       const ok = professionSkills(r);
       const rest = declared.length - ok.length;
-      if (!ok.length) kids.push(el("p", { class: "small muted" }, `範本寫明會用 ${declared.length} 張技能卡，這個陣營都不會讀，或目前索引找不到。`));
+      if (!ok.length) kids.push(el("p", { class: "small muted" }, `範本寫明會用 ${declared.length} 張技能卡，這個 AI 工具都不會讀，或目前索引找不到。`));
       else {
         const all = ok.every((sid) => st.equipped.has(sid));
         kids.push(el("p", { class: "small", "data-cw": "profession-skills" }, `範本寫明會用的技能卡：${ok.length} 張`,
-          rest ? `（另有 ${rest} 張這個陣營不會讀或目前索引找不到，不會插上）` : ""),
+          rest ? `（另有 ${rest} 張這個 AI 工具不會讀或目前索引找不到，不會插上）` : ""),
           el("button", { type: "button", class: "btn small", "data-cw": "profession-equip", "aria-disabled": all ? "true" : null,
             on: { click: () => { if (!all) equipFromProfession(r); } } }, all ? "已插上" : "一起插上"));
       }
@@ -5530,7 +5536,7 @@ function openCardWizard(opts) {
     const orig = roleDescription(r);
     kids.push(el("details", { class: "cw-prof-original", "data-cw": "profession-original" },
       el("summary", { class: "small" }, "作者原文"), el("p", { class: "small" }, orig || "作者沒有寫說明。")),
-      el("p", { class: "small muted" }, "出發時不會把範本的指示交給工具；這只是標籤。"));
+      el("p", { class: "small muted" }, "開始工作時不會把範本的指示交給工具；這只是標籤。"));
     return el("div", { class: "cw-prof-brings", "data-cw": "profession-brings" }, kids);
   }
 
@@ -5600,7 +5606,7 @@ function openCardWizard(opts) {
             on: { click: () => { st.profession = ""; pk.note = ""; draw(); focusBy("data-cw", "profession-none"); } } },
             el("strong", null, "不用範本（就用工具本身）")),
           rows,
-          !mine.length ? el("p", { class: "small muted", "data-cw": "profession-empty" }, "這個陣營沒有掃描到角色範本。")
+          !mine.length ? el("p", { class: "small muted", "data-cw": "profession-empty" }, "這個 AI 工具沒有掃描到角色範本。")
             : !usable.length && q ? el("p", { class: "small muted", "data-cw": "profession-empty" }, "沒有符合的職業。") : null),
         more ? el("button", { type: "button", class: "btn small", "data-cw": "profession-more",
           on: { click: () => { pk.shown += CARD_PAGE_SIZE; paintLists(); } } }, `顯示更多（還有 ${more} 個）`) : null];
@@ -5632,7 +5638,7 @@ function openCardWizard(opts) {
           agy ? null : el("button", { type: "button", class: "btn small", "data-cw": "profession-open", "aria-expanded": String(pk.open),
             on: { click: () => { pk.open = !pk.open; pk.shown = CARD_PAGE_SIZE; draw(); focusBy("data-cw", "profession-open"); } } },
           pk.open ? "收起" : st.profession ? "更換" : "挑一個")),
-        el("small", null, agy ? NO_PROFESSIONS(st.tool) : "你電腦裡現成的角色範本，可以不選。出發時不會把範本的指示交給工具；這只是標籤，不會寫回來源。"),
+        el("small", null, agy ? NO_PROFESSIONS(st.tool) : "你電腦裡現成的角色範本，可以不選。開始工作時不會把範本的指示交給工具；這只是標籤，不會寫回來源。"),
         professionAutoActive() ? el("p", { class: "small cw-hint", "data-cw": "profession-auto-note" },
           `位置已依職業建議設成「${cardPositionRow(st.position) ? cardPositionRow(st.position).label : ""}」（只是推測，可改）。`) : null,
         reason ? el("div", { class: "cw-prof-bound", "data-cw": "profession-bound" }, el("span", { class: "small" }, reason),
@@ -5700,7 +5706,7 @@ function openCardWizard(opts) {
     const g = guideRow(st.position);
     return g && typeof g.suggested_folder === "string" && g.suggested_folder
       ? el("p", { class: "small muted", "data-cw": "suggested-folder" },
-        `建議資料夾：出發時選名為「${g.suggested_folder}」的資料夾（或它裡面）。只是建議，出發通行證會提醒，不會擋。`) : null;
+        `建議資料夾：開始工作時選名為「${g.suggested_folder}」的資料夾（或它裡面）。只是建議，開始前的檢查會提醒，不會擋。`) : null;
   }
   function setLaunchMode(m) {
     st.launchMode = m;
@@ -5714,16 +5720,16 @@ function openCardWizard(opts) {
     const cur = launchModes.find((m) => m.id === st.launchMode) || launchModes[0];
     const oldCard = Boolean(existing) && !st.launchModeTouched && existing.launch_mode !== "full" && existing.launch_mode !== "safe";
     return el("div", { class: "cw-field", "data-cw": "launch-mode" },
-      el("span", { class: "cw-label" }, "出發方式"),
-      el("div", { class: "cw-choices", role: "group", "aria-label": "出發方式" }, launchModes.map((m) => el("button", { type: "button",
+      el("span", { class: "cw-label" }, "開始工作的方式"),
+      el("div", { class: "cw-choices", role: "group", "aria-label": "開始工作的方式" }, launchModes.map((m) => el("button", { type: "button",
         class: "cw-choice", "data-launch-mode": m.id, "aria-pressed": String(st.launchMode === m.id), on: { click: () => setLaunchMode(m.id) } },
       el("span", null, m.label)))),
-      el("p", { class: "small muted", "data-cw": "launch-mode-note" }, typeof cur.help === "string" ? cur.help : "", oldCard ? "　舊卡沒有設定，一律當安全模式。" : ""),
+      el("p", { class: "small muted", "data-cw": "launch-mode-note" }, typeof cur.help === "string" ? cur.help : "", oldCard ? "　舊卡沒有設定，一律當「每件事先問我」。" : ""),
       toolFullOnly(catalog, st.tool) ? el("p", { class: "small cw-hint", "data-cw": "full-only-note" },
-        `${CARD_TOOL_LABEL[st.tool] || st.tool} 目前只能用完整模式，沒有安全模式的保護；出發時要先勾選「我了解」。`) : null,
+        `${CARD_TOOL_LABEL[st.tool] || st.tool} 目前只能用「完全交給他（有風險）」，沒有「每件事先問我」的保護；開始工作時要先勾選「我了解」。`) : null,
       st.launchMode === "full" && catalog.full_mode_launchable !== true
         ? el("p", { class: "small cw-hint", "data-cw": "launch-mode-pending" },
-          "完整模式的出發這個版本還沒開放：選了它，這張卡暫時不能出發；要現在出發請選安全模式。") : null);
+          "「完全交給他（有風險）」的開始工作這個版本還沒開放：選了它，這位員工暫時不能開始工作；要現在開始工作請選「每件事先問我」。") : null);
   }
   // The position's instructions: the default is shown in the box and can be changed; 回復預設 brings it back
   function instructionsField() {
@@ -5766,12 +5772,12 @@ function openCardWizard(opts) {
     const list = boundaryList(byTool && typeof byTool === "object" && cardHas(byTool, mode) ? byTool[mode] : null, "data-cw");
     if (!list) return null;
     return el("div", { class: "cw-field", "data-cw": "boundaries" },
-      el("span", { class: "cw-label" }, "邊界（依陣營與出發方式）"), list,
+      el("span", { class: "cw-label" }, "邊界（依 AI 工具與開始工作的方式）"), list,
       el("p", { class: "small muted", "data-cw": "boundary-legend" }, BOUNDARY_LEGEND));
   }
 
   function stepTwo() {
-    const toolGroup = el("div", { class: "cw-choices cw-tools", role: "group", "aria-label": "陣營（工具）" },
+    const toolGroup = el("div", { class: "cw-choices cw-tools", role: "group", "aria-label": "AI 工具" },
       tools.map((t) => el("button", { type: "button", class: "cw-choice", "data-tool": t,
         "aria-pressed": String(st.tool === t), on: { click: () => setTool(t) } },
         officeSprite(speciesFor({ tool: t }), campOf({ tool: t }).key, 2),
@@ -5807,23 +5813,23 @@ function openCardWizard(opts) {
     const gateBox = gateRow ? el("div", { class: "cw-pos-tier", "data-cw": "position-gate" },
       el("span", { class: "small muted cw-pos-title" }, "VBear 內建"),
       el("div", { class: "cw-choices", role: "group", "aria-label": "VBear 內建" },
-        posButton(gateRow.id, "VBear 內建：審查關卡（給任務卡的審查位）")),
+        posButton(gateRow.id, "VBear 內建：審查關卡（給專案的審查位）")),
       el("p", { class: "small muted" }, CARD_GATE_NOTE)) : null;
     const posGroup = el("div", { class: "cw-positions", role: "group", "aria-label": "建議位置" },
-      tierRow("任務卡上的位置", CARD_POSITION_TABLE.filter((r) => r.tier === "team")),
+      tierRow("專案上的位置", CARD_POSITION_TABLE.filter((r) => r.tier === "team")),
       tierRow("幕僚與支援", CARD_POSITION_TABLE.filter((r) => r.tier === "staff"), posButton("", "先不指定")),
       gateBox);
     const posRow = cardPositionRow(st.position);
     const legacy = !st.positionTouched && existing ? cardLegacyPosition(existing) : null;
     const legacyNote = legacy ? el("p", { class: "small cw-hint", "data-cw": "legacy-note" }, cardLegacyText(legacy) + "。按儲存才會改寫成新的位置。") : null;
-    const campWord = (row) => `建議陣營：${CARD_TOOL_LABEL[row.suggested_tool] || row.suggested_tool}`
+    const campWord = (row) => `建議的 AI 工具：${CARD_TOOL_LABEL[row.suggested_tool] || row.suggested_tool}`
       + (row.suggested_model_alias ? `（${row.suggested_model_alias}）` : "")
       + (toolNoSafe(catalog, row.suggested_tool)
         ? (toolNoSafeLaunch(catalog, row.suggested_tool) && st.launchMode === "full" && catalog.full_mode_launchable === true
-          ? `。${CARD_TOOL_SHORT[row.suggested_tool]} 只有完整模式才能從 VBear 出發` : "。VBear 不會幫這個陣營的卡出發，只做紀錄") : "");
+          ? `。${CARD_TOOL_SHORT[row.suggested_tool]} 只有「完全交給他（有風險）」才能從 VBear 開始工作` : "。VBear 不會幫這個 AI 工具的卡開始工作，只做紀錄") : "");
     const posBox = posRow ? el("div", { class: "cw-position-box", "data-cw": "position-box" },
-      el("p", null, el("strong", null, `已選「${posRow.label}」：`), posRow.duty),
-      el("p", { class: "small muted" }, (posRow.tier === "staff" ? "" : "任務卡上建議放：") + cardPositionPlaceText(posRow)),
+      el("p", null, el("strong", null, `已選「${posRow.label}」：`), cardDutyText(posRow.duty)),
+      el("p", { class: "small muted" }, (posRow.tier === "staff" ? "" : "專案上建議放：") + cardPositionPlaceText(posRow)),
       el("p", { class: "small muted" }, campWord(posRow)),
       el("p", { class: "small muted" }, `分工提醒：${posRow.reminder}`),
       suggestedFolderNote()) : null;
@@ -5854,10 +5860,10 @@ function openCardWizard(opts) {
       modelField());
 
     return [
-      el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "陣營"), el("div", { class: "cw-tools-wrap" }, toolGroup),
-        el("p", { class: "small muted" }, "陣營就是這張卡用哪個工具。"), codexNote, fullOnlyMark, agyNote, heldNote, sharedNote),
+      el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "AI 工具"), el("div", { class: "cw-tools-wrap" }, toolGroup),
+        el("p", { class: "small muted" }, "這位員工用哪個 AI 工具。"), codexNote, fullOnlyMark, agyNote, heldNote, sharedNote),
       el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "建議位置"), legacyNote, posGroup, posBox,
-        el("p", { class: "small muted" }, "位置只是建議，放上任務卡時仍可以改。")),
+        el("p", { class: "small muted" }, "位置只是建議，放上專案時仍可以改。")),
       professionField(),
       launchModeField(),
       instructionsField(),
@@ -5866,7 +5872,7 @@ function openCardWizard(opts) {
         el("span", { class: "cw-label" }, "權限意圖",
           st.suggested ? el("span", { class: "tag cw-tag", "data-cw": "suggested" }, "建議，可改") : null),
         summary,
-        undecided ? el("p", { class: "small cw-error" }, "有權限意圖還沒決定；出發前要先決定。") : null,
+        undecided ? el("p", { class: "small cw-error" }, "有權限意圖還沒決定；開始工作前要先決定。") : null,
         el("p", { class: "small muted", "data-cw": "intent-note" }, CARD_INTENT_NOTE),
         el("p", { class: "small muted", "data-cw": "launch-note" }, CARD_INTENT_LAUNCH_NOTE,
           posRow ? ` 「${posRow.label}」的分工提醒：${posRow.reminder}` : null),
@@ -5890,7 +5896,7 @@ function openCardWizard(opts) {
       return s && !skillCompatible(s, t);
     });
     for (const sid of gone) st.equipped.delete(sid);
-    removedNote = gone.length ? `換了陣營，已移除 ${gone.length} 張這個陣營不會讀的技能卡。` : "";
+    removedNote = gone.length ? `換了 AI 工具，已移除 ${gone.length} 張這個 AI 工具不會讀的技能卡。` : "";
     // a role of Claude Code or Codex is not a role of Antigravity: the label does not stay on an AGY card
     if (toolNoSafeLaunch(catalog, t)) st.profession = "";
     // a new card's start follows its tool until the person picks a mode; a card that exists keeps its own
@@ -6021,7 +6027,7 @@ function openCardWizard(opts) {
       const unusedHits = recFirst(plan.unused.filter((e) => match(e) && inCat(e) && recOk(e)));
       const narrowed = q || st.category;
       const catText = st.category ? `「${st.category === SKILL_CAT_OTHER ? "其他" : catLabel.get(st.category)}」` : "";
-      counter.textContent = `可插 ${plan.listed.length} 張（這個陣營用得到的）${narrowed ? `，${catText}${q ? (catText ? "裡" : "") + "符合搜尋" : ""}的有 ${listedHits.length} 張` : ""}`;
+      counter.textContent = `可插 ${plan.listed.length} 張（這個 AI 工具用得到的）${narrowed ? `，${catText}${q ? (catText ? "裡" : "") + "符合搜尋" : ""}的有 ${listedHits.length} 張` : ""}`;
       const rows = st.showUnused ? [...listedHits, ...unusedHits] : listedHits;
       if (!rows.length) {
         const hint = q && !st.showUnused && unusedHits.length
@@ -6029,8 +6035,8 @@ function openCardWizard(opts) {
             `在用不到的技能裡有 ${unusedHits.length} 張符合。 `,
             el("button", { type: "button", class: "btn small", on: { click: () => setShowUnused(true) } }, "顯示這些技能")) : null;
         const text = !skillCatalog.length ? "目前沒有可用的技能卡。"
-          : q ? (hint ? "這個陣營用得到的技能裡沒有符合的。" : "沒有符合的技能卡。")
-            : "目前沒有這個陣營用得到的技能卡。";
+          : q ? (hint ? "這個 AI 工具用得到的技能裡沒有符合的。" : "沒有符合的技能卡。")
+            : "目前沒有這個 AI 工具用得到的技能卡。";
         setKids(list, el("p", { class: "small muted" }, text), hint);
         return;
       }
@@ -6099,7 +6105,7 @@ function openCardWizard(opts) {
         } } }, "只看推薦的");
       recBox = el("div", { class: "cw-field", "data-cw": "skill-recommend" },
         el("p", { class: "small" }, `「${posLabel}」建議看這幾類：${names.join("、")}。推薦只是參考，不會自動插入；`
-          + "技能會不會被載入，要看出發方式：VBear 的安全模式出發不載入技能。"),
+          + "技能會不會被載入，要看開始工作的方式：VBear 的「每件事先問我」開始工作不載入技能。"),
         recOnlyBtn);
     }
     drawList();
@@ -6169,7 +6175,7 @@ function openCardWizard(opts) {
       const saved = res.profile;
       setCardPosition(saved.id, st.position);
       store.set(OFFICE_SPECIES_KEY + saved.id, st.species || null);
-      toast(existing ? "角色卡已儲存" : "角色卡已建立");
+      toast(existing ? "員工已儲存" : "員工已建立");
       closeModal();
       if (typeof opts.onSaved === "function") await opts.onSaved(saved);
     } catch (err) {
@@ -6202,8 +6208,8 @@ function openStarterDeck(opts) {
   const foot = el("div", { class: "modal-actions cw-foot" });
   const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
     el("div", { class: "modal-box cw-box" },
-      el("h2", { id: titleId }, "用起手牌組開始"),
-      el("p", null, "三張現成的角色卡：CEO、全端工程師、審查。名字可以改，建立後也能再編輯。"),
+      el("h2", { id: titleId }, "一次新增幾位常用的員工"),
+      el("p", null, "三位現成的員工：CEO、全端工程師、審查。名字可以改，建立後也能再編輯。"),
       el("div", { class: "cw-body" }, list, status), foot));
   document.body.append(modal);
   const closeModal = withModalA11y(modal, () => modal.remove());
@@ -6240,7 +6246,7 @@ function openStarterDeck(opts) {
               on: { input: (e) => { r.name = e.target.value; syncHint(); drawFoot(); } } })),
           hint,
           missing ? el("p", { class: "small cw-hint", "data-cw": "codex-missing" },
-            "這台電腦找不到 Codex。審查位需要和全端工程師不同陣營的卡，要用這張卡時再勾選。") : null,
+            "這台電腦找不到 Codex。審查位需要和全端工程師用不同 AI 工具的員工，要用這位員工時再勾選。") : null,
           el("details", { class: "cw-details" }, el("summary", null, "看權限建議"),
             el("div", { class: "rc-chips" }, CARD_INTENT_KEYS.map(([k, zh]) => intentChip(k, zh, c.permission_intents[k]))),
             el("p", { class: "small muted" }, CARD_INTENT_NOTE),
@@ -6253,8 +6259,8 @@ function openStarterDeck(opts) {
     setKids(foot,
       el("button", { class: "btn", type: "button", "data-cw": "cancel", disabled: busy, on: { click: () => closeModal() } }, "取消"),
       el("button", { class: "btn primary", type: "button", "data-cw": "deck-create", disabled: busy || !ok,
-        on: { click: create } }, `建立 ${n} 張角色卡`));
-    status.textContent = busy ? "" : (message || (hasReviewerPair() ? "" : "審查位需要和全端工程師不同陣營的卡，審查結果才算數；這兩張現在同一陣營。"));
+        on: { click: create } }, `建立 ${n} 位員工`));
+    status.textContent = busy ? "" : (message || (hasReviewerPair() ? "" : "審查位需要和全端工程師用不同 AI 工具的員工，審查結果才算數；這兩位現在用同一個 AI 工具。"));
   }
   async function create() {
     if (busy) return;
@@ -6280,7 +6286,7 @@ function openStarterDeck(opts) {
       if (made.length && typeof opts.onSaved === "function") opts.onSaved(made, { partial: true });
       return;
     }
-    toast(`已建立 ${made.length} 張角色卡`);
+    toast(`已建立 ${made.length} 位員工`);
     closeModal();
     if (typeof opts.onSaved === "function") await opts.onSaved(made, { partial: false });
   }
@@ -6303,10 +6309,10 @@ async function duplicateCard(p, onDone) {
   } catch (err) { toast("複製失敗：" + err.message); }
 }
 async function deleteCard(p, onDone) {
-  if (!(await confirmInPage("刪除角色卡", `確定要刪除角色卡「${p.name || p.id}」嗎？刪除後無法復原。`, "刪除"))) return;
+  if (!(await confirmInPage("刪除員工", `確定要刪除員工「${p.name || p.id}」嗎？刪除後無法復原。`, "刪除"))) return;
   api.post(`/api/agent-profiles/${encodeURIComponent(p.id)}/delete`, {})
     .then(async () => {
-      toast("角色卡已刪除");
+      toast("員工已刪除");
       store.set(CARD_POSITION_KEY + p.id, null);
       if (typeof onDone === "function") await onDone(p);
     })
@@ -6558,13 +6564,13 @@ function passMark(mark) {
 
 function passFront(pv) {
   const s = passSummary(pv);
-  return el("section", { class: "pass-front", "data-pass": "front", "aria-label": "這次出發的限制" },
+  return el("section", { class: "pass-front", "data-pass": "front", "aria-label": "這次開始工作的限制" },
     el("ul", { class: "pass-lines" }, s.lines.map((ln) => el("li", { class: `pass-line pass-${ln.kind}`, "data-pass-line": ln.id, "data-kind": ln.kind },
       passMark(ln.mark),
       el("span", { class: "pass-text" }, ln.text),
       el("span", { class: "pass-word" }, ln.word),
       ln.shield ? armorShield(ln.level) : null))),
-    s.scratch ? el("p", { class: "small muted pass-scratch" }, "另有這次出發的暫存區：", el("span", { class: "mono" }, s.scratch)) : null,
+    s.scratch ? el("p", { class: "small muted pass-scratch" }, "另有這次開始工作的暫存區：", el("span", { class: "mono" }, s.scratch)) : null,
     passLegend());
 }
 
@@ -6575,11 +6581,11 @@ function passFullFront(pv) {
   const ins = pv.instructions && typeof pv.instructions === "object" ? pv.instructions : null;
   const command = Array.isArray(pv.command) ? pv.command.filter((x) => typeof x === "string") : [];
   const notes = Array.isArray(pv.notes) ? pv.notes.filter((x) => typeof x === "string" && x) : [];
-  const how = !ins ? "" : ins.delivery === "argv" ? "出發時帶進去：用 --append-system-prompt 當成一個引數交給 Claude Code"
-    : ins.delivery === "paste" ? "出發時不帶：開了終端、接管之後按「貼上職位指示」，由你按 Enter" : "沒有職位指示，出發時不帶";
-  return el("section", { class: "pass-front pass-full", "data-pass": "front", "data-mode": "full", "aria-label": "這次出發沒有限制" },
+  const how = !ins ? "" : ins.delivery === "argv" ? "開始工作時帶進去：用 --append-system-prompt 當成一個引數交給 Claude Code"
+    : ins.delivery === "paste" ? "開始工作時不帶：開了終端、接管之後按「貼上職位指示」，由你按 Enter" : "沒有職位指示，開始工作時不帶";
+  return el("section", { class: "pass-front pass-full", "data-pass": "front", "data-mode": "full", "aria-label": "這次開始工作沒有限制" },
     el("p", { class: "pass-full-lead", "data-pass": "full-lead" }, el("strong", null, "VBear 沒有限制這張卡。"),
-      "　它用你自己的設定啟動，可以上網；讀寫檔案、commit、發布、付款，都和你自己在終端機執行一樣，只剩工具自己的權限詢問。"),
+      "　它用你自己的設定啟動，可以上網；讀寫檔案、commit、發布、付款，都和你自己在指令視窗執行一樣，只剩工具自己的權限詢問。"),
     el("dl", { class: "kv small" },
       el("dt", null, "會執行的指令"), el("dd", { class: "mono pass-command", "data-pass": "command" }, command.join(" ")),
       el("dt", null, "職位指示"), el("dd", { "data-pass": "instructions", "data-delivery": ins ? String(ins.delivery) : "" }, how,
@@ -6608,7 +6614,7 @@ const PASS_FIXES = {
   test_deny_unenforceable: { act: "intents", label: "調整權限意圖" },
   deploy_not_available: { act: "intents", label: "調整權限意圖" },
   intents_not_supported: { act: "intents", label: "調整權限意圖" },
-  tool_not_launchable: { act: "tool", label: "改選陣營" },
+  tool_not_launchable: { act: "tool", label: "改選 AI 工具" },
   commit_not_enforceable: { act: "commit", label: "回去勾選知悉" },
 };
 function passFix(code) { return typeof code === "string" && cardHas(PASS_FIXES, code) ? PASS_FIXES[code] : null; }
@@ -6621,10 +6627,10 @@ const CARD_SLOT_LABEL = { collected: "收藏中", active: "生效中" };
 const CARD_SLOT_NOTE = "這次的安全啟動不會載入";
 // What 「本次不生效」 really meant: not that the skill is broken, but that VBear's safe launch does not put this skill card into the
 // terminal this time (it is a card kept on a role card, "收藏中"). Said that way wherever the skill card shows it.
-const SKILL_NOT_LOADED = "出發時不會載入";
-const SKILL_NOT_LOADED_TIP = "VBear 的安全啟動不會把這張技能卡載入終端；它只是收藏在角色卡上的紀錄，不是壞了。";
+const SKILL_NOT_LOADED = "開始工作時不會載入";
+const SKILL_NOT_LOADED_TIP = "VBear 的安全啟動不會把這張技能卡載入終端；它只是收藏在員工身上的紀錄，不是壞了。";
 // On a skill's page: "收藏中" is how the skill sits on a card (the same word as on the card); 啟用／已停用 is about the card itself.
-const SKILL_EQUIPPED_NOTE = "「收藏中」是這張技能卡插在角色卡上的狀態，和卡面一樣：這次出發不會載入它。後面的「啟用中／已停用」只在說那張角色卡本身能不能出發。";
+const SKILL_EQUIPPED_NOTE = "「收藏中」是這張技能卡放在員工身上的狀態，和卡面一樣：這次開始工作不會載入它。後面的「啟用中／已停用」只在說那位員工本身能不能開始工作。";
 const CARD_SLOTS_SHOWN = 6;
 function cardSlotState(item) { return item && item.will_load === true ? "active" : "collected"; }
 
@@ -6669,22 +6675,22 @@ function cardPassLine(loadoutState) {
   const write = level("Write");
   const commit = level("Commit");
   if (write === null || commit === null) return null;
-  return `出發後可以改檔案${CARD_PASS_WRITE_REACH[passKind(write)]}；擋不住存下版本紀錄；詳情看出發通行證`;
+  return `開始工作後可以改檔案${CARD_PASS_WRITE_REACH[passKind(write)]}；擋不住存下版本紀錄；詳情看開始前的檢查`;
 }
 
-const CARD_AGY_NOTE = "AGY 的員工可以聊天（每個指令都問你）；要在終端機出發請選完整模式。";
-const CARD_CODEX_NOTE = "放在任務卡的審查位時，自動模式會派它在暫存副本裡審查；也可以手動記錄審查結果。";
+const CARD_AGY_NOTE = "AGY 的員工可以聊天（每個指令都問你）；要在指令視窗開始工作請選「完全交給他（有風險）」。";
+const CARD_CODEX_NOTE = "放在專案的審查位時，自動模式會派它在暫存副本裡審查；也可以手動記錄審查結果。";
 
 // What the light says. Yellow is the intents (as cardLight); once they are all decided, green is only for a loadout that
 // was read and lists no reason against a launch. Not read yet, not readable, or with reasons: not green.
 function cardDeparture(p, loadoutState) {
   // a card in full mode is started without the permission intents (VBear limits nothing), so undecided ones hold nothing back
   const base = p && p.launch_mode === "full"
-    ? { state: "green", undecided: [], text: "可以出發（完整模式不看權限意圖）" } : cardLight(p);
+    ? { state: "green", undecided: [], text: "可以開始工作（「完全交給他（有風險）」不看權限意圖）" } : cardLight(p);
   if (base.state === "yellow") return { ...base, reasons: [] };
-  if (!loadoutState || loadoutState.state === "loading") return { state: "checking", text: "確認出發條件中…", reasons: [] };
+  if (!loadoutState || loadoutState.state === "loading") return { state: "checking", text: "確認開始工作條件中…", reasons: [] };
   const blockers = loadoutState.state === "ok" && loadoutState.data ? loadoutState.data.blockers : null;
-  if (!Array.isArray(blockers)) return { state: "unknown", text: "讀不到出發條件，實際能不能出發以出發通行證為準", reasons: [] };
+  if (!Array.isArray(blockers)) return { state: "unknown", text: "讀不到開始工作條件，實際能不能開始工作以開始前的檢查為準", reasons: [] };
   const reasons = blockers.map((b) => (b && typeof b.message === "string" ? b.message : "")).filter(Boolean);
   const shown = reasons.length ? reasons : ["原因未提供"];
   // Codex cannot open a terminal from VBear today, but a Codex card on a review place is used by the flow (the automatic
@@ -6693,7 +6699,7 @@ function cardDeparture(p, loadoutState) {
   if (blockers.length && blockers.every((b) => b && typeof b.code === "string" && b.code.startsWith("codex_"))) {
     return { state: "codex", text: "不能直接開終端", note: CARD_CODEX_NOTE, reasons: shown };
   }
-  if (blockers.length) return { state: "blocked", text: "目前不能出發", reasons: shown };
+  if (blockers.length) return { state: "blocked", text: "目前不能開始工作", reasons: shown };
   return { ...base, reasons: [] };
 }
 
@@ -7054,7 +7060,7 @@ async function viewTeam(params = {}) {
     [["card", "卡片"], ["list", "表格"]].map(([v, t]) => el("button", { type: "button", "aria-pressed": String(tview === v), on: { click: () => { store.set("teamView", v); viewTeam(); } } }, t)));
 
   setKids(main,
-    el("h1", null, "角色卡池"),
+    el("h1", null, "員工詳細資料"),
     el("p", { class: "lede" }, "這裡收集你的角色卡。每張卡是一份可以重複使用的角色設定；開啟中的終端在下方，兩者不同：一張卡可以同時有多個終端。"),
     runtimeNotice(),
     el("section", { class: "section" },
@@ -7097,7 +7103,7 @@ async function viewRole(id) {
   await Promise.all([loadStatic(), loadLive(), ensureRoleTranslations()]);
   const r = D.roles.find((x) => x.role_id === id);
   const main = claim(token);
-  if (!r) { setKids(main, crumbs([["角色卡池", "#/team"]]), notice("bad", "找不到這個角色（索引可能已更新）")); return; }
+  if (!r) { setKids(main, crumbs([["員工詳細資料", "#/team"]]), notice("bad", "找不到這個角色（索引可能已更新）")); return; }
   const sessions = r.kind === "cli" ? D.live.sessions.filter((s) => s.agent === r.tool) : [];
   const field = (title, src) => src && (src.value || src.origin !== "missing")
     ? el("div", { class: "field" }, el("h3", null, title, prov(src)), src.value ? el("div", { class: "body" }, String(src.value)) : el("div", { class: "empty" }, src.detail)) : null;
@@ -7149,7 +7155,7 @@ async function viewRole(id) {
   q.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) search.now(); });
 
   setKids(main, 
-    crumbs([["角色卡池", "#/team"], [roleLabel(r.role_id, r.name)]]),
+    crumbs([["員工詳細資料", "#/team"], [roleLabel(r.role_id, r.name)]]),
     el("div", { class: "row" }, el("div", { class: "avatar", "aria-hidden": "true" }, r.emoji || initialOf(r.name)), el("h1", null, roleLabel(r.role_id, r.name)), toolTag(r.tool)),
     el("p", { class: "lede" }, r.kind === "cli" ? "主代理：直接在終端機執行的工具。" : "角色設定：可以被主代理委派工作的子代理。"),
     (r.warnings || []).map((w) => notice("warn", w)),
@@ -7183,14 +7189,14 @@ async function viewProjects(id) {
   const projects = L.projects || [];
   if (id) {
     const p = projects.find((x) => x.project_id === id);
-    if (!p) { setKids(main, crumbs([["專案", "#/projects"]]), notice("bad", "找不到這個專案")); return; }
-    setKids(main, crumbs([["專案", "#/projects"], [p.name]]), projectDetail(p));
+    if (!p) { setKids(main, crumbs([["專案資料夾", "#/projects"]]), notice("bad", "找不到這個專案")); return; }
+    setKids(main, crumbs([["專案資料夾", "#/projects"], [p.name]]), projectDetail(p));
     return;
   }
   const active = projects.filter((p) => p.live_session_ids.length);
   const rest = projects.filter((p) => !p.live_session_ids.length);
   setKids(main, 
-    el("h1", null, "專案"),
+    el("h1", null, "專案資料夾"),
     el("p", { class: "lede" }, "依工作目錄的 git 儲存庫歸類。專案是目標與資料歸屬；開啟中的終端依工作目錄對應到專案。"),
     runtimeNotice(),
     el("section", { class: "section" },
@@ -7324,7 +7330,7 @@ function onboardingSettings(conf, saveConf) {
   } } }, dismissed ? "重新顯示首頁的新手第一局" : "不要再顯示新手第一局");
   return el("section", { class: "panel pad onboard-settings", "data-settings": "onboarding" },
     el("h2", null, ONBOARD_TITLE),
-    el("p", { class: "small muted" }, dismissed ? "目前已收起。" : "首頁最上方的三步進度：拿角色卡、導入專案、把隊伍放上任務卡。三步都完成後會收成一行。"),
+    el("p", { class: "small muted" }, dismissed ? "目前已收起。" : "首頁最上方的三步進度：新增員工、加入一個資料夾、把隊伍放上專案。三步都完成後會收成一行。"),
     btn);
 }
 
@@ -8787,7 +8793,7 @@ async function openShellTerminal(dir) {
 function newTerminalForm() {
   const input = el("input", { type: "text", class: "input mono", value: store.get("terminal.lastDir", "~"),
     "aria-label": "資料夾", placeholder: "~/projects/app", spellcheck: "false", autocomplete: "off" });
-  const btn = el("button", { class: "btn primary", type: "submit" }, "開啟終端機");
+  const btn = el("button", { class: "btn primary", type: "submit" }, "開啟指令視窗");
   const form = el("form", { class: "row new-term-form", on: { submit: async (ev) => {
     ev.preventDefault();
     btn.disabled = true;
@@ -8804,7 +8810,7 @@ async function viewTerminals() {
   if (token !== seq) return;
   const panes = shellPanes();
   setKids(main,
-    el("h1", null, "終端機"),
+    el("h1", null, "指令視窗"),
     el("p", { class: "lede" }, "在指定資料夾開啟你的登入 shell，直接打字使用。關掉這個頁面或主控台，終端機會繼續執行，回來就能接著用。"),
     runtimeNotice(),
     notice("info", SHELL_NOTE),
@@ -8824,8 +8830,8 @@ async function viewTerminals() {
 
 // The standalone terminal page's way back: a role terminal goes to the role-card pool (the page's current name), a
 // built-in one to the list of terminals; one tracked on a task card also gets a button to that card.
-const TERM_BACK_ROLE_LABEL = "回角色卡池";
-const TERM_BACK_SHELL_LABEL = "所有終端機";
+const TERM_BACK_ROLE_LABEL = "回員工詳細資料";
+const TERM_BACK_SHELL_LABEL = "所有指令視窗";
 const TERM_BACK_TASK_LABEL = "回任務卡";
 
 async function viewTerminal(paneId) {
@@ -8932,7 +8938,7 @@ async function viewTerminal(paneId) {
     }
     if (connState === "closed") {
       notices.push(terminalClosedNotice(closedReason, sessionGone,
-        isShell ? "需要新的終端機時，請到「終端機」頁開啟。" : "需要新的終端時，請從角色卡的「出發通行證」開啟。"));
+        isShell ? "需要新的終端機時，請到「指令視窗」頁開啟。" : "需要新的終端時，請從角色卡的「出發通行證」開啟。"));
     } else if (connState === "disconnected") {
       const attempts = reconnectPolicy.getRetryCount();
       const waitText = reconnectPolicy.canAutoRetry()
@@ -9192,8 +9198,8 @@ async function viewTerminal(paneId) {
     : null;
 
   setKids(main,
-    isShell ? crumbs([["終端機", "#/terminals"], [shellLabel(pane)]])
-      : crumbs([["角色卡池", "#/team"], [`終端機 (${paneId})`]]),
+    isShell ? crumbs([["指令視窗", "#/terminals"], [shellLabel(pane)]])
+      : crumbs([["員工詳細資料", "#/team"], [`指令視窗 (${paneId})`]]),
     shellTabs,
     el("div", { class: "term-head" },
       el("div", { class: "term-meta" },
@@ -11504,7 +11510,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
   }
 
   setKids(main,
-    crumbs([["角色卡池", "#/team"], ["終端工作台"]]),
+    crumbs([["員工詳細資料", "#/team"], ["工作台"]]),
     toolbar,
     shell
   );
@@ -13543,14 +13549,14 @@ function setupTryView(row, st) {
   const s = st && typeof st === "object" ? st : {};
   if (s.phase === "confirm") {
     return { show: true, buttons: [{ key: "try-confirm", label: "確認，試一下", kind: "primary" }, { key: "try-cancel", label: "取消", kind: "" }], result: null,
-      note: `再按一次「確認，試一下」才會送出：會送一句很短的話給 ${name}，${SETUP_TRY_ESTIMATE}，並計入每天上限。` };
+      note: `再按一次「確認，試一下」才會送出：會送一句很短的話給 ${name}，${SETUP_TRY_ESTIMATE}，並計入花費上限。` };
   }
   if (s.phase === "running") {
     return { show: true, buttons: [], result: null, note: `正在試 ${name}……最多等一分鐘，請不要關掉這一頁。` };
   }
   const result = s.phase === "done" ? { text: String(s.message || ""), ok: s.success === true } : null;
   return { show: true, buttons: [{ key: "try", label: s.phase === "done" ? "再試一次" : "試一下", kind: "" }], result,
-    note: `試一下會送一句很短的話給 ${name}，確認它真的會回應，${SETUP_TRY_ESTIMATE}，並計入每天上限。` };
+    note: `試一下會送一句很短的話給 ${name}，確認它真的會回應，${SETUP_TRY_ESTIMATE}，並計入花費上限。` };
 }
 
 // What one row of /api/setup/tools shows. -> { state, label, cls, version, note, buttons: [{ key, label, kind, region? }] }
@@ -13612,15 +13618,15 @@ function setupTerminalWords(setup) {
   const what = SETUP_ACTION_WORD[s.action] || "";
   const lines = [];
   if (s.action === "install") {
-    lines.push(`VBear 已經替你在這個終端機送出 ${name} 的官方安裝指令（就是上面那一行），你不用打任何字。`);
+    lines.push(`VBear 已經替你在這個指令視窗送出 ${name} 的官方安裝指令（就是上面那一行），你不用打任何字。`);
     lines.push("畫面會跑一陣子字，跑完停下來、出現新的一行提示，就是裝好了。");
     lines.push("裝好後回到「開始設定」，按「重新檢查」。如果還是顯示還沒安裝，可能要重新打開 VBear。");
   } else if (s.action === "chat_login") {
-    lines.push(`VBear 已經替你在這個終端機送出聊天用的 ${name} 的登入指令（就是上面那一行），你不用打任何字。`);
+    lines.push(`VBear 已經替你在這個指令視窗送出聊天用的 ${name} 的登入指令（就是上面那一行），你不用打任何字。`);
     lines.push("這是 VBear 專用的登入，和你自己的 Codex 分開；接下來瀏覽器會跳出登入頁，在那裡登入你自己的 ChatGPT 帳號。登入的過程不會經過 VBear。");
     lines.push("登入完回到「開始設定」按「重新檢查」，這一列會顯示聊天用的 Codex 已登入。");
   } else if (s.action === "login") {
-    lines.push(`VBear 已經替你在這個終端機送出 ${name} 的登入指令（就是上面那一行），你不用打任何字。`);
+    lines.push(`VBear 已經替你在這個指令視窗送出 ${name} 的登入指令（就是上面那一行），你不用打任何字。`);
     lines.push("接下來瀏覽器會跳出登入頁，在那裡登入你自己的帳號。登入的過程不會經過 VBear。");
     lines.push("登入完回到「開始設定」。沒辦法自動查登入的 AI 工具，要在那裡按「我登入好了」。");
   }
@@ -13849,10 +13855,6 @@ async function ceoPlan() {
 function ceoStepWanted(plan) {
   return !!plan && plan.needed === true && plan.can_create === true && typeof plan.tool === "string" && plan.tool !== "";
 }
-function ceoForget(configRes) {
-  if (configRes && configRes.config) configRes.config.first_ceo_id = "";
-  return api.post("/api/config", { first_ceo_id: "" }).catch(() => {});
-}
 
 // Opens the chat with a card the person has: an empty one that is already there, or a new one (opening a chat costs nothing).
 // The sentence goes into the box of that chat. A chat that cannot open yet (not verified, not logged in) leads to the chat
@@ -13927,52 +13929,6 @@ async function viewCeo() {
       errorBox,
       el("div", { class: "row" }, go, el("a", { class: "btn", href: "#/", "data-ceo": "later" }, "先不要，回首頁"))));
 }
-
-// The lobby's two doors. -> a node, or null. plan: GET /api/first-ceo (null when it could not be read); configRes: GET
-// /api/config; profilesRes: GET /api/agent-profiles. Showing a door asks nothing that costs and opens nothing.
-async function ceoLobbyDoor(plan, configRes, profilesRes) {
-  if (ceoStepWanted(plan)) {
-    return el("section", { class: "panel pad ceo-door", "data-ceo": "create-invite" },
-      el("h2", null, "還不知道要做什麼？先請一位 CEO"),
-      el("p", { class: "small" }, "你還沒有可以聊天的角色卡。先建立一位 CEO，他會問你幾個簡單的問題，再幫你把想法整理成計畫。"),
-      el("a", { class: "btn primary", href: "#/ceo" }, "建立你的 CEO"));
-  }
-  const conf = configRes && configRes.config && typeof configRes.config === "object" ? configRes.config : null;
-  const id = conf && typeof conf.first_ceo_id === "string" ? conf.first_ceo_id : "";
-  if (!id) return null;
-  const cards = profilesRes && Array.isArray(profilesRes.profiles) ? profilesRes.profiles : null;
-  if (!cards) return null;
-  const card = cards.find((c) => c && c.id === id);
-  if (!card) { ceoForget(configRes); return null; }                     // the card is gone: nothing to offer, now or later
-  const tool = card.model && card.model.tool;
-  if (card.enabled === false || (tool !== "claude" && tool !== "codex" && tool !== "agy")) return null;
-  let chats = [];
-  try { const r = await api.get("/api/chats"); chats = Array.isArray(r.chats) ? r.chats : []; } catch (_) { chats = []; }
-  const mine = chats.filter((c) => c && c.profile_id === id);
-  if (mine.some((c) => c.turns > 0)) { ceoForget(configRes); return null; }     // they already talked: the door has done its job
-  const empty = mine.find((c) => c.turns === 0 && !c.problem && typeof c.id === "string");
-  const opening = plan && typeof plan.opening === "string" ? plan.opening : "";
-  let busy = false;
-  const talk = el("button", { type: "button", class: "btn primary", "data-ceo": "chat-go" }, "聊聊看");
-  const later = el("button", { type: "button", class: "btn", "data-ceo": "chat-dismiss" }, "知道了");
-  const box = el("section", { class: "panel pad ceo-door", "data-ceo": "chat-invite" },
-    el("h2", null, "跟你的 CEO 聊聊"),
-    el("p", { class: "small" }, `${card.name || "CEO"} 已經準備好了。打開聊天，開場的話會先幫你填好，你可以改，按「送出」才會開始。`),
-    el("div", { class: "row" }, talk, later));
-  talk.addEventListener("click", async () => {
-    if (busy) return;
-    busy = true; talk.disabled = true; later.disabled = true;
-    await ceoForget(configRes);
-    await ceoOpenChat(id, opening, empty ? empty.id : "");
-  });
-  later.addEventListener("click", async () => {
-    if (busy) return;
-    busy = true;
-    await ceoForget(configRes);
-    box.remove();
-  });
-  return box;
-}
 // ---------- end of the first CEO ----------------------------------------------------------------------------------------------
 
 // ---------- chat with role cards (P36-2) -----------------------------------------------------------------------------------
@@ -13989,7 +13945,7 @@ const CHAT_INTRO_KEY = "vbear-chat-intro-seen";
 const CHAT_TURN_END = {
   result: "", stopped: "你按了停止，這回合停下來，按上限計費", timeout: "超過 10 分鐘沒結束，已停止，按上限計費",
   process_exit: "員工的程序自己結束了，這回合按上限計費", violation: "員工用的 AI 工具做了不符 VBear 設定的事，VBear 已停止這個程序",
-  daemon_restart: "VBear 的背景程序重新啟動，這回合中斷，按上限計費", error: "出了問題，這回合停止，按上限計費",
+  daemon_restart: "VBear 的背景程式重新啟動，這回合中斷，按上限計費", error: "出了問題，這回合停止，按上限計費",
   not_sent: "這則訊息沒有送出，沒有花錢",
   limit: "用量到了這回合的上限，已請員工停下來，按估算的用量計費",
 };
@@ -14037,13 +13993,13 @@ const CHAT_CHANGE_KIND = { add: "新增", update: "修改", delete: "刪除" };
 const CHAT_FIELD_TEXT = { command: "指令", file_path: "檔案", content: "要寫入的內容", old_string: "原本的內容", new_string: "改成", path: "位置", pattern: "要找的字", description: "員工的說明" };
 const CHAT_INTRO = [
   ["這是什麼", "和一位員工聊天。目前工具是 Claude Code 或 Codex、而且已啟用的員工可以聊天（AGY 的員工也可以，看下面「用 AGY 聊天」）；用哪個 AI 工具聊，開聊天時就決定了，之後不會換。每位員工有自己的工作資料夾，員工能寫的地方只有那裡和暫存區。"],
-  ["會花錢", "Claude Code 員工用你自己的 Claude 登入，會用掉你的 Claude 額度。金額是 Claude Code 回報的估值；沒有回報時，這一回合按上限（最壞情況）計。每回合有上限，今天的總花費和會議、組隊會議共用同一個每日上限，用完就不能再送。Codex 員工看下面「用 Codex 聊天」，AGY 員工看「用 AGY 聊天」。"],
+  ["會花錢", "Claude Code 員工用你自己的 Claude 登入，會用掉你的 Claude 額度。金額是 Claude Code 回報的估值；沒有回報時，這一回合按上限（最壞情況）計。每回合有上限，今天的總花費和會議、組隊會議共用同一個花費上限，用完就不能再送。Codex 員工看下面「用 Codex 聊天」，AGY 員工看「用 AGY 聊天」。"],
   ["不會自己動手", "員工想執行指令、改檔或寫檔時，會出現一張卡片問你。你按「允許這一次」才會做；也可以拒絕，或改了內容再允許。每次都問，沒有「以後都允許」。卡片 5 分鐘沒回覆就過期，視為拒絕。"],
   ["員工的指示", "只有你自己寫在這位員工設定上的指示會帶進聊天；VBear 替職位預設的文字不會帶。續接的對話會沿用第一次送出時的指示，之後再改卡片，已經開始的對話不一定會跟著變（這一點還沒有在真機上確認）。"],
-  ["用 Codex 聊天", "Codex 員工用的是你的 ChatGPT 方案，不另外收費。Codex 不回報金額，VBear 依 token 數估算（每 100 萬 token 計 US$1，至少 US$0.01）後算進每天上限；這是 VBear 的記帳規則，不是帳單。"
+  ["用 Codex 聊天", "Codex 員工用的是你的 ChatGPT 方案，不另外收費。Codex 不回報金額，VBear 依 token 數估算（每 100 萬 token 計 US$1，至少 US$0.01）後算進花費上限；這是 VBear 的記帳規則，不是帳單。"
     + "聊天用的 Codex 要在「開始設定」另外登入一次（和你自己的 Codex 分開，VBear 看不到你自己的 Codex 設定）。每個指令和每次改檔都會先問你，連只讀檔的指令也問；"
     + "Codex 的保護範圍（沙盒）只擋「寫」，不擋「讀」，指令讀得到工作資料夾以外的檔案，所以指令要看清楚才按允許。「改內容再問」會先拒絕原本的，再請 Codex 照你改的重新問你一次，你要再按一次允許。"],
-  ["用 AGY 聊天", "AGY 員工用的是你的 Google 方案，不另外收費；聊天的內容會送到 Google。AGY 不回報金額，而且到一回合結束才回報用量，VBear 依 token 數估算（每 100 萬 token 計 US$1，至少 US$0.01）後算進每天上限；這是 VBear 的記帳規則，不是帳單，一回合有可能超過花費上限。"
+  ["用 AGY 聊天", "AGY 員工用的是你的 Google 方案，不另外收費；聊天的內容會送到 Google。AGY 不回報金額，而且到一回合結束才回報用量，VBear 依 token 數估算（每 100 萬 token 計 US$1，至少 US$0.01）後算進花費上限；這是 VBear 的記帳規則，不是帳單，一回合有可能超過花費上限。"
     + "AGY 要先通過聊天驗證（在這一頁的 AGY 區塊按「驗證聊天」）。AGY 員工會用到你自己裝的 AGY 技能。每個指令和每次改檔都會先問你；指令在 AGY 的保護範圍（沙盒）裡執行，不能連網。"
     + "要讀工作資料夾以外的檔案，會出現「讀取檔案」的卡片，只能允許或拒絕，沒有可以改的內容。「改內容再問」會先拒絕原本的，等這一回合結束，再把你改的內容當成下一則訊息送出，你要再按一次允許。"],
 ];
@@ -14057,14 +14013,14 @@ function chatTurnCost(rec, engine) {
   if (engine === "agy-chat") {          // AGY says its use only when a turn ends: an estimate by VBear's rule, or the turn's limit when it said nothing
     if (rec.estimate === true) {
       const tokens = Number.isInteger(rec.tokens) && rec.tokens >= 0 ? `約 ${rec.tokens.toLocaleString("en-US")} 個 token；` : "";
-      return `這回合估計 ${money}（${tokens}AGY 不回報金額，這是 VBear 依 token 數估算、算進每天上限的數字，不是帳單；用的是你的 Google 方案）。`;
+      return `這回合估計 ${money}（${tokens}AGY 不回報金額，這是 VBear 依 token 數估算、算進花費上限的數字，不是帳單；用的是你的 Google 方案）。`;
     }
     return `這回合按上限 ${money} 計（AGY 沒有回報用量）。`;
   }
   // a Codex chat's turn end carries `estimate`: money from the token count by VBear's own rule, or the turn's limit when there was no count
   if (rec.estimate === true) {
     const tokens = Number.isInteger(rec.tokens) && rec.tokens >= 0 ? `約 ${rec.tokens.toLocaleString("en-US")} 個 token；` : "";
-    return `這回合估計 ${money}（${tokens}Codex 不回報金額，這是 VBear 依 token 數估算、算進每天上限的數字，不是帳單）。`;
+    return `這回合估計 ${money}（${tokens}Codex 不回報金額，這是 VBear 依 token 數估算、算進花費上限的數字，不是帳單）。`;
   }
   if (rec.estimate === false) return `這回合按上限 ${money} 計（Codex 沒有回報用量）。`;
   return rec.reported === true ? `這回合花了 ${money}（Claude Code 回報的估值）。` : `這回合按上限 ${money} 計（Claude Code 沒有回報）。`;
@@ -14426,7 +14382,7 @@ async function viewChat(id, params) {
   if (id) return viewChatDetail(token, id);
   let data;
   try { data = await api.get("/api/chats"); }
-  catch (e) { setKids(claim(token), el("h1", null, "跟員工聊天"), notice("bad", "讀不到聊天：" + e.message)); return; }
+  catch (e) { setKids(claim(token), el("h1", null, "對話紀錄"), notice("bad", "讀不到對話紀錄：" + e.message)); return; }
   const readGroups = async () => {
     try { const r = await api.get("/api/groups"); return Array.isArray(r.groups) ? r.groups : []; } catch (_) { return []; }
   };
@@ -14729,7 +14685,7 @@ async function viewChatDetail(token, id) {
   let all;
   try { all = await chatReadAll(id); }
   catch (e) {
-    setKids(claim(token), crumbs([["聊天", "#/chat"], ["找不到"]]), notice("bad", e.status === 404 ? e.message : "讀不到這個聊天：" + e.message));
+    setKids(claim(token), crumbs([["對話紀錄", "#/chat"], ["找不到"]]), notice("bad", e.status === 404 ? e.message : "讀不到這段對話：" + e.message));
     return;
   }
   const main = claim(token);
@@ -14785,7 +14741,7 @@ async function viewChatDetail(token, id) {
       memoryBox, sharedBox);
     const notes = [];
     if (gate()) notes.push(notice("warn", gate()));
-    if (view.runtime && view.runtime.available === false) notes.push(notice("warn", `${view.runtime.message || "VBear 的背景程序連不上"}　紀錄還看得到，但現在不能送訊息。`));
+    if (view.runtime && view.runtime.available === false) notes.push(notice("warn", `${view.runtime.message || "VBear 的背景程式連不上"}　紀錄還看得到，但現在不能送訊息。`));
     if ((view.shared && view.shared.code === "shared_unverified") || sharedUnverified) notes.push(sharedCheckNode());       // P43-2 (also after a send was refused so)
     if (memoryNoteBox.children.length) notes.push(memoryNoteBox);
     if (view.problem) notes.push(notice("bad", `這個對話的紀錄有問題：${view.problem}。VBear 不會再往裡面寫，也不能再送訊息；已花的錢仍算在今天的額度裡。`));
@@ -15301,12 +15257,12 @@ const GROUP_SHARED_ON_NOTE = "打開之後，這幾位可以在共用資料夾�
 const GROUP_SHARED_CODEX_NOTE = "Codex 員工讀到的檔案會送到 OpenAI。";
 const GROUP_SHARED_AGY_NOTE = "AGY 員工這版不能用共用資料夾，之後 AGY 新版再檢查。有 AGY 員工的群組先不要打開共用資料夾。";
 const GROUP_WHAT = "群組：你說話，被叫到的員工輪流回答，員工動手前都會問你。要大家各寫一份意見、由 CEO 做決定，用「會議」；"
-  + "要員工照順序做完一件事，請 CEO 那邊的幕僚長安排「派工」。";
+  + "要員工照順序做完一件事，請 CEO 那邊的幕僚長安排「分配工作」。";
 const GROUP_CARD_NOTE = "員工想執行指令或改檔案時，卡片會出現在那位員工的名字下面，每一次都要你按「允許這一次」，沒有一次允許好幾張的按鈕。不按的話，5 分鐘後視為拒絕。";
 const GROUP_EDIT_LOCKED = "這一句還沒回完的時候，不能改名、加人、移除或刪除群組。";
 const GROUP_DELETE_NOTE = "會刪掉群組和群組裡每位員工的對話紀錄；已經花的錢照記。Codex 自己保存的對話副本不會被刪。";
 const GROUP_DELETE_AGY_NOTE = "AGY 自己保存的對話副本也不會被刪。";
-const GROUP_RED_NOTE = "今天的額度已用完（亮紅燈），今天不能再送訊息，本機日期隔天才會重算。";
+const GROUP_RED_NOTE = "今天的用量到你設的上限了，今天不能再送訊息。明天 0 點會重新算；要現在繼續，可以調高上限。";
 const GROUP_STATE = {
   idle: ["等你說話", "b-mute"], running: ["進行中", "b-info"], paused: ["暫停了", "b-warn"], readonly: ["紀錄有問題", "b-bad"],
 };
@@ -15335,7 +15291,7 @@ function groupCostText(names, perTurn, dayLeft) {
   if (per === null) return { text: `${who}，最多花多少：未知（讀不到每回合上限）。今天還剩 ${usdDown(left)}。`, over: false };
   const max = per * names.length;
   const over = left !== null && max > left + 1e-9;
-  return { text: `${who}，最多 ${usdUp(max)}，今天還剩 ${usdDown(left)}。` + (over ? "可能做到一半碰到每天上限，VBear 會停下來。" : ""), over };
+  return { text: `${who}，最多 ${usdUp(max)}，今天還剩 ${usdDown(left)}。` + (over ? "可能做到一半碰到花費上限，VBear 會停下來。" : ""), over };
 }
 function groupStateBadge(state) {
   return cardHas(GROUP_STATE, state) ? badge(GROUP_STATE[state][0], GROUP_STATE[state][1]) : badge("狀態不明", "b-mute");
@@ -15382,19 +15338,19 @@ function groupRow(g) {
 function groupItemNode(item, opts) {
   if (!item || typeof item !== "object" || typeof item.kind !== "string") return null;
   const remember = opts && typeof opts.remember === "function" ? opts.remember : null;       // P42-3: 「記住」 beside a spoken line
-  const saveSkill = opts && typeof opts.saveSkill === "function" ? opts.saveSkill : null;   // P44-1: 「存成技能」 beside it
+  const saveSkill = opts && typeof opts.saveSkill === "function" ? opts.saveSkill : null;   // P44-1: 「存成常用做法」 beside it
   const text = (x) => (typeof x === "string" ? x : "");
   const base = { "data-seq": String(item.seq) };
   switch (item.kind) {
     case "said": {
       const names = Array.isArray(item.to_names) ? item.to_names : null;
-      return el("li", { class: "chat-msg chat-me", "data-group": "said", ...base },
+      return el("li", { class: "chat-msg chat-me", "data-group": "said", tabindex: "0", ...base },
         el("div", { class: "chat-who small muted" }, `你對${names ? names.map((n) => "@" + text(n)).join(" ") : "大家"}說・${fmtTime(item.at)}`),
         el("div", { class: "chat-text" }, text(item.text)),
         remember && Number.isInteger(item.round) && text(item.text) ? memoryRememberRow(() => remember(item, "you"), saveSkill ? () => saveSkill(item, "you") : null) : null);
     }
     case "reply":
-      return el("li", { class: "chat-msg chat-them", "data-group": "reply", "data-profile-id": text(item.profile_id), ...base },
+      return el("li", { class: "chat-msg chat-them", "data-group": "reply", "data-profile-id": text(item.profile_id), tabindex: "0", ...base },
         el("div", { class: "chat-who small muted" }, `${text(item.name) || "未知"}（${chatToolName(item.tool)}）・${fmtTime(item.at)}`),
         el("div", { class: "chat-text" }, item.unreadable === true ? "（讀不到這則回覆）" : text(item.text) || "（沒有文字回覆）"),
         el("div", { class: "small muted", "data-group": "cost" }, groupReplyCost(item)),
@@ -15449,7 +15405,7 @@ function openGroupDialog(cards, hooks) {
     const box = el("input", { type: "checkbox", "data-group": "pick", "data-profile-id": c.id, disabled: !ok, "aria-label": `${c.name || c.id}`,
       on: { change: (e) => { if (e.target.checked) chosen.add(c.id); else chosen.delete(c.id); redraw(); } } });
     return el("li", { class: "group-pick" }, el("label", null, box, " ", `${c.name || c.id}（${chatToolName(c.tool)}）`),
-      ok ? null : el("span", { class: "small muted" }, `　不能加入：${c.reason || "這張角色卡現在不能聊天。"}`));
+      ok ? null : el("span", { class: "small muted" }, `　不能加入：${c.reason || "這位員工現在不能聊天。"}`));
   });
   function redraw() {
     const picked = list.filter((c) => chosen.has(c.id));
@@ -15475,7 +15431,7 @@ function openGroupDialog(cards, hooks) {
     el("div", { class: "modal-box", style: "max-width: 560px; max-height: 88vh; overflow-y: auto;" }, head,
       el("p", null, `選 ${GROUP_MIN} 到 ${GROUP_MAX} 位員工，一起聊天。你說話時，他們一位一位照順序回答，後面的人看得到前面的人說了什麼。`),
       el("p", { class: "small", "data-group": "share-note" }, GROUP_SHARE_NOTE),
-      list.length ? el("ul", { class: "group-picks" }, rows) : emptyState("還沒有可以聊天的員工", "先到角色頁做一張角色卡。"),
+      list.length ? el("ul", { class: "group-picks" }, rows) : emptyState("還沒有可以聊天的員工", "先到員工頁新增一位員工。"),
       countBox, mixedBox,
       el("label", { class: "ceo-field" }, el("span", null, "群組的名字"), name),
       el("p", { class: "small" }, el("label", null, sharedBox, " ", GROUP_SHARED_LABEL), " ", el("span", { class: "muted" }, "（預設不勾）")),
@@ -15529,13 +15485,13 @@ function groupMentions(words, names) {
 async function viewGroup(id) {
   const token = seq;
   if (!id || !GROUP_ID_RE.test(id)) {
-    setKids(claim(token), crumbs([["聊天", "#/chat"], ["找不到"]]), notice("bad", "找不到這個群組。"));
+    setKids(claim(token), crumbs([["對話紀錄", "#/chat"], ["找不到"]]), notice("bad", "找不到這個群組。"));
     return;
   }
   let all;
   try { all = await groupReadAll(id); }
   catch (e) {
-    setKids(claim(token), crumbs([["聊天", "#/chat"], ["找不到"]]), notice("bad", e.status === 404 ? "找不到這個群組。" : "讀不到這個群組：" + e.message));
+    setKids(claim(token), crumbs([["對話紀錄", "#/chat"], ["找不到"]]), notice("bad", e.status === 404 ? "找不到這個群組。" : "讀不到這個群組：" + e.message));
     return;
   }
   let sharedOf = await sharedCardsById();     // P43-4: which members may use the shared folder (empty when it cannot be read: no marks)
@@ -15651,7 +15607,10 @@ async function viewGroup(id) {
     sendBtn.disabled = busy || !ok;
     input.disabled = !ok;
     const why = typeof can().why_not_send === "string" && can().why_not_send;
-    setKids(sendNote, noteText || (ok ? "" : red() && !why ? GROUP_RED_NOTE : why || (red() ? GROUP_RED_NOTE : "現在不能送訊息。")));
+    const sendWhy = noteText || (ok ? "" : red() && !why ? GROUP_RED_NOTE : why || (red() ? GROUP_RED_NOTE : "現在不能送訊息。"));
+    // the day's limit stopped it (the server's own sentence, or the lamp the page reads): plain words, a way to the settings, the original kept in 技術細節
+    const limitStop = typeof sendWhy === "string" && sendWhy !== "" && (sendWhy === GROUP_RED_NOTE || plainWords(sendWhy).limit);
+    setKids(sendNote, limitStop ? limitReachedNotice(sendWhy === GROUP_RED_NOTE ? null : sendWhy, { text: GROUP_RED_NOTE }) : sendWhy);
   };
   // who is answering, the words being written and, under that name, the card that asks the person
   const drawLive = () => {
@@ -15833,9 +15792,9 @@ async function viewGroup(id) {
   await readLive();
   draw();
   const what = el("p", { class: "small muted group-what", "data-group": "what" }, GROUP_WHAT, " ",
-    el("a", { href: "#/meetings" }, "前往會議"), "　", el("a", { href: "#/dispatch" }, "前往派工"));
+    el("a", { href: "#/meetings" }, "前往會議"), "　", el("a", { href: "#/dispatch" }, "前往分配工作"));
   const composer = el("div", { class: "chat-composer", "data-group": "composer" }, toBox, input, costBox, el("div", { class: "row" }, sendBtn, skillUseButton(input)), sendNote);
-  setKids(main, el("nav", { class: "crumbs", "aria-label": "路徑" }, el("a", { href: "#/chat" }, "聊天"), " / ", crumbName), what, headBox, manageBox, statusBox, transcript, liveBox, ctlBox, composer);
+  setKids(main, el("nav", { class: "crumbs", "aria-label": "路徑" }, el("a", { href: "#/chat" }, "對話紀錄"), " / ", crumbName), what, headBox, manageBox, statusBox, transcript, liveBox, ctlBox, composer);
   timer = setInterval(() => { if (!document.hidden) pollOnce(); }, GROUP_POLL_MS);
   activeViewCleanup = () => stopPolling();
 }
@@ -15872,13 +15831,13 @@ const DISPATCH_STATE = {
 const DISPATCH_BY = { you: "你確認的", auto1: "自己動手第 1 項", auto2: "自己動手第 2 項", vbear: "VBear" };
 const STEP_END_TEXT = {
   result: "做完了", is_error: "員工回報這一步沒有成功", stopped: "這一回合被停止了", timeout: "等太久，逾時了", process_exit: "員工的程序中途結束了",
-  violation: "員工違反了 VBear 的設定，被停掉了", daemon_restart: "VBear 的背景程序重新啟動，被中斷了", error: "出了錯",
+  violation: "員工違反了 VBear 的設定，被停掉了", daemon_restart: "VBear 的背景程式重新啟動，被中斷了", error: "出了錯",
   not_sent: "訊息沒有送到員工那裡", limit: "用到每回合的花費上限，被停下來了",
 };
-const DISPATCH_SENT_NOTE = "每一步送出後就收不回來；你隨時可以在派工頁按「停止」。員工做事時，每個指令、每個檔案修改照舊都問你。";
+const DISPATCH_SENT_NOTE = "每一步送出後就收不回來；你隨時可以在分配工作頁按「停止」。員工做事時，每個指令、每個檔案修改照舊都問你。";
 const DISPATCH_HANDOFF_NOTE = "第 2 步起，VBear 會把上一步員工的回覆一起送給下一位（標成資料，不是指令）。";
-const DISPATCH_NEW_NOTE = "VBear 會建這位新員工：一律安全模式、不插任何技能，指示是這個職位的固定文字。";
-const DISPATCH_RED_NOTE = "今天的花費已經到每天上限（亮紅燈），現在不能確認派工；明天（本機 0:00 之後）再來。";
+const DISPATCH_NEW_NOTE = "VBear 會建這位新員工：一律「每件事先問我」、不插任何技能，指示是這個職位的固定文字。";
+const DISPATCH_RED_NOTE = "今天的用量到你設的上限了，現在不能確認分配工作。明天 0 點會重新算；要現在繼續，可以調高上限。";
 
 // "US$1.50" from a money text, or "未知". A sum the person may be asked to pay is rounded up and what is left rounded down, so the
 // page never says less than the most or more than what is left.
@@ -15906,7 +15865,7 @@ function dispatchCostText(steps, perTurn, dayLeft) {
   const max = per * steps;
   const over = left !== null && max > left + 1e-9;
   return { text: `最多 ${usdUp(max)}（${steps} 步 × 每回合上限 ${usdUp(per)}），${leftText}。`
-    + (over ? "這比今天還剩的多，可能做到一半碰到每天上限，VBear 會停下來，明天 0:00 後按「繼續」。" : ""), over };
+    + (over ? "這比今天還剩的多，可能做到一半碰到花費上限，VBear 會停下來，明天 0:00 後按「繼續」。" : ""), over };
 }
 function chiefNeedsClaudeNode() {
   return el("div", { class: "notice info", "data-chief": "needs-claude" }, el("span", { class: "ico", "aria-hidden": "true" }, "i"),
@@ -15950,7 +15909,7 @@ function openChiefDialog(pv, hooks) {
     el("div", { class: "modal-box", style: "max-width: 640px; max-height: 88vh; overflow-y: auto;" }, head,
       blockers.map((b) => (b.code === "cli_not_found" ? chiefNeedsClaudeNode() : notice("warn", b.message || "現在不能開始"))),
       el("p", null, `幕僚長會讀你和 CEO 最近的對話（${reads}${pv.omitted_messages ? `，更早的 ${pv.omitted_messages} 則不讀` : ""}），`
-        + `和 ${Number.isInteger(pv.cards) ? pv.cards : "幾"} 位可以派工的員工名單（只有名字、職位、AI 工具、模型，沒有指示和技能）。工具的輸出、檔案內容、你按過的允許都不會送出。`),
+        + `和 ${Number.isInteger(pv.cards) ? pv.cards : "幾"} 位可以分配工作的員工名單（只有名字、職位、AI 工具、模型，沒有指示和技能）。工具的輸出、檔案內容、你按過的允許都不會送出。`),
       el("p", { class: "chief-money", "data-chief": "money" }, el("b", null, `最多花 ${cap}，今天還剩 ${left}。`),
         " 這只是幕僚長想一想的花費；員工之後真的做事，每一步另外算，提議卡上會寫最多多少。"),
       el("p", null, `你和 CEO 的對話會送給 ${typeof pv.sends_to === "string" && pv.sends_to ? pv.sends_to : "Claude Code"}（Anthropic）。它只提議，不會動手；你看過、確認了才會做。`),
@@ -15971,10 +15930,10 @@ function openChiefDialog(pv, hooks) {
 // one that was shown. The card has `update({lamp})` for the caller that learns the lamp later.
 // P43-3: the person's tick on the proposal card. Off unless they put it there; it opens the shared folder for the employees of this
 // dispatch who have it off now and for the ones VBear is about to make. `v.shared.people` is what the server knows of the ones that exist.
-const DISPATCH_SHARED_LABEL = "替這次派工的員工打開共用資料夾";
+const DISPATCH_SHARED_LABEL = "替這次分配工作的員工打開共用資料夾";
 const DISPATCH_SHARED_NOTE = "打開之後，這些員工可以在共用資料夾放檔案給彼此和你，下一步的員工會收到上一步期間新增或改過的檔名（只有檔名）。每一次寫進去都照舊先問你。";
 const DISPATCH_SHARED_CODEX_NOTE = "Codex 員工讀到的檔案會送到 OpenAI。";
-const DISPATCH_SHARED_AGY_NOTE = "AGY 員工這版不能用共用資料夾，之後 AGY 新版再檢查。有 AGY 員工的派工先不要打開共用資料夾。";
+const DISPATCH_SHARED_AGY_NOTE = "AGY 員工這版不能用共用資料夾，之後 AGY 新版再檢查。有 AGY 員工的分配工作先不要打開共用資料夾。";
 function proposalDraft(v) {
   const plan = v.plan && typeof v.plan === "object" ? v.plan : {};
   const cards = Array.isArray(plan.new_cards) ? plan.new_cards : [];
@@ -16003,7 +15962,7 @@ function proposalCard(v, opts = {}) {
   const whyOff = el("p", { class: "small", "data-dispatch": "why-disabled", role: "status" });
   const errorBox = el("div", { class: "prop-error", "data-dispatch": "error", role: "alert" });
   // a proposal with no step (the chief of staff only has questions) has nothing to confirm
-  const confirmBtn = orig.steps.length ? el("button", { class: "btn primary", type: "button", "data-dispatch": "confirm", on: { click: () => confirmPlan() } }, "確認派工") : null;
+  const confirmBtn = orig.steps.length ? el("button", { class: "btn primary", type: "button", "data-dispatch": "confirm", on: { click: () => confirmPlan() } }, "確認分配工作") : null;
   const origCard = (ref) => orig.cards.find((c) => c.ref === ref);
   const usedRefs = () => new Set(draft.steps.map((s) => s.who));
   const liveCards = () => draft.cards.filter((c) => !c.gone);
@@ -16080,7 +16039,7 @@ function proposalCard(v, opts = {}) {
     const sp = sharedPlan();
     const agyShared = sharedOn && !!sp && sp.agy === true && (sp.off.length > 0 || sp.fresh.length > 0);
     if (confirmBtn) confirmBtn.disabled = busy || red || bad.length > 0 || agyShared || !(v.can && v.can.confirm);
-    setKids(whyOff, !confirmBtn ? "" : red ? DISPATCH_RED_NOTE : bad.length ? bad[0] : agyShared ? DISPATCH_SHARED_AGY_NOTE : "");
+    setKids(whyOff, !confirmBtn ? "" : red ? limitReachedNotice(null, { text: DISPATCH_RED_NOTE }) : bad.length ? bad[0] : agyShared ? DISPATCH_SHARED_AGY_NOTE : "");
   };
   const redraw = () => { draw(); derive(); };
 
@@ -16104,7 +16063,7 @@ function proposalCard(v, opts = {}) {
       el("div", null, el("strong", null, c.name || "（還沒取名）"), " ", badge("新建", "b-info"), " ", mark(() => cardChanged(c))),
       team.find((t) => t.who === c.ref) && team.find((t) => t.who === c.ref).why ? el("p", { class: "small" }, team.find((t) => t.who === c.ref).why) : null,
       el("div", { class: "prop-fields" }, field("name", "名字", name), field("position", "職位", position), field("tool", "AI 工具", tool), model ? field("model_alias", "模型", model) : null),
-      locked ? el("p", { class: "small muted" }, "這位新員工已經建好了（自己動手第 1 項），不能再改；要停用請到派工頁撤回。")
+      locked ? el("p", { class: "small muted" }, "這位新員工已經建好了（自己動手第 1 項），不能再改；要停用請到分配工作頁撤回。")
         : el("p", { class: "small muted" }, DISPATCH_NEW_NOTE),
       locked ? null : el("button", { class: "btn small", type: "button", on: { click: () => { c.gone = true; redraw(); } } }, "不要這位新員工"));
   };
@@ -16164,7 +16123,7 @@ function proposalCard(v, opts = {}) {
     busy = true; errorText = ""; setKids(errorBox, null); derive();
     try {
       const res = await api.post(`/api/dispatch/${encodeURIComponent(v.id)}/confirm`, { ...payload(), ...sharedFields() });
-      toast("派工開始了");
+      toast("分配工作開始了");
       if (opts.onDone) opts.onDone(res);
     } catch (e) {
       busy = false;
@@ -16183,9 +16142,9 @@ function proposalCard(v, opts = {}) {
     el("div", { class: "prop-head" }, el("h2", null, "幕僚長的提議"), " ", dispatchStateBadge("proposed"), " ", cardMark),
     editedNote, body,
     el("p", { class: "small muted", "data-dispatch": "what-next" }, (Array.isArray(v.plan && v.plan.new_cards) ? v.plan.new_cards : []).some((c) => !made.has(c.ref))
-      ? "按「確認派工」之後，VBear 會建上面的新員工（安全模式）、建一張任務卡，再照順序把每一步送給員工。"
-      : made.size ? "新員工已經建好了（自己動手第 1 項，安全模式）。按「確認派工」之後，VBear 建一張任務卡，再照順序把每一步送給員工。"
-        : "按「確認派工」之後，VBear 建一張任務卡，再照順序把每一步送給員工。"),
+      ? "按「確認分配工作」之後，VBear 會建上面的新員工（「每件事先問我」）、建一個專案，再照順序把每一步送給員工。"
+      : made.size ? "新員工已經建好了（自己動手第 1 項，「每件事先問我」）。按「確認分配工作」之後，VBear 建一個專案，再照順序把每一步送給員工。"
+        : "按「確認分配工作」之後，VBear 建一個專案，再照順序把每一步送給員工。"),
     sharedBox, costBox, spent ? el("p", { class: "small muted", "data-dispatch": "chief-cost" },
       `幕僚長這次花了 ${usdUp(dispatchNum(spent.spent_usd))}（${spent.cost_source === "worst_case" ? "沒有回報，以上限計" : "Claude Code 回報"}）。`) : null,
     whyOff, errorBox,
@@ -16277,7 +16236,7 @@ function chiefDesk(chatId, chatCard) {
         cards.set(r.id, { sha: v.proposal_sha, node });
         nodes.push(node);
       }
-      if (dispatches.length > 3) nodes.push(el("p", { class: "small" }, el("a", { href: "#/dispatch" }, `還有 ${dispatches.length - 3} 份較舊的派工 →`)));
+      if (dispatches.length > 3) nodes.push(el("p", { class: "small" }, el("a", { href: "#/dispatch" }, `還有 ${dispatches.length - 3} 份較舊的分配工作 →`)));
       const active = document.activeElement;
       if (active && runs.contains(active) && ["TEXTAREA", "INPUT", "SELECT"].includes(String(active.tagName || active.tag || "").toUpperCase())) {
         for (const [, k] of cards) k.node.update({ lamp });      // the person is typing: nothing is rebuilt under their hands
@@ -16322,7 +16281,7 @@ function dispatchContinueNote(v) {
     const next = steps.find((s) => s.seq > bad.seq && s.state === "pending");
     return next
       ? `按「繼續」不會重做第 ${bad.seq} 步，會直接做第 ${next.seq} 步（它會收到第 ${bad.seq} 步不完整的回覆，並被告知可能不完整）。要重做第 ${bad.seq} 步，請到那位員工的聊天自己再說一次。`
-      : `第 ${bad.seq} 步是最後一步，按「繼續」不會重做它，只會把這份派工標成做完了。要重做，請到那位員工的聊天自己再說一次。`;
+      : `第 ${bad.seq} 步是最後一步，按「繼續」不會重做它，只會把這份分配工作標成做完了。要重做，請到那位員工的聊天自己再說一次。`;
   }
   const next = steps.find((s) => s.state === "pending");
   return next ? `按「繼續」會接著送第 ${next.seq} 步。` : "";
@@ -16353,8 +16312,8 @@ async function viewDispatch(id) {
 
 function dispatchRow(r) {
   if (r.blocked) {
-    return el("li", { class: "mt-row card", "data-dispatch": "row" }, el("strong", null, `無法讀取的派工紀錄 ${r.id}`), badge("無法讀取", "b-bad"),
-      el("span", { class: "small muted" }, r.error || "這份派工的紀錄讀不出來，已留在清單裡，沒有被刪掉。"));
+    return el("li", { class: "mt-row card", "data-dispatch": "row" }, el("strong", null, `無法讀取的分配工作紀錄 ${r.id}`), badge("無法讀取", "b-bad"),
+      el("span", { class: "small muted" }, r.error || "這份分配工作的紀錄讀不出來，已留在清單裡，沒有被刪掉。"));
   }
   return el("li", { class: "mt-row card", "data-dispatch": "row", "data-dispatch-id": r.id },
     el("a", { class: "mt-row-title", href: `#/dispatch/${encodeURIComponent(r.id)}` }, r.title || "（沒有名稱）"), dispatchStateBadge(r.state),
@@ -16364,19 +16323,19 @@ function dispatchRow(r) {
 async function viewDispatchList(token) {
   let data;
   try { data = await api.get("/api/dispatch"); }
-  catch (e) { setKids(claim(token), el("h1", null, "派工"), notice("bad", "讀不到派工：" + e.message)); return; }
+  catch (e) { setKids(claim(token), el("h1", null, "分配工作"), notice("bad", "讀不到分配工作：" + e.message)); return; }
   const main = claim(token);
   const box = el("div", { "data-dispatch": "list" });
   const draw = (d) => {
     const rows = d && Array.isArray(d.dispatch) ? d.dispatch.filter((r) => r && typeof r === "object") : [];
     setKids(box, rows.length ? el("ul", { class: "mt-list" }, rows.map(dispatchRow))
-      : emptyState("還沒有派工", "在和 CEO 聊天的頁面按「請幕僚長安排」，幕僚長提議、你確認之後，派工就會出現在這裡。"));
+      : emptyState("還沒有分配工作", "在和 CEO 聊天的頁面按「請幕僚長安排」，幕僚長提議、你確認之後，分配工作就會出現在這裡。"));
   };
   draw(data);
   dispatchTick = async () => { try { draw(await api.get("/api/dispatch")); } catch (_) { /* the next tick tries again */ } };
   activeViewCleanup = () => { dispatchTick = null; };
-  setKids(main, el("h1", null, "派工"),
-    el("p", { class: "lede" }, "幕僚長提議、你確認之後，VBear 把一件工作分成幾步，照順序在員工的聊天裡交給他們做。這裡看每一份派工做到哪裡。"),
+  setKids(main, el("h1", null, "分配工作"),
+    el("p", { class: "lede" }, "幕僚長提議、你確認之後，VBear 把一件工作分成幾步，照順序在員工的聊天裡交給他們做。這裡看每一份分配工作做到哪裡。"),
     el("p", null, el("a", { class: "btn small", href: "#/actions", "data-dispatch": "actions-link" }, "AI 自己做了什麼"), " ", el("span", { class: "small muted" }, DISPATCH_POLL_NOTE)),
     box);
 }
@@ -16384,7 +16343,7 @@ async function viewDispatchList(token) {
 async function viewDispatchDetail(token, id) {
   let cur;
   try { cur = await api.get(`/api/dispatch/${encodeURIComponent(id)}`); }
-  catch (e) { setKids(claim(token), crumbs([["派工", "#/dispatch"], ["找不到"]]), notice("bad", e.status === 404 ? e.message : "讀不到這份派工：" + e.message)); return; }
+  catch (e) { setKids(claim(token), crumbs([["分配工作", "#/dispatch"], ["找不到"]]), notice("bad", e.status === 404 ? e.message : "讀不到這份分配工作：" + e.message)); return; }
   const main = claim(token);
   const root = el("div", { "data-dispatch": "detail" });
   let lamp = null, waiting = new Set(), proposal = null, proposalSha = "", chiefView = null, shownKey = "";
@@ -16409,9 +16368,9 @@ async function viewDispatchDetail(token, id) {
     shownKey = key;
     const v = cur;
     const plan = v.plan || {};
-    const head = el("div", { class: "chat-head" }, el("h1", null, plan.title || "派工"),
+    const head = el("div", { class: "chat-head" }, el("h1", null, plan.title || "分配工作"),
       el("p", { class: "small" }, dispatchStateBadge(v.state), v.started_by ? el("span", null, " ", dispatchByText(v.started_by)) : null, " ", el("span", { class: "muted" }, `建立於 ${fmtTime(v.created_at)}`)));
-    const crumb = crumbs([["派工", "#/dispatch"], [plan.title || id]]);
+    const crumb = crumbs([["分配工作", "#/dispatch"], [plan.title || id]]);
     if (v.state === "proposed") {
       if (!proposal || proposalSha !== v.proposal_sha) {
         proposalSha = v.proposal_sha;
@@ -16430,35 +16389,35 @@ async function viewDispatchDetail(token, id) {
     const buttons = [
       can.continue ? el("button", { class: "btn primary", type: "button", "data-dispatch": "continue", on: { click: () => act("continue", {}, "繼續做了") } }, "繼續") : null,
       can.stop ? el("button", { class: "btn", type: "button", "data-dispatch": "stop", on: { click: async () => {
-        if (await confirmInPage("停止這份派工", "停止後，VBear 不會再送任何一步；正在做的那一回合會被停下來。已經送出的訊息收不回來。", "停止")) await act("stop", {}, "已停止");
+        if (await confirmInPage("停止這份分配工作", "停止後，VBear 不會再送任何一步；正在做的那一回合會被停下來。已經送出的訊息收不回來。", "停止")) await act("stop", {}, "已停止");
       } } }, "停止") : null,
       can.delete ? el("button", { class: "btn", type: "button", "data-dispatch": "delete", on: { click: async () => {
-        if (!(await confirmInPage("刪除這份派工", "只刪派工和幕僚長這一次的紀錄；員工、任務卡和聊天都留著。刪掉後不能復原。", "刪除"))) return;
+        if (!(await confirmInPage("刪除這份分配工作", "只刪分配工作和幕僚長這一次的紀錄；員工、專案和聊天都留著。刪掉後不能復原。", "刪除"))) return;
         try { await api.post(`/api/dispatch/${encodeURIComponent(id)}/delete`, {}); toast("已刪除"); location.hash = "#/dispatch"; } catch (e) { toast(e.message); }
-      } } }, "刪除這份派工") : null,
+      } } }, "刪除這份分配工作") : null,
     ].filter(Boolean);
     setKids(root, crumb, head,
       v.pause ? notice("warn", el("div", { "data-dispatch": "pause" }, el("b", null, "暫停了　"), v.pause.text || "原因不明。",
         dispatchCountdown(v.pause),
         can.continue && dispatchContinueNote(v) ? el("p", { class: "small", style: "margin:6px 0 0", "data-dispatch": "continue-note" }, dispatchContinueNote(v)) : null)) : null,
       v.state === "done" ? notice("info", "每一步都做完了。") : null,
-      v.state === "stopped" ? notice("info", "你停止了這份派工。已經送出的訊息收不回來，沒有再送新的。") : null,
+      v.state === "stopped" ? notice("info", "你停止了這份分配工作。已經送出的訊息收不回來，沒有再送新的。") : null,
       v.state === "dismissed" ? notice("info", "你沒有採用這份提議，什麼都沒有發生（幕僚長那一次的花費照記）。") : null,
       buttons.length ? el("div", { class: "row" }, buttons) : null,
       plan.goal ? el("p", { "data-dispatch": "goal" }, el("span", { class: "muted" }, "目標："), plan.goal) : null,
       el("section", { class: "section" }, sectionHead("每一步", DISPATCH_POLL_NOTE), el("ol", { class: "disp-steps" }, steps.map((s) => dispatchStepNode(s, { waiting })))),
-      el("p", { class: "small", "data-dispatch": "money" }, `這份派工${cost.text}`, steps.some((s) => dispatchNum(s.cost_usd) !== null) ? ` 已花約 ${usdUp(spent)}（各步的估值加起來）。` : ""),
+      el("p", { class: "small", "data-dispatch": "money" }, `這份分配工作${cost.text}`, steps.some((s) => dispatchNum(s.cost_usd) !== null) ? ` 已花約 ${usdUp(spent)}（各步的估值加起來）。` : ""),
       el("p", { class: "small muted" }, DISPATCH_SENT_NOTE),
-      made.length ? el("section", { class: "section", "data-dispatch": "made" }, sectionHead("VBear 為這份派工建的員工", "停用不是刪除，聊天紀錄都留著"),
+      made.length ? el("section", { class: "section", "data-dispatch": "made" }, sectionHead("VBear 為這份分配工作建的員工", "停用不是刪除，聊天紀錄都留著"),
         el("ul", { class: "mt-list" }, made.map((c) => el("li", { class: "mt-row card", "data-dispatch": "made-row", "data-profile": c.profile_id },
           el("strong", null, c.name || c.ref), c.withdrawn ? badge("已撤回（停用）", "b-mute") : badge("使用中", "b-ok"),
           c.withdrawn || !(Array.isArray(can.withdraw) && can.withdraw.includes(c.profile_id)) ? null
             : el("button", { class: "btn small", type: "button", "data-dispatch": "withdraw", on: { click: async () => {
-              if (await confirmInPage(`撤回「${c.name || c.ref}」`, "只是把這張角色卡停用，不會刪除，聊天紀錄都留著；之後可以到角色卡池再啟用。員工正在做事時不能撤回。", "撤回")) await act("withdraw-card", { profile_id: c.profile_id }, "已撤回");
+              if (await confirmInPage(`撤回「${c.name || c.ref}」`, "只是把這位員工停用，不會刪除，聊天紀錄都留著；之後可以到員工頁再啟用。員工正在做事時不能撤回。", "撤回")) await act("withdraw-card", { profile_id: c.profile_id }, "已撤回");
             } } }, "撤回")))))
         : null,
-      v.task_id ? el("p", { class: "small" }, "任務卡：", el("a", { href: `#/workbench?task=${encodeURIComponent(v.task_id)}`, "data-dispatch": "task-link" }, "看這份派工建的任務卡")) : null,
-      events.length ? el("details", { class: "fold section" }, el("summary", null, `這份派工做過的事（${events.length} 筆）`),
+      v.task_id ? el("p", { class: "small" }, "專案：", el("a", { href: `#/workbench?task=${encodeURIComponent(v.task_id)}`, "data-dispatch": "task-link" }, "看這份分配工作建的專案")) : null,
+      events.length ? el("details", { class: "fold section" }, el("summary", null, `這份分配工作做過的事（${events.length} 筆）`),
         el("ul", { class: "fold-body" }, events.map(dispatchEventNode)),
         el("p", { class: "small" }, el("a", { href: "#/actions" }, "到「AI 自己做了什麼」看全部"))) : null);
   }
@@ -16467,7 +16426,7 @@ async function viewDispatchDetail(token, id) {
   draw(true);
   dispatchTick = async () => {
     try { cur = await api.get(`/api/dispatch/${encodeURIComponent(id)}`); await sideAndDraw(); }
-    catch (e) { if (e.status === 404) setKids(root, crumbs([["派工", "#/dispatch"], ["已刪除"]]), notice("info", "這份派工已經被刪除。")); }
+    catch (e) { if (e.status === 404) setKids(root, crumbs([["分配工作", "#/dispatch"], ["已刪除"]]), notice("info", "這份分配工作已經被刪除。")); }
   };
   activeViewCleanup = () => { dispatchTick = null; };
   setKids(main, root);
@@ -16492,7 +16451,7 @@ async function viewActions() {
     const unreadable = d && Number.isInteger(d.unreadable) ? d.unreadable : 0;
     const stopShown = new Set();
     setKids(box,
-      unreadable ? notice("warn", `有 ${unreadable} 份派工的紀錄讀不出來，沒有列在這裡（它們還在，沒有被刪掉）。`) : null,
+      unreadable ? notice("warn", `有 ${unreadable} 份分配工作的紀錄讀不出來，沒有列在這裡（它們還在，沒有被刪掉）。`) : null,
       rows.length ? el("ul", { class: "mt-list" }, rows.map((r) => {
         const auto = r.by === "auto1" || r.by === "auto2" || r.by === "auto3" || r.by === "auto5";
         const routineRow = r.kind === "routine_started";
@@ -16505,12 +16464,12 @@ async function viewActions() {
           r.kind === "step_sent" ? el("span", { class: "small muted", "data-action": "sent-note" }, r.can_stop ? "收不回來；可以按「停止」。" : "收不回來。") : null,
           routineRow
             ? (typeof r.chat_id === "string" && r.chat_id ? el("a", { class: "small", href: `#/chat/${encodeURIComponent(r.chat_id)}`, "data-action": "routine-chat" }, "看這個聊天") : null)
-            : el("a", { class: "small", href: `#/dispatch/${encodeURIComponent(r.dispatch_id)}` }, "看這份派工"),
+            : el("a", { class: "small", href: `#/dispatch/${encodeURIComponent(r.dispatch_id)}` }, "看這份分配工作"),
           stopHere ? el("button", { class: "btn small", type: "button", "data-action": "stop", on: { click: async () => {
-            if (await confirmInPage("停止這份派工", "停止後，VBear 不會再送任何一步；正在做的那一回合會被停下來。已經送出的訊息收不回來。", "停止")) await act(r.dispatch_id, "stop", {}, "已停止");
+            if (await confirmInPage("停止這份分配工作", "停止後，VBear 不會再送任何一步；正在做的那一回合會被停下來。已經送出的訊息收不回來。", "停止")) await act(r.dispatch_id, "stop", {}, "已停止");
           } } }, "停止") : null,
           r.can_withdraw === true && typeof r.profile_id === "string" ? el("button", { class: "btn small", type: "button", "data-action": "withdraw", on: { click: async () => {
-            if (await confirmInPage("撤回這位員工", "只是把這張角色卡停用，不會刪除，聊天紀錄都留著；之後可以到角色卡池再啟用。員工正在做事時不能撤回。", "撤回")) await act(r.dispatch_id, "withdraw-card", { profile_id: r.profile_id }, "已撤回");
+            if (await confirmInPage("撤回這位員工", "只是把這位員工停用，不會刪除，聊天紀錄都留著；之後可以到員工頁再啟用。員工正在做事時不能撤回。", "撤回")) await act(r.dispatch_id, "withdraw-card", { profile_id: r.profile_id }, "已撤回");
           } } }, "撤回") : null);
       })) : emptyState("AI 還沒有自己做過任何事", "幕僚長提議、你確認，或你打開「自己動手」之後，每一件事都會列在這裡。"));
   };
@@ -16518,8 +16477,8 @@ async function viewActions() {
   actionsTick = async () => { try { draw(await api.get("/api/actions")); } catch (_) { /* the next tick tries again */ } };
   activeViewCleanup = () => { actionsTick = null; };
   setKids(main, el("h1", null, "AI 自己做了什麼"),
-    el("p", { class: "lede" }, "幕僚長和派工做過的每一件事都列在這裡：做了什麼、是誰決定的（你確認的，或「自己動手」第幾項）。可以停止進行中的派工，也可以把 VBear 建的員工撤回（停用，不會刪除）。已經送出的訊息收不回來。"),
-    el("p", null, el("a", { class: "btn small", href: "#/dispatch", "data-actions": "dispatch-link" }, "所有派工"), " ",
+    el("p", { class: "lede" }, "幕僚長和分配工作做過的每一件事都列在這裡：做了什麼、是誰決定的（你確認的，或「自己動手」第幾項）。可以停止進行中的分配工作，也可以把 VBear 建的員工撤回（停用，不會刪除）。已經送出的訊息收不回來。"),
+    el("p", null, el("a", { class: "btn small", href: "#/dispatch", "data-actions": "dispatch-link" }, "所有分配工作"), " ",
       el("a", { class: "btn small", href: "#/settings", "data-actions": "settings-link" }, "到設定看「自己動手」"), " ", el("span", { class: "small muted" }, DISPATCH_POLL_NOTE)),
     box);
 }
@@ -16542,9 +16501,9 @@ function dispatchTurnCard(r) {
   return el("article", { class: "card quest quest-turn", "data-quest": "dispatch", "data-dispatch": "board-card", "data-dispatch-id": r.id },
     el("div", { class: "card-top" },
       el("div", { style: "min-width:0" },
-        el("div", { class: "card-title" }, el("a", { class: "quest-link", href: `#/dispatch/${encodeURIComponent(r.id)}` }, `${proposed ? "派工提議" : "派工暫停"}：${r.title || "（沒有名稱）"}`)),
-        el("div", { class: "card-sub" }, proposed ? "幕僚長提出了一份派工提議，等你看過、確認" : "這份派工暫停了，原因在派工頁；按「繼續」才會接著做")),
-      el("span", { class: "badge b-warn quest-type" }, questIcon("turn"), proposed ? "派工提議" : "派工暫停")),
+        el("div", { class: "card-title" }, el("a", { class: "quest-link", href: `#/dispatch/${encodeURIComponent(r.id)}` }, `${proposed ? "分配工作提議" : "分配工作暫停"}：${r.title || "（沒有名稱）"}`)),
+        el("div", { class: "card-sub" }, proposed ? "幕僚長提出了一份分配工作提議，等你看過、確認" : "這份分配工作暫停了，原因在分配工作頁；按「繼續」才會接著做")),
+      el("span", { class: "badge b-warn quest-type" }, questIcon("turn"), proposed ? "分配工作提議" : "分配工作暫停")),
     el("div", { class: "stat-line" }, el("span", null, `${r.steps} 步`)),
     el("div", { class: "quest-go" }, "前往處理 →"));
 }
@@ -16601,7 +16560,7 @@ function chatOriginFill(line, origin) {
 // A dispatch or a group that stopped for a limit (the day's money, or an AI tool's plan) shows when it can go on, and the line over every page lists
 // them. The words come from the server (`countdown.text`, a row's `text`); this block only draws what it is given, makes no request, and sets every name
 // and word as text. A dispatch goes on by itself only when 「自己動手」 item 5 is ticked, a group never does, and the page says both.
-const COUNTDOWN_DISPATCH_NOTE = "設定頁勾了「自己動手」第 5 項時，到了恢復時間 VBear 會自己按「繼續」（每份派工最多 3 次）；沒勾，就由你按「繼續」。";
+const COUNTDOWN_DISPATCH_NOTE = "設定頁勾了「自己動手」第 5 項時，到了恢復時間 VBear 會自己按「繼續」（每份分配工作最多 3 次）；沒勾，就由你按「繼續」。";
 const COUNTDOWN_UNKNOWN_NOTE = "沒有恢復時間，VBear 不會自己接續；等你確認 AI 工具可以用了，再按「繼續」。";
 const COUNTDOWN_GROUP_NOTE = "群組不會自己接續，到時候請你按「繼續」。";
 function countdownNode(cd, note) {
@@ -16618,7 +16577,7 @@ function resumeBarRows(rows) {
   const out = [];
   for (const r of Array.isArray(rows) ? rows : []) {
     if (!r || typeof r !== "object" || typeof r.name !== "string" || typeof r.text !== "string") continue;
-    if (r.kind === "dispatch_resume" && typeof r.dispatch_id === "string") out.push({ text: `派工「${r.name}」${r.text}`, href: `#/dispatch/${encodeURIComponent(r.dispatch_id)}` });
+    if (r.kind === "dispatch_resume" && typeof r.dispatch_id === "string") out.push({ text: `分配工作「${r.name}」${r.text}`, href: `#/dispatch/${encodeURIComponent(r.dispatch_id)}` });
     else if (r.kind === "group_resume" && typeof r.group_id === "string") out.push({ text: `群組「${r.name}」${r.text}`, href: `#/chat/group/${encodeURIComponent(r.group_id)}` });
   }
   return out;
@@ -16638,13 +16597,13 @@ function resumeBarRows(rows) {
 const MEMORY_KINDS = [["about_you", "關於你"], ["work", "你的工作"], ["decision", "決定"]];
 const MEMORY_MAX_TEXT = 200;
 const MEMORY_WHERE = "員工開新程序時，記憶會跟著送給 Anthropic（Claude Code 的員工）、OpenAI（Codex 的員工）或 Google（AGY 的員工）。不要寫密碼、帳號、卡號；VBear 看到像這樣的內容會擋下。";
-const MEMORY_SPLIT = "只有這位員工要照做的，寫在角色卡的固定指示；換一位員工也該知道的，放記憶。";
+const MEMORY_SPLIT = "只有這位員工要照做的，寫在員工的固定指示；換一位員工也該知道的，放記憶。";
 const MEMORY_COST = "記憶越長，員工每次開新程序會多花一點。";
 const MEMORY_DELETE_NOTE = "已經送出的對話，Claude Code 與 Codex 自己保存的副本不會因此刪掉。AGY 自己保存的副本也一樣。";
 const MEMORY_BLOCKED = "這一條現在不能送出（看起來有密碼、金鑰或帳號一類的內容），員工的聊天會被擋下。請刪掉它。";
 const MEMORY_REMEMBER_SENDS = "存了以後，每位員工開新聊天時都會看到（在記憶頁關掉的員工除外）。記憶會跟著送給 Anthropic（Claude Code 的員工）、OpenAI（Codex 的員工，要先在記憶頁打開）或 Google（AGY 的員工，要先在記憶頁打開）。不要存密碼、帳號、卡號。";
 const MEMORY_EMPLOYEE_WORDS = "這段是員工說的，存了以後每位員工開新聊天都會看到，請確定內容正確。";
-const MEMORY_TERMINAL = "在終端機（完整模式）出發時不帶記憶。";
+const MEMORY_TERMINAL = "在指令視窗（「完全交給他（有風險）」）開始工作時不帶記憶。";
 const MEMORY_CARDS_NOTE = "Claude Code 的員工預設帶記憶，記憶會送給 Anthropic。Codex 的員工預設不帶；打開後，記憶會送給 OpenAI。AGY 的員工預設不帶；打開後，記憶內容會送到 Google。員工說「我記住了」不會存任何東西，只有你按「存」才算數。";
 const MEMORY_CHAT_COMPANY = { "claude-chat": "Anthropic", "codex-chat": "OpenAI", "agy-chat": "Google" };
 // The company whose employee needs the person's yes before the memory goes along (the server refuses without it): the word the box says.
@@ -17018,12 +16977,12 @@ async function viewMemory() {
 const SKILL_MAX_NAME = 40;
 const SKILL_MAX_TEXT = 4000;
 const SKILL_LEAD = "這裡是你存在 VBear 的做法。用的時候會變成你對員工說的話；員工照舊每個指令、每個檔案修改都會問你。";
-const SKILL_NOT_CARDS = "『技能庫』列的是 AI 工具自己的技能檔，是另一回事。";
+const SKILL_NOT_CARDS = "『AI 工具的外掛清單』列的是 AI 工具自己的技能檔，是另一回事。";
 const SKILL_SENDS = "存的做法留在這台電腦。用的時候，它會放進輸入框，你看過、可以改，按送出才會送給員工（和你打字一樣）。不要存密碼、帳號、卡號。";
-const SKILL_EMPLOYEE_WORDS = "這段是員工寫的，存成技能後，你用它時會變成你對員工說的話。";
+const SKILL_EMPLOYEE_WORDS = "這段是員工寫的，存成常用做法後，你用它時會變成你對員工說的話。";
 const SKILL_HOW = { typed: "你寫的", said: "從你說的話存的", reply: "從員工說的話存的", suggested: "整理提議、你確認的" };
-const SKILL_NONE = "還沒有存任何技能。";
-const SKILL_UNREADABLE = "技能的檔案有問題，VBear 先不碰它：現在看不到也存不了技能，聊天照常。";
+const SKILL_NONE = "還沒有存任何常用做法。";
+const SKILL_UNREADABLE = "常用做法的檔案有問題，VBear 先不碰它：現在看不到也存不了常用做法，聊天照常。";
 
 function skillLen(s) { return Array.from(String(s)).length; }
 function skillCut(raw, max) {
@@ -17041,10 +17000,10 @@ function skillPreview(t) {
 // `o.needYes` (an employee's words) the box is there from the start and nothing is sent before it is ticked.
 // `o.submit(body)` does the saving (a promise; an error carries .code and .data); `o.done(result)` runs after it; `o.onCancel` adds 取消.
 function skillForm(o) {
-  const name = el("input", { type: "text", "data-skill": "name", maxlength: String(SKILL_MAX_NAME), "aria-label": "技能的名稱", placeholder: "名稱，例如：市集日報",
+  const name = el("input", { type: "text", "data-skill": "name", maxlength: String(SKILL_MAX_NAME), "aria-label": "常用做法的名稱", placeholder: "名稱，例如：市集日報",
     autocomplete: "off" });
   name.value = o.name || "";
-  const text = el("textarea", { rows: o.rows || "5", "data-skill": "text", maxlength: String(SKILL_MAX_TEXT), "aria-label": "技能的內容（做法）",
+  const text = el("textarea", { rows: o.rows || "5", "data-skill": "text", maxlength: String(SKILL_MAX_TEXT), "aria-label": "常用做法的內容",
     placeholder: "寫下做法，一步一步。用的時候會變成你對員工說的話。" });
   text.value = o.text || "";
   const count = () => `名稱 ${skillLen(name.value)}／${SKILL_MAX_NAME} 字、內容 ${skillLen(text.value)}／${SKILL_MAX_TEXT} 字`;
@@ -17061,7 +17020,7 @@ function skillForm(o) {
   const cancel = o.onCancel ? el("button", { type: "button", class: "btn", "data-skill": "cancel", on: { click: () => o.onCancel() } }, "取消") : null;
   const send = async () => {
     setKids(problem, null);
-    if (confirmed && !confirmed.checked) { setKids(problem, notice("warn", "要存這個技能，請先勾「我確定，存起來」。")); return; }
+    if (confirmed && !confirmed.checked) { setKids(problem, notice("warn", "要存這個常用做法，請先勾「我確定，存起來」。")); return; }
     save.disabled = true;
     const body = { name: name.value, text: text.value };
     if (confirmed) body.confirm_warning = true;
@@ -17105,8 +17064,8 @@ function skillRow(skill, h) {
         el("strong", { "data-skill": "title" }, skill.name),
         el("span", { class: "memory-text", "data-skill": "preview" }, skillPreview(skill.text)),
         el("span", { class: "small muted", "data-skill": "meta" }, `${src}・${fmtTime(skill.created_at)}${changed ? `・改於 ${fmtTime(skill.updated_at)}` : ""}`),
-        el("button", { type: "button", class: "btn small", "data-skill": "edit", "aria-label": "改這個技能", on: { click: () => { editing = true; paint(); } } }, "改"),
-        el("button", { type: "button", class: "btn small", "data-skill": "delete", "aria-label": "刪這個技能", on: { click: () => h.onDelete && h.onDelete(skill) } }, "刪"));
+        el("button", { type: "button", class: "btn small", "data-skill": "edit", "aria-label": "改這個常用做法", on: { click: () => { editing = true; paint(); } } }, "改"),
+        el("button", { type: "button", class: "btn small", "data-skill": "delete", "aria-label": "刪這個常用做法", on: { click: () => h.onDelete && h.onDelete(skill) } }, "刪"));
       return;
     }
     const form = skillForm({ name: skill.name, text: skill.text, onCancel: () => { editing = false; paint(); },
@@ -17133,7 +17092,7 @@ async function viewMySkills() {
   const token = seq;
   let cur;
   try { cur = await api.get("/api/my-skills"); }
-  catch (e) { setKids(claim(token), el("h1", null, "技能"), notice("bad", "讀不到技能：" + e.message)); return; }
+  catch (e) { setKids(claim(token), el("h1", null, "常用做法"), notice("bad", "讀不到常用做法：" + e.message)); return; }
   const main = claim(token);
   const listBox = el("div", { "data-skill": "list" });
   const addBox = el("div", { "data-skill": "add-box" });
@@ -17142,29 +17101,29 @@ async function viewMySkills() {
     const limits = cur.limits && typeof cur.limits === "object" ? cur.limits : {};
     const count = cur.used && Number.isFinite(cur.used.count) ? cur.used.count : skills.length;
     const form = skillForm({ clearOnSave: true, submit: (body) => api.post("/api/my-skills", body),
-      done: async () => { toast("已存成技能"); await reload(); } });
+      done: async () => { toast("已存成常用做法"); await reload(); } });
     setKids(addBox, cur.readable === false ? null
-      : el("section", { class: "section", "data-skill": "add" }, sectionHead("新增一個技能", "名稱加上一段做法；存了以後，在任何聊天或群組按「用技能」就能放進輸入框。"), form.node));
+      : el("section", { class: "section", "data-skill": "add" }, sectionHead("新增一個常用做法", "名稱加上一段做法；存了以後，在任何聊天或群組按「用常用做法」就能放進輸入框。"), form.node));
     setKids(listBox,
       cur.readable === false ? notice("bad", cur.problem || SKILL_UNREADABLE) : null,
-      el("p", { class: "small", "data-skill": "used" }, `${count}／${Number.isFinite(limits.max_skills) ? limits.max_skills : 100} 個技能`),
+      el("p", { class: "small", "data-skill": "used" }, `${count}／${Number.isFinite(limits.max_skills) ? limits.max_skills : 100} 個常用做法`),
       skills.length ? el("ul", { class: "mt-list" }, skills.map((s) => skillRow(s, { onDelete: remove, onSaved: reload })))
         : cur.readable === false ? null : el("p", { class: "small muted", "data-skill": "none" }, SKILL_NONE));
   };
   async function reload() {
-    try { cur = await api.get("/api/my-skills"); } catch (e) { toast("讀不到技能：" + e.message); }
+    try { cur = await api.get("/api/my-skills"); } catch (e) { toast("讀不到常用做法：" + e.message); }
     if (token === seq) draw();
   }
   async function remove(skill) {
-    if (!(await confirmInPage("刪除這個技能", "刪掉之後無法復原。已經用這個技能送出的訊息不會變。", "刪除"))) return;
+    if (!(await confirmInPage("刪除這個常用做法", "刪掉之後無法復原。已經用這個常用做法送出的訊息不會變。", "刪除"))) return;
     try { await api.post(`/api/my-skills/${encodeURIComponent(skill.id)}/delete`, {}); toast("已刪除"); }
     catch (e) { toast(e.message); }
     await reload();
   }
   draw();
-  setKids(main, el("h1", null, "技能"),
+  setKids(main, el("h1", null, "常用做法"),
     notice("info", SKILL_LEAD),
-    el("p", { class: "small", "data-skill": "not-cards" }, SKILL_NOT_CARDS, " ", el("a", { href: "#/skills" }, "看技能庫")),
+    el("p", { class: "small", "data-skill": "not-cards" }, SKILL_NOT_CARDS, " ", el("a", { href: "#/skills" }, "看 AI 工具的外掛清單")),
     el("p", { class: "small muted", "data-skill": "sends" }, SKILL_SENDS),
     addBox, listBox);
 }
@@ -17178,8 +17137,8 @@ function openSkillSave(o) {
   let close = () => {};
   const form = skillForm({ name: o.name, text: got.text, rows: "6", needYes: o.speaker === "employee", onCancel: () => close(),
     submit: (body) => api.post("/api/my-skills", { ...body, source: o.source }),
-    done: async () => { close(); toast("已存成技能"); if (typeof o.onSaved === "function") await o.onSaved(); } });
-  const head = el("h2", { id: titleId, tabindex: "-1" }, "存成技能");
+    done: async () => { close(); toast("已存成常用做法"); if (typeof o.onSaved === "function") await o.onSaved(); } });
+  const head = el("h2", { id: titleId, tabindex: "-1" }, "存成常用做法");
   const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-skill": "dialog" },
     el("div", { class: "modal-box", style: "max-width: 600px; max-height: 88vh; overflow-y: auto;" }, head,
       el("p", { class: "small", "data-skill": "sends" }, SKILL_SENDS),
@@ -17199,7 +17158,7 @@ function skillPut(input, words, replace) {
   const now = String(input.value || "");
   const joined = now.trim() && !replace ? now.replace(/\s+$/, "") + "\n\n" + words : words;
   const max = Number(input.getAttribute("maxlength"));
-  if (Number.isFinite(max) && max > 0 && skillLen(joined) > max) { toast(`放不下：這個輸入框最多 ${max} 字。請先清掉一些，或到「技能」頁改短一點。`); return false; }
+  if (Number.isFinite(max) && max > 0 && skillLen(joined) > max) { toast(`放不下：這個輸入框最多 ${max} 字。請先清掉一些，或到「常用做法」頁改短一點。`); return false; }
   input.value = joined;
   if (typeof input.dispatchEvent === "function" && typeof Event === "function") input.dispatchEvent(new Event("input", { bubbles: true }));
   if (typeof input.focus === "function") input.focus();
@@ -17220,18 +17179,18 @@ async function openSkillPicker(input, opts) {
   let close = () => {};
   const skills = data && Array.isArray(data.skills) ? data.skills.filter((s) => s && typeof s.id === "string" && typeof s.text === "string") : [];
   const pick = (skill) => { if (skillPut(input, skill.text, opts.replace === true)) close(); };
-  const body = failed ? notice("bad", "讀不到技能：" + failed)
+  const body = failed ? notice("bad", "讀不到常用做法：" + failed)
     : data && data.readable === false ? notice("bad", data.problem || SKILL_UNREADABLE)
     : skills.length ? el("ul", { class: "mt-list", "data-skill": "choices" }, skills.map((s) =>
       el("li", { class: "mt-row card", "data-skill": "choice", "data-skill-id": s.id },
         el("strong", null, s.name),
         el("span", { class: "memory-text small" }, skillPreview(s.text)),
-        el("button", { type: "button", class: "btn small primary", "data-skill": "pick", "aria-label": `${opts.title || "用技能"}：${s.name}`, on: { click: () => pick(s) } }, opts.pickLabel || "放進輸入框"))))
-    : el("p", { class: "small muted", "data-skill": "none" }, SKILL_NONE, " ", el("a", { href: "#/my-skills", on: { click: () => close() } }, "到技能頁新增"));
-  const head = el("h2", { id: titleId, tabindex: "-1" }, opts.title || "用技能");
+        el("button", { type: "button", class: "btn small primary", "data-skill": "pick", "aria-label": `${opts.title || "用常用做法"}：${s.name}`, on: { click: () => pick(s) } }, opts.pickLabel || "放進輸入框"))))
+    : el("p", { class: "small muted", "data-skill": "none" }, SKILL_NONE, " ", el("a", { href: "#/my-skills", on: { click: () => close() } }, "到常用做法頁新增"));
+  const head = el("h2", { id: titleId, tabindex: "-1" }, opts.title || "用常用做法");
   const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-skill": "picker" },
     el("div", { class: "modal-box", style: "max-width: 600px; max-height: 88vh; overflow-y: auto;" }, head,
-      el("p", { class: "small", "data-skill": "pick-note" }, opts.note || "選一個技能，它的內容會放進輸入框。你可以先看、先改，再按送出；這裡不會送出任何東西。"),
+      el("p", { class: "small", "data-skill": "pick-note" }, opts.note || "選一個常用做法，它的內容會放進輸入框。你可以先看、先改，再按送出；這裡不會送出任何東西。"),
       opts.replace && String(input.value || "").trim() ? notice("warn", "這個欄位已經有字，帶入會取代它。") : null,
       body,
       el("div", { class: "modal-actions" }, el("button", { type: "button", class: "btn", "data-skill": "pick-cancel", on: { click: () => close() } }, "取消"))));
@@ -17306,7 +17265,7 @@ function openSkillSuggestDialog(pv, hooks) {
     el("div", { class: "modal-box", style: "max-width: 640px; max-height: 88vh; overflow-y: auto;" }, head,
       blockers.map((b) => (b.code === "cli_not_found" ? skillSuggestNeedsClaude() : notice("warn", b.message || "現在不能開始"))),
       el("p", null, `VBear 會讀你和這位員工最近的對話（${reads}${pv.omitted_messages ? `，更早的 ${pv.omitted_messages} 則不讀` : ""}）。`
-        + "工具的輸出、檔案內容、你按過的允許，還有你的記憶和其他技能，都不會送出。"),
+        + "工具的輸出、檔案內容、你按過的允許，還有你的記憶和其他常用做法，都不會送出。"),
       el("p", { class: "chief-money", "data-ksuggest": "money" }, el("b", null, `最多花 ${cap}，今天還剩 ${left}。`)),
       el("p", null, `這段對話會送給 ${typeof pv.sends_to === "string" && pv.sends_to ? pv.sends_to : "Anthropic"}。`),
       pv.notice ? notice("info", pv.notice) : null,
@@ -17343,8 +17302,8 @@ function skillSuggestCard(v, hooks) {
       try { await api.post(`/api/my-skills/suggest/${encodeURIComponent(v.id)}/saved`, {}); } catch (e) { toast(e.message); }
       hooks.onDone();
     } });
-  } } }, "放進「存成技能」的視窗");
-  return el("section", { class: "panel pad", "data-ksuggest": "card" }, el("h3", null, "VBear 提議了 1 個技能，預設沒存"),
+  } } }, "放進「存成常用做法」的視窗");
+  return el("section", { class: "panel pad", "data-ksuggest": "card" }, el("h3", null, "VBear 提議了 1 個常用做法，預設沒存"),
     el("p", { class: "small" }, KSUGGEST_MADE_BY_AI),
     el("p", null, el("strong", { "data-ksuggest": "name" }, it.name)),
     el("p", { class: "memory-text", style: "white-space: pre-wrap", "data-ksuggest": "text" }, it.text),
@@ -17448,7 +17407,7 @@ const SHARED_RULES = [
 const SHARED_AFTER = [
   ["new-chat-note", "剛打開時，要開新的聊天，員工才會知道有共用資料夾（舊的聊天不會被告知）。"],
   ["off-note", "關掉後，從員工的下一句話起就寫不進去了，也不會刪掉任何檔案；要刪檔案，請你在 Finder 刪。"],
-  ["full-note", "在終端機（完整模式）出發的員工，本來就能動你電腦上的任何檔案，VBear 不另外告訴它有這個資料夾。"],
+  ["full-note", "在指令視窗（「完全交給他（有風險）」）開始工作的員工，本來就能動你電腦上的任何檔案，VBear 不另外告訴它有這個資料夾。"],
 ];
 const SHARED_WRITE_NOTE = "員工在裡面新增或修改檔案，每一次都會先問你（卡片），和其他檔案一樣。VBear 自己不會讀、不會刪裡面的檔案，也不會把檔名寫進紀錄。";
 const SHARED_READ_NOTE = "員工讀到裡面的檔案，內容就會送給它的 AI 公司（Claude Code 是 Anthropic，Codex 是 OpenAI）。檔案可能是別的員工寫的，員工被告知那是資料、不是指令。不要放密碼、帳號、卡號。";
@@ -17657,9 +17616,9 @@ function meetingClockText(clock) {
   const reserve = Math.max(0, Math.round((c.deadline_at - c.speakers_until) / 60));
   const mmss = (x) => `${Math.floor(x / 60)} 分 ${String(x % 60).padStart(2, "0")} 秒`;
   return `剩下 ${mmss(left)}（這場最多 ${c.max_minutes} 分鐘，從開始算；最後 ${reserve} 分鐘留給 CEO`
-    + `${speak > 0 ? `，發言者還有 ${mmss(speak)}` : "，發言時間已到"}）。依主控台的時鐘，每 5 秒更新。`;
+    + `${speak > 0 ? `，發言者還有 ${mmss(speak)}` : "，發言時間已到"}）。依 VBear 的時鐘，每 5 秒更新。`;
 }
-const MEETING_CHAIRMAN_NOTE = "主控台記錄（未驗證身分）";
+const MEETING_CHAIRMAN_NOTE = "VBear 記錄（未驗證身分）";
 const MEETING_FLAGS = [["publish", "對外發布"], ["spend", "花錢"], ["delete", "刪除資料"], ["legal", "法律或合約"], ["deploy", "上線部署"],
   ["personal", "個資"]];
 // The positions that may speak and the one that chairs (vbear/meeting_runner.py SPEAKER_POSITIONS and CHAIR_POSITION).
@@ -17673,10 +17632,10 @@ const MEETING_ERROR_TEXT = {
   tools_not_clean: "這次呼叫回報的工具不是只有 StructuredOutput（或有 MCP），已停止、結果不採用，並撤銷這個版本的通過紀錄",
   budget: "額度不夠，沒有送出", no_opinions: "沒有任何發言可以整理，沒有送出", prompt_changed: "送出前的內容和預覽不同，沒有送出",
   too_large: "要送出的內容超過大小限制，沒有送出", time_up: "會議時間到（最後 3 分鐘留給 CEO）：沒有發言，或這次呼叫被時間上限停止",
-  restart: "主控台重新啟動時這一位還沒結束，已中斷，不會自動續跑", cancelled: "已取消", boundary_revoked: "這個版本的無工具檢查被撤銷，沒有送出",
+  restart: "VBear 重新啟動時這一位還沒結束，已中斷，不會自動續跑", cancelled: "已取消", boundary_revoked: "這個版本的無工具檢查被撤銷，沒有送出",
   process_unconfirmed: "無法確認程序已結束，已封鎖後續的會議", busy: "已有一場會議在進行", internal: "VBear 內部錯誤，這次的結果不採用",
   // P36-2: the day's spend could not be established (a record of a meeting, a staffing meeting or a chat does not read whole)
-  spend_unknown: "無法確認今天已經花了多少（有花費紀錄讀不完整），為了不超出每日上限，這一位沒有送出；請檢查狀態資料夾裡的紀錄",
+  spend_unknown: "無法確認今天已經花了多少（有花費紀錄讀不完整），為了不超出花費上限，這一位沒有送出；請檢查狀態資料夾裡的紀錄",
 };
 function meetingErrorText(code) {
   if (typeof code !== "string" || !code) return "";
@@ -17765,26 +17724,26 @@ function meetingSeatNode(seat, opts = {}) {
 
 function meetingLamp(ledgerData) {
   const l = ledgerData && typeof ledgerData === "object" ? ledgerData : null;
-  const unknown = { key: "unknown", word: "額度不明", canOpen: false, warn: false,
+  const unknown = { key: "unknown", word: "用量不明", canOpen: false, warn: false,
     text: "讀不到今天的花費，所以先不開新的會議。" };
   if (!l) return unknown;
   const num = (x) => typeof x === "string" && /^[0-9]+(\.[0-9]+)?$/.test(x);
   if (!num(l.spent_usd) || !num(l.daily_usd)) return unknown;
-  const base = `今天已花 US$${l.spent_usd}，每日上限 US$${l.daily_usd}`;
+  const base = `今天已花 US$${l.spent_usd}，花費上限 US$${l.daily_usd}`;
   const note = typeof l.note === "string" && l.note ? l.note : MEETING_COST_NOTE;
   if (l.blocked === true) {
     return { key: "red", word: "已封鎖", canOpen: false, warn: true,
       text: `${base}。無法確認上一場會議的程序已結束，已封鎖新的會議，請人工檢查 VBear 的狀態目錄。` };
   }
   if (l.lamp === "red") {
-    return { key: "red", word: "額度用完（亮紅燈）", canOpen: false, warn: true,
-      text: `${base}。已達上限（亮紅燈）：今天不能開新的會議，也不能重試，隔天（本機日期）才會重算。${note}` };
+    return { key: "red", word: "今天的用量到上限了", canOpen: false, warn: true,
+      text: `${base}。已到花費上限：今天不能開新的會議，也不能重試，隔天（本機日期）才會重算；要現在開，可以到設定調高上限。${note}` };
   }
   if (l.lamp === "yellow") {
-    return { key: "yellow", word: "額度快用完（亮黃燈）", canOpen: true, warn: true,
-      text: `${base}。已用到 80% 以上（亮黃燈），到 100% 就不能再開會。${note}` };
+    return { key: "yellow", word: "用量快到上限", canOpen: true, warn: true,
+      text: `${base}。已用到 80% 以上，到 100% 就不能再開會。${note}` };
   }
-  if (l.lamp === "green") return { key: "green", word: "額度正常", canOpen: true, warn: false, text: `${base}。${note}` };
+  if (l.lamp === "green") return { key: "green", word: "用量正常", canOpen: true, warn: false, text: `${base}。${note}` };
   return unknown;
 }
 function meetingLampNode(lamp) {
@@ -17857,7 +17816,7 @@ function meetingRoomModel(list, detail, staffing) {
     out.kind = "staffing";
     out.id = sRow.id;
     out.href = `#/staffing/${encodeURIComponent(sRow.id)}`;
-    out.topic = Array.isArray(tasks) ? staffingTaskTitle(sRow.task_id, tasks) : "（讀不到任務卡的名稱）";
+    out.topic = Array.isArray(tasks) ? staffingTaskTitle(sRow.task_id, tasks) : "（讀不到專案的名稱）";
     const d = staffing.detail;
     if (d && typeof d === "object" && d.id === sRow.id) { out.status = d.status; out.seats = staffingSeats(d); }
     else { out.status = sRow.status; out.detailMissing = true; }
@@ -17956,7 +17915,7 @@ function meetingTurnCard(m) {
 // P35-4: a staffing proposal that waits for the chairman. Its task card's title is the one the page last read (taskIndex).
 function staffingTurnTitle(x) {
   const t = taskIndex.get(x.task_id);
-  return t ? String(t.title || "（沒有名稱）") : "（任務卡的名稱讀不到，或已刪除）";
+  return t ? String(t.title || "（沒有名稱）") : "（專案的名稱讀不到，或已刪除）";
 }
 function staffingTurnCard(x) {
   return el("article", { class: "card quest quest-turn", "data-quest": "staffing", "data-st": "board-card", "data-staffing-id": x.id },
@@ -17981,11 +17940,11 @@ function meetingDecision(view) {
 // approved. A rejected or waiting one is not offered.
 function meetingTaskNoteOffer(view) {
   const status = view && view.status;
-  if (status === "waiting_chairman") return { ok: false, why: "這場會議要董事長核准，核准之後才能寫進任務卡。" };
-  if (status === "rejected") return { ok: false, why: "董事長已否決，不寫進任務卡。" };
-  if (status === "running") return { ok: false, why: "會議還在進行，CEO 做出決定之後才能寫進任務卡。" };
+  if (status === "waiting_chairman") return { ok: false, why: "這場會議要董事長核准，核准之後才能寫進專案。" };
+  if (status === "rejected") return { ok: false, why: "董事長已否決，不寫進專案。" };
+  if (status === "running") return { ok: false, why: "會議還在進行，CEO 做出決定之後才能寫進專案。" };
   if ((status === "decided" || status === "approved") && meetingDecision(view)) return { ok: true, why: "" };
-  return { ok: false, why: "CEO 還沒有做出決定，沒有東西可以寫進任務卡。" };
+  return { ok: false, why: "CEO 還沒有做出決定，沒有東西可以寫進專案。" };
 }
 const MEETING_NOTE_MAX = 2000;
 const MEETING_NOTE_ACTIONS_MAX = 1900;
@@ -18090,8 +18049,8 @@ function meetingPreviewDialog(pv, opts) {
         // the money: a meeting's limits by default; a staffing meeting gives its own lines (opts.facts)
         Array.isArray(opts.facts) ? opts.facts
           : el("li", null, `共 ${pv.calls} 次呼叫，預留 US$${pv.reserve_usd}${lim ? `（每次上限 US$${lim.per_call_usd}，每場 US$${lim.meeting_usd}，每天 US$${lim.daily_usd}）` : ""}`),
-        today.spent_usd !== undefined ? el("li", null, `今天已花 US$${today.spent_usd}，每日上限 US$${today.daily_usd}`) : null,
-        pv.task && pv.task.title ? el("li", null, `任務卡：${pv.task.title}（只送出欄位內容，不送資料夾路徑）`) : null,
+        today.spent_usd !== undefined ? el("li", null, `今天已花 US$${today.spent_usd}，花費上限 US$${today.daily_usd}`) : null,
+        pv.task && pv.task.title ? el("li", null, `專案：${pv.task.title}（只送出欄位內容，不送資料夾路徑）`) : null,
         meetingSpeedText(pv.speed) ? el("li", { "data-mt": "speed" }, meetingSpeedText(pv.speed)) : null),
       opts.extra || null,
       notice("info", pv.disclosure || ""),
@@ -18156,8 +18115,8 @@ function meetingForm(env) {
   const topic = el("textarea", { rows: "2", maxlength: "500", "data-mt": "topic", "aria-label": "議題", placeholder: "這場會議要討論什麼？（最多 500 字）" });
   topic.value = typeof init.topic === "string" ? init.topic : "";
   const context = el("textarea", { rows: "3", maxlength: "4000", "data-mt": "context", "aria-label": "補充說明", placeholder: "補充說明（選填，最多 4000 字）：不要貼密碼、金鑰或個資" });
-  const taskSel = el("select", { "data-mt": "task", "aria-label": "任務卡" },
-    el("option", { value: "" }, "（不綁任務卡）"), tasksList.map((t) => el("option", { value: t.id }, t.title || t.id)));
+  const taskSel = el("select", { "data-mt": "task", "aria-label": "專案" },
+    el("option", { value: "" }, "（不綁專案）"), tasksList.map((t) => el("option", { value: t.id }, t.title || t.id)));
   taskSel.value = typeof init.task === "string" && tasksList.some((t) => t.id === init.task) ? init.task : "";
   const chairSel = el("select", { "data-mt": "chair", "aria-label": "主席（CEO）" },
     chairs.map((p) => el("option", { value: p.id }, p.name || p.id)));
@@ -18187,14 +18146,14 @@ function meetingForm(env) {
     const blocked = !lamp.canOpen || !chairs.length || !speakers.length;
     preview.disabled = blocked;
     lampNote.textContent = lamp.canOpen ? ""
-      : (lamp.key === "red" ? "今日額度已用完（或已封鎖），先不開新的會議。" : "讀不到今天的花費，先不開新的會議。");
+      : (lamp.key === "red" ? "今天的用量到你設的上限了（或已封鎖），先不開新的會議。" : "讀不到今天的花費，先不開新的會議。");
   };
   async function run() {
     const t = topic.value.trim();
     if (!t) { toast("請寫下議題"); topic.focus(); return; }
     if (t.length > 500) { toast("議題不可超過 500 字"); return; }
     if (context.value.trim().length > 4000) { toast("補充說明不可超過 4000 字"); return; }
-    if (!chairs.length || !chairSel.value) { toast("需要一張 CEO 職位的角色卡當主席"); return; }
+    if (!chairs.length || !chairSel.value) { toast("需要一張 CEO 職位的員工當主席"); return; }
     const chosen = speakerBoxes.filter((s) => s.box.checked);
     if (!chosen.length) { toast("請至少選一個發言的職位"); return; }
     if (chosen.length > 6) { toast("最多 6 位發言者"); return; }
@@ -18217,15 +18176,15 @@ function meetingForm(env) {
     finally { preview.disabled = false; env.syncLamp(); }
   }
   const node = el("section", { class: "section mt-form", "data-mt": "form" },
-    sectionHead("開一場會", "你是董事長。各職位各發言一次（彼此看不到對方的發言；有選任務卡時 PM 另外會拿到它的進度摘要，會計師會拿到這場會議到目前為止的花費），CEO 看完全部發言後做決定；重大的事交給你核准。開始前一定先給你看會送出的全文。"),
-    !chairs.length ? notice("warn", el("span", null, "還沒有 CEO 職位的角色卡，沒有主席就不能開會。到 ", el("a", { href: "#/team" }, "角色卡池"), " 建一張（精靈第 2 步選 CEO）。")) : null,
+    sectionHead("開一場會", "你是董事長。各職位各發言一次（彼此看不到對方的發言；有選專案時 PM 另外會拿到它的進度摘要，會計師會拿到這場會議到目前為止的花費），CEO 看完全部發言後做決定；重大的事交給你核准。開始前一定先給你看會送出的全文。"),
+    !chairs.length ? notice("warn", el("span", null, "還沒有 CEO 職位的員工，沒有主席就不能開會。到 ", el("a", { href: "#/employees" }, "員工頁"), " 新增一位（精靈第 2 步選 CEO）。")) : null,
     !speakers.length ? notice("warn", "還沒有可以發言的職位卡（PM、社群媒體經理、全端工程師、藝術總監、法務經理、會計師）。") : null,
     noteOnly ? el("p", { class: "small muted", "data-mt": "note-only" },
       `有 ${noteOnly} 張卡的職位只記在這個瀏覽器（舊版的備註），沒有存在卡片上；開會看的是卡片上存的職位，所以這裡沒有列出。`,
-      "要讓它們參加，到角色卡池用精靈重新選一次職位並儲存。") : null,
+      "要讓它們參加，到員工頁用精靈重新選一次職位並儲存。") : null,
     el("label", null, "議題 *", topic),
     el("label", null, "補充說明", context),
-    el("label", null, "綁在哪張任務卡（選填）", taskSel),
+    el("label", null, "綁在哪個專案（選填）", taskSel),
     el("label", null, "主席（CEO）", chairSel),
     el("fieldset", { class: "mt-fieldset" }, el("legend", null, "誰來發言（每個職位一張卡）"), speakersNote,
       speakerBoxes.length ? speakerBoxes.map((s) => s.label) : el("span", { class: "small muted" }, "沒有可選的卡")),
@@ -18413,7 +18372,7 @@ async function viewMeetingDetail(token, id) {
     const d = meetingDecision(cur);
     if (!d) return null;
     return el("section", { class: "section", "data-mt": "decision" },
-      sectionHead("CEO 決定", "這只是紀錄：VBear 不會去執行它。要做的話，寫進任務卡，再照原本的流程。"),
+      sectionHead("CEO 決定", "這只是紀錄：VBear 不會去執行它。要做的話，寫進專案，再照原本的流程。"),
       el("div", { class: "card pad" },
         el("p", null, el("strong", null, d.decision || "")),
         el("p", null, d.rationale || ""),
@@ -18461,17 +18420,17 @@ async function viewMeetingDetail(token, id) {
     const go = (taskId) => { location.hash = `#/workbench?task=${encodeURIComponent(taskId)}&meeting=${encodeURIComponent(id)}`; };
     if (!offer.ok) nodes.push(el("p", { class: "small muted", "data-mt": "write-task-why" }, offer.why));
     else if (cur.task_id) {
-      nodes.push(el("button", { class: "btn", type: "button", "data-mt": "write-task", on: { click: () => go(cur.task_id) } }, "把決定寫進任務卡"),
-        el("span", { class: "small muted" }, "只會打開任務卡的編輯器並填好文字，要你自己按「儲存修改」。"));
+      nodes.push(el("button", { class: "btn", type: "button", "data-mt": "write-task", on: { click: () => go(cur.task_id) } }, "把決定寫進專案"),
+        el("span", { class: "small muted" }, "只會打開專案的編輯器並填好文字，要你自己按「儲存修改」。"));
     } else if (tasksList.length) {
-      const pick = el("select", { class: "mt-task-pick", "data-mt": "write-task-pick", "aria-label": "寫進哪張任務卡" },
-        el("option", { value: "" }, "（選一張任務卡）"), tasksList.map((t) => el("option", { value: t.id }, t.title || t.id)));
+      const pick = el("select", { class: "mt-task-pick", "data-mt": "write-task-pick", "aria-label": "寫進哪個專案" },
+        el("option", { value: "" }, "（選一個專案）"), tasksList.map((t) => el("option", { value: t.id }, t.title || t.id)));
       const btn = el("button", { class: "btn", type: "button", disabled: true, "data-mt": "write-task", on: { click: () => { if (pick.value) go(pick.value); } } },
-        "把決定寫進任務卡");
+        "把決定寫進專案");
       pick.addEventListener("change", () => { btn.disabled = !pick.value; });
       nodes.push(pick, btn, el("span", { class: "small muted" }, "只會打開編輯器並填好文字，要你自己按「儲存修改」。"));
-    } else nodes.push(el("p", { class: "small muted", "data-mt": "write-task-why" }, "沒有任務卡可以寫。"));
-    return el("section", { class: "section", "data-mt": "task-note" }, sectionHead("寫進任務卡", null), el("div", { class: "row" }, nodes));
+    } else nodes.push(el("p", { class: "small muted", "data-mt": "write-task-why" }, "沒有專案可以寫。"));
+    return el("section", { class: "section", "data-mt": "task-note" }, sectionHead("寫進專案", null), el("div", { class: "row" }, nodes));
   }
 
   function draw() {
@@ -18483,7 +18442,7 @@ async function viewMeetingDetail(token, id) {
       el("div", { class: "row" }, el("h1", null, cur.topic || "（沒有議題）")),
       el("div", { class: "row small" }, meetingStatusBadge(cur.status), cur.major ? badge("重大", "b-warn", "符合交給董事長的固定規則") : null,
         el("span", { class: "muted" }, `會議紀錄 ${cur.id}・${fmtTime(cur.created_at)}・花費 US$${cur.spent_usd}（估值）`),
-        cur.task_id ? el("a", { href: `#/workbench?task=${encodeURIComponent(cur.task_id)}` }, task ? `任務卡：${task.title}` : "任務卡") : null),
+        cur.task_id ? el("a", { href: `#/workbench?task=${encodeURIComponent(cur.task_id)}` }, task ? `專案：${task.title}` : "專案") : null),
       flags.length ? el("p", { class: "small" }, `你建立時勾了：${flags.map((f) => (MEETING_FLAGS.find((x) => x[0] === f) || [f, f])[1]).join("、")}`) : null,
       cur.context ? el("p", { class: "small" }, `補充說明：${cur.context}`) : null,
       meetingClockText(cur.clock) ? el("p", { class: "small mt-clock", "data-mt": "clock", role: "status" }, meetingClockText(cur.clock)) : null,
@@ -19654,36 +19613,36 @@ bootstrap();
 // the page itself writes nothing: 套用, 復原這次套用 (P45-2) and 存成團隊範本, 改名, 刪除 (P45-3) are presses of the person that the server
 // answers, and nothing here makes a card, a skill or a routine by itself. Names and texts are set with textContent only (el() children).
 const TPL_LINES = [
-  "團隊範本是一組現成的員工、技能和例行工作。勾你要的，按「預覽並套用」看清楚再套用。",
-  "套用不用 AI、不花錢。員工一律用安全模式，跑指令、改檔案照舊每次都問你；記憶和共用資料夾照你平常的設定；例行工作建好是關著的。",
+  "團隊範本是一組現成的員工、常用做法和定時工作。勾你要的，按「預覽並套用」看清楚再套用。",
+  "套用不用 AI、不花錢。員工一律用「每件事先問我」，跑指令、改檔案照舊每次都問你；記憶和共用資料夾照你平常的設定；定時工作建好是關著的。",
   "每次套用都可以「復原這次套用」：只刪這次建的、你沒改過也沒用過的，改過或用過的會留著並告訴你。團隊範本不會改或刪你原本就有的東西。",
   "團隊範本只存在這台電腦，不會上傳，也不能匯出。",
 ];
-const TPL_CEO_LINE = "要用幕僚長派工，還需要一位 CEO（到角色卡池建）。";
+const TPL_CEO_LINE = "要用幕僚長分配工作，還需要一位 CEO（到員工頁新增）。";
 const TPL_PREVIEW_LINES = {
-  safe: "員工一律用安全模式：跑指令、改檔案照舊每次都問你。團隊範本不會建出完整模式的員工。",
+  safe: "員工一律用「每件事先問我」：跑指令、改檔案照舊每次都問你。團隊範本不會建出「完全交給他（有風險）」的員工。",
   memory: "記憶照你平常的設定（Claude Code 的員工帶記憶，Codex 的員工不帶，因為記憶會送到 OpenAI）；共用資料夾都關著。要改，到記憶頁或共用資料夾頁一位一位打開。",
-  off: "例行工作建好是關著的，要你自己到例行工作頁打開。",
-  free: "套用不用 AI、不花錢。之後跟員工聊天才會花錢，照你的每回合上限與每天上限。",
-  codex: "Codex 的員工在 VBear 裡可以聊天；要在終端機用 Codex 只能用完整模式，團隊範本建的員工不會是完整模式。",
+  off: "定時工作建好是關著的，要你自己到定時工作頁打開。",
+  free: "套用不用 AI、不花錢。之後跟員工聊天才會花錢，照你的每回合上限與花費上限。",
+  codex: "Codex 的員工在 VBear 裡可以聊天；要在指令視窗用 Codex 只能用「完全交給他（有風險）」，團隊範本建的員工不會是「完全交給他（有風險）」。",
   notReady: "這個 AI 工具還沒準備好：員工會建好，但要先到開始設定登入才能聊天。",
-  agy: "AGY 的員工預設不帶記憶（打開時要你同意，內容會送到 Google），這版也不能用共用資料夾；員工會用到你自己裝的 AGY 技能。要在終端機用 AGY 只能用完整模式，團隊範本建的員工不會是完整模式。",
+  agy: "AGY 的員工預設不帶記憶（打開時要你同意，內容會送到 Google），這版也不能用共用資料夾；員工會用到你自己裝的 AGY 技能。要在指令視窗用 AGY 只能用「完全交給他（有風險）」，團隊範本建的員工不會是「完全交給他（有風險）」。",
   agyUnverified: "你的 AGY 還沒通過聊天驗證：員工會建好，但要先到聊天頁按「驗證聊天」（用你的 Google 方案）才能聊天。",
 };
 const TPL_TOOL_LABEL = { claude: "Claude Code", codex: "Codex", agy: "AGY" };
-const TPL_KINDS = [["cards", "員工"], ["skills", "技能"], ["routines", "例行工作"]];
-const TPL_ONE = { card: "員工", skill: "技能", routine: "例行工作" };
+const TPL_KINDS = [["cards", "員工"], ["skills", "常用做法"], ["routines", "定時工作"]];
+const TPL_ONE = { card: "員工", skill: "常用做法", routine: "定時工作" };
 const TPL_STATE_TEXT = { done: "完成", partial: "建到一半停下了", interrupted: "中斷了", applying: "進行中" };
-const TPL_INTERRUPTED = "這次套用中斷了，最後一個技能或例行工作可能已經建好但沒記到，復原不會刪它；請到技能頁、例行工作頁看看。";
+const TPL_INTERRUPTED = "這次套用中斷了，最後一個常用做法或定時工作可能已經建好但沒記到，復原不會刪它；請到常用做法頁、定時工作頁看看。";
 const TPL_APPLIES_LIMIT = "只能復原最近 50 次套用；更早的東西照樣留著，要刪請到各自的頁面。";
-const TPL_APPLIED_LINE = "例行工作都是關著的，要用的話到例行工作頁打開。不滿意的話，到頁面下面的套用紀錄按「復原這次套用」。";
+const TPL_APPLIED_LINE = "定時工作都是關著的，要用的話到定時工作頁打開。不滿意的話，到頁面下面的套用紀錄按「復原這次套用」。";
 
 function tplId(ref) { return `${ref.template}/${ref.key}`; }
 function tplSelection() { return { cards: new Map(), skills: new Map(), routines: new Map() }; }
 function tplCounts(sel) { return { cards: sel.cards.size, skills: sel.skills.size, routines: sel.routines.size }; }
 function tplCountText(sel) {
   const c = tplCounts(sel);
-  return `已勾：${c.cards} 位員工、${c.skills} 個技能、${c.routines} 件例行工作`;
+  return `已勾：${c.cards} 位員工、${c.skills} 個常用做法、${c.routines} 件定時工作`;
 }
 // The request of the preview and (P45-2) of the apply: the same body. `name` and `to` are sent only when the person changed them.
 function tplRequestBody(sel, opts) {
@@ -19751,10 +19710,10 @@ function templatesBlock(template, ctx) {
 // ---- the person's own team templates (P45-3): 存成團隊範本, 你現在的, 改名, 刪除 ----
 // Saving posts to /api/templates/mine with what is ticked in the blocks and what is ticked in 「你現在的」; the server keeps a copy.
 const TPL_SAVE_LINES = [
-  "存的是現在這一刻的複本：之後你改了原本的員工、技能或例行工作，這個團隊範本不會跟著變。",
-  "員工只存名字、職位、你寫在卡上的固定指示和 Claude 的模型。不存 AI 工具、技能卡、記憶、共用資料夾和聊天紀錄；完整模式的員工存下來也不帶出發模式，套用時一律是安全模式。",
-  "例行工作存名稱、內容、星期和時間，還有交給誰（那位員工也一起存才有，沒有的話套用時再選）；存下來沒有開關，套用時一律是關著的。技能存名稱和內容。",
-  "存之前每段字都會用和記憶、技能同一組規則檢查：有金鑰、密碼這類字不能存，像是叫員工不問你就做事的字要你多確認一次。",
+  "存的是現在這一刻的複本：之後你改了原本的員工、常用做法或定時工作，這個團隊範本不會跟著變。",
+  "員工只存名字、職位、你寫在卡上的固定指示和 Claude 的模型。不存 AI 工具、技能卡、記憶、共用資料夾和聊天紀錄；「完全交給他（有風險）」的員工存下來也不帶開始工作模式，套用時一律是「每件事先問我」。",
+  "定時工作存名稱、內容、星期和時間，還有交給誰（那位員工也一起存才有，沒有的話套用時再選）；存下來沒有開關，套用時一律是關著的。常用做法存名稱和內容。",
+  "存之前每段字都會用和記憶、常用做法同一組規則檢查：有金鑰、密碼這類字不能存，像是叫員工不問你就做事的字要你多確認一次。",
   "團隊範本只存在這台電腦，不會上傳，也不能匯出。",
 ];
 const TPL_NOW_LINE = "這一區只給「存成團隊範本」用：這些已經在你這裡了，套用時不會再建一次。";
@@ -19805,7 +19764,7 @@ function templatesBlockActions(template, ctx) {
   return el("span", { "data-templates": "mine-actions" },
     el("button", { class: "btn small", type: "button", "data-tpl-action": "rename", "data-tpl-target": template.id, on: { click: () => openTemplatesRename(template, ctx) } }, "改名"), " ",
     el("button", { class: "btn small", type: "button", "data-tpl-action": "delete", "data-tpl-target": template.id, on: { click: async () => {
-      if (!(await confirmInPage(`刪除「${template.name}」`, "只刪這個團隊範本。用它建過的員工、技能、例行工作，和它是從哪裡存來的，都不會動。", "刪除"))) return;
+      if (!(await confirmInPage(`刪除「${template.name}」`, "只刪這個團隊範本。用它建過的員工、常用做法、定時工作，和它是從哪裡存來的，都不會動。", "刪除"))) return;
       try { await api.post(`/api/templates/mine/${encodeURIComponent(template.id)}/delete`, {}); toast("已刪除"); tplReloadHere(ctx); }
       catch (e) { toast("刪不了：" + e.message); }
     } } }, "刪除"));
@@ -19827,7 +19786,7 @@ function templatesMineSection(ctx) {
   const count = el("span", { class: "small", "data-templates": "now-count" });
   const button = el("button", { class: "btn small", type: "button", "data-tpl-action": "save-now", on: { click: () => openTemplatesSave(ctx) } }, "存成團隊範本");
   const redraw = () => {
-    count.textContent = `你現在的，已勾：${now.cards.size} 位員工、${now.skills.size} 個技能、${now.routines.size} 件例行工作`;
+    count.textContent = `你現在的，已勾：${now.cards.size} 位員工、${now.skills.size} 個常用做法、${now.routines.size} 件定時工作`;
     button.disabled = !tplCanSave(ctx);
   };
   now.listeners.push(redraw);
@@ -19835,7 +19794,7 @@ function templatesMineSection(ctx) {
   return el("section", { class: "panel pad tpl-block", "data-templates": "now" },
     el("h2", null, "你現在的"),
     el("p", { class: "small muted", "data-templates": "now-line" }, TPL_NOW_LINE),
-    empty ? el("p", { class: "small muted", "data-templates": "now-empty" }, "你現在還沒有員工、技能或例行工作。") : null,
+    empty ? el("p", { class: "small muted", "data-templates": "now-empty" }, "你現在還沒有員工、常用做法或定時工作。") : null,
     TPL_KINDS.map(([kind, word]) => ((have[kind] || []).length
       ? el("div", { class: "tpl-group", "data-templates": `now-${kind}` }, el("h3", null, word), el("ul", { class: "tpl-list" }, have[kind].map((item) => line(kind, item))))
       : null)),
@@ -19891,7 +19850,7 @@ function openTemplatesSave(ctx) {
     if (state.done) {
       const t = state.done.template;
       setKids(bodyBox,
-        notice("info", `已存成團隊範本「${t.name}」：${t.cards.length} 位員工、${t.skills.length} 個技能、${t.routines.length} 件例行工作。`),
+        notice("info", `已存成團隊範本「${t.name}」：${t.cards.length} 位員工、${t.skills.length} 個常用做法、${t.routines.length} 件定時工作。`),
         (state.done.notes || []).map((n) => el("p", { class: "small", "data-tpl-save-note": n.code }, n.text)),
         el("p", { class: "small muted" }, "要用的時候，在上面「你存的團隊範本」勾選，按「預覽並套用」。"));
       setKids(foot, el("button", { class: "btn primary", type: "button", "data-tpl-action": "save-close", on: { click: () => close() } }, "關閉"));
@@ -19900,9 +19859,9 @@ function openTemplatesSave(ctx) {
     const kids = [
       el("label", { class: "small" }, "名稱（1 到 40 個字）　", input),
       el("p", { class: "small", "data-templates": "save-summary" },
-        `這次會存：${items.cards.length} 位員工、${items.skills.length} 個技能、${items.routines.length} 件例行工作。` +
-        `最多存 ${limits.max_mine || 20} 個團隊範本，一個最多 ${per.cards} 位員工、${per.skills} 個技能、${per.routines} 件例行工作。`),
-      list("cards", "員工"), list("skills", "技能"), list("routines", "例行工作")];
+        `這次會存：${items.cards.length} 位員工、${items.skills.length} 個常用做法、${items.routines.length} 件定時工作。` +
+        `最多存 ${limits.max_mine || 20} 個團隊範本，一個最多 ${per.cards} 位員工、${per.skills} 個常用做法、${per.routines} 件定時工作。`),
+      list("cards", "員工"), list("skills", "常用做法"), list("routines", "定時工作")];
     if (state.error) kids.push(notice("bad", state.error + (state.where ? `（${state.where}）` : "")));
     if (state.warn) {
       const box = el("input", { type: "checkbox", "data-tpl-save": "confirm", on: { change: (e) => { state.confirm = e.target.checked; draw(); } } });
@@ -19945,7 +19904,7 @@ function openTemplatesRename(template, ctx) {
     state.busy = false; draw();
   };
   const draw = () => {
-    const kids = [el("label", { class: "small" }, "新的名稱　", input), el("p", { class: "small muted" }, "只改名稱，裡面的員工、技能和例行工作不變。")];
+    const kids = [el("label", { class: "small" }, "新的名稱　", input), el("p", { class: "small muted" }, "只改名稱，裡面的員工、常用做法和定時工作不變。")];
     if (state.error) kids.push(notice("bad", state.error));
     if (state.warn) {
       const box = el("input", { type: "checkbox", "data-tpl-rename": "confirm", on: { change: (e) => { state.confirm = e.target.checked; draw(); } } });
@@ -19968,7 +19927,7 @@ function tplTemplateName(ctx, id) {
   const found = all.find((t) => t.id === id);
   return found ? found.name : "（團隊範本已刪除）";
 }
-function tplCountLine(c) { return `${c.cards} 位員工、${c.skills} 個技能、${c.routines} 件例行工作`; }
+function tplCountLine(c) { return `${c.cards} 位員工、${c.skills} 個常用做法、${c.routines} 件定時工作`; }
 function templatesAppliesSection(ctx) {
   const applies = Array.isArray(ctx.data.applies) ? ctx.data.applies : [];
   const row = (a) => {
@@ -20146,7 +20105,7 @@ function openTemplatesPreview(ctx) {
   const assigneeValue = (a) => (a.kind === "card" ? `card:${tplId(a.card)}` : a.kind === "existing" ? `existing:${a.profile_id}` : "");
   const routineLine = (r) => {
     const choices = state.preview.choices;
-    const pick = el("select", { "data-tpl-to": tplId(r.from), "aria-label": `例行工作「${r.name}」交給誰`,
+    const pick = el("select", { "data-tpl-to": tplId(r.from), "aria-label": `定時工作「${r.name}」交給誰`,
       on: { change: (e) => {
         const entry = ctx.sel.routines.get(tplId(r.from));
         const v = String(e.target.value || "");
@@ -20164,7 +20123,7 @@ function openTemplatesPreview(ctx) {
       r.assignee.name ? el("span", { class: "small", "data-tpl-preview": "to-name" }, ` ${r.assignee.name}`) : null);
   };
   const afterLine = (after) =>
-    `套用後：員工 ${after.cards.after}/${after.cards.max}、技能 ${after.skills.after}/${after.skills.max}、例行工作 ${after.routines.after}/${after.routines.max}`;
+    `套用後：員工 ${after.cards.after}/${after.cards.max}、常用做法 ${after.skills.after}/${after.skills.max}、定時工作 ${after.routines.after}/${after.routines.max}`;
   const itemName = (kind, from) => {
     const template = (data.builtin || []).concat(data.mine || []).find((t) => t.id === from.template);
     const item = template ? (template[kind === "card" ? "cards" : kind === "skill" ? "skills" : "routines"] || []).find((x) => x.key === from.key) : null;
@@ -20176,7 +20135,7 @@ function openTemplatesPreview(ctx) {
     return el("div", { class: "tpl-warn", "data-templates": "warn" },
       notice("warn", Object.values(p.warn_text || {}).join(" ")),
       el("ul", { class: "small" }, p.warn_items.map((w) => el("li", { "data-tpl-warn": w.kind },
-        `${w.kind === "card" ? "員工" : w.kind === "skill" ? "技能" : "例行工作"}：${itemName(w.kind, w.from)}`))),
+        `${w.kind === "card" ? "員工" : w.kind === "skill" ? "常用做法" : "定時工作"}：${itemName(w.kind, w.from)}`))),
       el("label", null, box, " 我確定"));
   };
   const doneItem = (item) => {
@@ -20195,11 +20154,11 @@ function openTemplatesPreview(ctx) {
     if (state.error) kids.push(notice("bad", state.error));
     if (p) {
       kids.push(
-        el("p", { "data-templates": "summary" }, `這次會建：${p.cards.length} 位員工、${p.skills.length} 個技能、${p.routines.length} 件例行工作。`),
+        el("p", { "data-templates": "summary" }, `這次會建：${p.cards.length} 位員工、${p.skills.length} 個常用做法、${p.routines.length} 件定時工作。`),
         p.cards.length ? el("div", null, el("h3", null, "員工"), el("ul", { class: "tpl-list", "data-templates": "preview-cards" }, p.cards.map(cardLine))) : null,
-        p.skills.length ? el("div", null, el("h3", null, "技能"), el("ul", { class: "tpl-list", "data-templates": "preview-skills" },
+        p.skills.length ? el("div", null, el("h3", null, "常用做法"), el("ul", { class: "tpl-list", "data-templates": "preview-skills" },
           p.skills.map((s) => el("li", { "data-tpl-preview": "skill" }, s.name)))) : null,
-        p.routines.length ? el("div", null, el("h3", null, "例行工作"), el("ul", { class: "tpl-list", "data-templates": "preview-routines" }, p.routines.map(routineLine))) : null,
+        p.routines.length ? el("div", null, el("h3", null, "定時工作"), el("ul", { class: "tpl-list", "data-templates": "preview-routines" }, p.routines.map(routineLine))) : null,
         el("p", { class: "small", "data-templates": "after" }, afterLine(p.after)),
         p.problems.filter((x) => x.code !== "confirm_warning").map((x) => notice("bad", x.text)),
         p.warn_items.length ? warnBox(p) : null,
@@ -20227,6 +20186,10 @@ async function viewTemplates() {
   let data;
   try { data = await api.get("/api/templates"); }
   catch (e) { setKids(claim(token), el("h1", null, "團隊範本"), notice("bad", "讀不到團隊範本：" + e.message)); return; }
+  // the line about the CEO is for a person who has none: shown only when the employees were read and none of them is a CEO (not read: not said)
+  const staff = await api.get("/api/agent-profiles").catch(() => null);
+  if (token !== seq) return;
+  const noCeo = !!staff && Array.isArray(staff.profiles) && !staff.profiles.some((p) => p && typeof p === "object" && cardPosition({ position: p.position }) === MEETING_CHAIR_POSITION);
   const main = claim(token);
   const ctx = { data, sel: tplSelection(), boxes: [], reload: () => viewTemplates() };
   const count = el("span", { "data-templates": "count" });
@@ -20242,7 +20205,7 @@ async function viewTemplates() {
   const own = Array.isArray(data.mine) ? data.mine : [];
   setKids(main, el("h1", null, "團隊範本"),
     el("ul", { class: "lede tpl-lines", "data-templates": "lines" }, TPL_LINES.map((l) => el("li", null, l))),
-    el("p", { class: "small muted", "data-templates": "ceo-line" }, TPL_CEO_LINE),
+    noCeo ? el("p", { class: "small muted", "data-templates": "ceo-line" }, TPL_CEO_LINE) : null,
     problems.map((p) => notice("warn", `${p}　這個檔案讀不出來之前，不能套用。`)),
     data.mine_readable === false ? notice("warn", data.problem || "你存的團隊範本的檔案讀不出來；VBear 內建的照常可以用。") : null,
     blocks,

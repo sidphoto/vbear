@@ -180,10 +180,10 @@ class ReadmeImages(unittest.TestCase):
         source, so a rename cannot leave a README describing a button that is gone."""
         app = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
         quoted = ("接手提醒", "改成只觀看", "這是你剛開的終端，可以直接打字；打的字會直接送給 Agent", "核准計畫並開啟自動執行…",
-                  "終端工作台", "標記：", "這是什麼", "打開角色卡", "回角色卡池", "回任務卡", "往下捲動看更多", "確認啟動",
+                  "終端工作台", "標記：", "這是什麼", "打開角色卡", "回員工詳細資料", "回任務卡", "往下捲動看更多", "確認啟動",
                   "這個終端沒有關聯任務卡", "現在打字可能打斷它", "名冊，不代表正在出勤", "收藏中", "生效中", "看七項細節",
                   # v0.9.0: the wizard's step 2, the full-mode pass, the meeting pages and the office's meeting room
-                  "VBear 內建：審查關卡（給任務卡的審查位）", "出發方式", "回復預設", "貼上職位指示", "VBear 沒有限制這張卡",
+                  "VBear 內建：審查關卡（給專案的審查位）", "出發方式", "回復預設", "貼上職位指示", "VBear 沒有限制這張卡",
                   "開會討論", "預覽（還不會開始）", "開始開會", "代發言", "董事長桌", "去核准", "寫進任務卡", "輪到你：董事長核准")
         for phrase in quoted:
             self.assertIn(phrase, app, phrase)

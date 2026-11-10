@@ -145,7 +145,7 @@ test("the line over every page lists a dispatch and a group that wait for a limi
   await open("#/dispatch/" + DID);
   assert.strictEqual(b.hidden, false);
   const t = text(b);
-  assert(t.includes("等你決定：派工「週末市集擺攤」還有 2 小時 5 分可以繼續（11/09 00:00）"), t);
+  assert(t.includes("等你決定：分配工作「週末市集擺攤」還有 2 小時 5 分可以繼續（11/09 00:00）"), t);
   assert(t.includes("另外還有 1 件"), t);
   assert.strictEqual(attr(find(b, "data-waiting", "resume-link"), "href"), "#/dispatch/" + DID);
 });

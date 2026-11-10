@@ -310,7 +310,7 @@ test("red lamp: no new meeting can be previewed, and the page says why", async (
   assert.strictEqual(q(main, "lamp").getAttribute("data-lamp"), "red");
   assert(text(q(main, "lamp")).includes("不能開新的會議"));
   assert.strictEqual(q(main, "preview").disabled, true);
-  assert(text(main).includes("今日額度已用完"));
+  assert(text(main).includes("今天的用量到你設的上限了（或已封鎖）"));
 });
 
 function fill(main, { topic = "下個月的貼文", chair = "ceo", speakers = ["law"], flags = [], taskId = "" } = {}) {
@@ -606,7 +606,7 @@ test("every code the back end ends a turn with has plain words; no cost is claim
   const seats = qa(main, "seat");
   assert(text(seats[0]).includes("簡體"), text(seats[0]));
   const reason = text(q(seats[1], "reason"));
-  assert(reason.includes("主控台重新啟動"), reason);
+  assert(reason.includes("VBear 重新啟動"), reason);
   assert(!reason.includes("最壞情況"), "a turn that never ran is not said to be charged: " + reason);
 });
 
@@ -650,7 +650,7 @@ test("the chairman's desk: approve or reject with a note, marked as an unverifie
   const desk = q(main, "chairman");
   assert(desk);
   assert(text(desk).includes("輪到你：董事長核准"));
-  assert(text(desk).includes("主控台記錄（未驗證身分）"));
+  assert(text(desk).includes("VBear 記錄（未驗證身分）"));
   assert(text(desk).includes("R3") && text(desk).includes("出現關鍵字"), "why it came to the chairman");
   assert(q(main, "approve") && q(main, "reject"));
   q(main, "chairman-note").value = "同意，但先小量";
@@ -934,7 +934,7 @@ test("a running meeting shows the time left by the console's clock, and the spea
   assert.strictEqual(typeof app.meetingClockText, "function");
   const clock = { started_at: 1790000000, deadline_at: 1790000900, speakers_until: 1790000720, max_minutes: 15, remaining_s: 600.4 };
   const words = app.meetingClockText(clock);
-  for (const piece of ["剩下 10 分 00 秒", "最多 15 分鐘", "最後 3 分鐘留給 CEO", "發言者還有 7 分 00 秒", "主控台"]) assert(words.includes(piece), piece + " | " + words);
+  for (const piece of ["剩下 10 分 00 秒", "最多 15 分鐘", "最後 3 分鐘留給 CEO", "發言者還有 7 分 00 秒", "VBear"]) assert(words.includes(piece), piece + " | " + words);
   const late = app.meetingClockText({ ...clock, remaining_s: 100 });
   assert(late.includes("剩下 1 分 40 秒") && late.includes("發言時間已到"), late);
   for (const bad of [null, {}, { ...clock, remaining_s: "600" }, { ...clock, max_minutes: 15.5 }, { ...clock, deadline_at: null }]) {

@@ -739,7 +739,7 @@ test("3.6 the office's 打開角色卡 goes to the card pool with that card name
 
 test("3.6 the skill words: what 本次不生效 meant is said plainly; 已加入角色 / 已選入 / 收藏中 mean the same thing and say it the same way", async () => {
   assert(!/本次不生效|已加入角色|未加入角色|已選入/.test(APP_SRC.split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n")), "the old words are not on the page");
-  assert(APP_SRC.includes('const SKILL_NOT_LOADED = "出發時不會載入";'));
+  assert(APP_SRC.includes('const SKILL_NOT_LOADED = "開始工作時不會載入";'));
   assert(APP_SRC.includes("不是壞了"), "and it says it is not broken");
   assert(APP_SRC.includes("收藏在角色卡上") && APP_SRC.includes("收藏在 ${roles.length} 張角色卡上"), "the armory and the skill page use the card's word");
   // (the card's own word 收藏中 is the card pool's and is not changed here)

@@ -700,7 +700,7 @@ const hrefOf = (root, pred) => (anchors(root).find(pred) || { getAttribute: () =
   });
 
   // ---- #3 the skill page says 收藏中, like the card ---------------------------------------------------------------------
-  await test("#3 a skill's page: 「已插在哪些角色卡上」 says 收藏中（這次出發不載入）, and 啟用／已停用 only about the card itself", async () => {
+  await test("#3 a skill's page: 「已插在哪些員工上」 says 收藏中（這次開始工作不載入）, and 啟用／已停用 only about the card itself", async () => {
     const skill = { skill_id: "s-1", name: "code-review", invoke_name: "code-review", tool: "claude", activation: "active", activation_reason: "x",
       description: { value: "Review a diff", origin: "file" }, when_to_use: null, inputs: null, outputs: null, dependencies: null,
       categories: [], warnings: [], missing_files: [], referenced_files: [], origin_package: {}, sources: {}, path: HOME + "/.claude/skills/code-review/SKILL.md", mtime: 1, scope: "user" };
@@ -717,7 +717,7 @@ const hrefOf = (root, pred) => (anchors(root).find(pred) || { getAttribute: () =
     assert.ok(rows[1].includes("舊卡") && rows[1].includes("收藏中（這次出發不載入）") && rows[1].includes("角色卡本身已停用"), rows[1]);
     assert.ok(!/(^|[^本身])啟用(?!中)/.test(rows[0].replace("角色卡本身啟用中", "")), "no bare 啟用 beside a skill");
     assert.strictEqual(byData(main, "data-skill", "equipped-note")[0].textContent, ctx.SKILL_EQUIPPED_NOTE);
-    assert.ok(ctx.SKILL_EQUIPPED_NOTE.includes("收藏中") && ctx.SKILL_EQUIPPED_NOTE.includes("只在說那張角色卡本身"));
+    assert.ok(ctx.SKILL_EQUIPPED_NOTE.includes("收藏中") && ctx.SKILL_EQUIPPED_NOTE.includes("只在說那位員工本身"));
   });
 
   // ---- #4 the back of a card and the weapons --------------------------------------------------------------------------
@@ -939,7 +939,7 @@ const hrefOf = (root, pred) => (anchors(root).find(pred) || { getAttribute: () =
     const pool = newCtx(teamHandlers());
     await pool.viewTeam();
     await tick(8);
-    assert.ok(findText(main, "角色卡池"));
+    assert.ok(findText(main, "員工詳細資料"));
     assert.ok(!FORBIDDEN.test(textOf(main)), String(textOf(main).match(FORBIDDEN)));
     const card = ctx.taskFrontCard(baseTask(), { flows: [flowView("planning")], profiles: PROFILES });
     await tick(4);
@@ -984,14 +984,14 @@ const hrefOf = (root, pred) => (anchors(root).find(pred) || { getAttribute: () =
   });
 
   // ---- #14 the lobby's second button ----------------------------------------------------------------------------------------------
-  await test("#14 an empty board: during the first game 「到終端工作台」 is a plain button; after it, the main one", () => {
+  await test("#14 an empty board: during the first game 「到工作台」 is a plain button; after it, the main one", () => {
     const g = { allEmpty: true, error: null, yourTurnFlows: [], yourTurnSessions: [], inProgress: [], moreInProgress: 0, runtimeAvailable: true };
     const go = (sec) => byData(sec, "data-board", "workbench")[0];
     const during = pure.boardSection(g, { firstGame: true });
     assert.ok(go(during) && go(during).className === "btn", go(during) && go(during).className);
     const after = pure.boardSection(g, { firstGame: false });
     assert.strictEqual(go(after).className, "btn primary");
-    assert.strictEqual(go(after).textContent, "到終端工作台");
+    assert.strictEqual(go(after).textContent, "到工作台");
   });
 
   await test("#14 the home page sets it from the first-game steps: no card yet -> plain; all three done -> main", async () => {

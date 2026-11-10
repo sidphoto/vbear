@@ -480,7 +480,7 @@ async function runAllTests() {
       termElem: new SyntheticNode("div"),
     });
     assert.strictEqual(missingRes.ok, false);
-    assert(missingRes.error.includes("無法載入終端機模組"));
+    assert(missingRes.error.includes("無法載入指令視窗模組"));
 
     // 8d. Faulty constructor disposes and returns error
     let disposed = false;

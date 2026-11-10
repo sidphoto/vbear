@@ -30,7 +30,7 @@ const P1 = "emp-1", P2 = "emp-2", P3 = "emp-3", P4 = "emp-4";
 const cardsList = () => [
   { id: P1, name: "文案小編", position: "social", tool: "claude", engine: "claude-chat", enabled: true, can_chat: true, code: null, reason: null, instructions: true },
   { id: P2, name: "會計師", position: "accountant", tool: "claude", engine: "claude-chat", enabled: true, can_chat: true, code: null, reason: null, instructions: false },
-  { id: P3, name: "停用員工", position: "pm", tool: "claude", engine: "claude-chat", enabled: false, can_chat: false, code: "card_disabled", reason: "這張角色卡已停用，啟用之後才能聊天。", instructions: false },
+  { id: P3, name: "停用員工", position: "pm", tool: "claude", engine: "claude-chat", enabled: false, can_chat: false, code: "card_disabled", reason: "這位員工已停用，啟用之後才能聊天。", instructions: false },
   { id: P4, name: "Codex 員工", position: "pm", tool: "codex", engine: "codex-chat", enabled: true, can_chat: true, code: null, reason: null, instructions: false },
   { id: "emp-5", name: "第五位", position: "pm", tool: "claude", engine: "claude-chat", enabled: true, can_chat: true, code: null, reason: null, instructions: false },
 ];
@@ -175,7 +175,7 @@ test("the dialog: two or three employees, one that cannot chat is shut with its 
   assert.strictEqual(picks.length, 5);
   const byId = (id) => picks.find((x) => x.getAttribute("data-profile-id") === id);
   assert.strictEqual(byId(P3).disabled, true, "the disabled card cannot be picked");
-  assert(text(dlg).includes("不能加入：這張角色卡已停用"));
+  assert(text(dlg).includes("不能加入：這位員工已停用"));
   assert.strictEqual(q(dlg, "create").disabled, true);
   assert(text(q(dlg, "count-note")).includes("要選 2 到 3 位"));
   byId(P1).checked = true; byId(P1).dispatch("change");
@@ -236,7 +236,7 @@ test("making the group sends the ids in the order picked in the list and the nam
 });
 
 test("a group the server refuses stays in the dialog with the server's words", async () => {
-  setPage({ createStatus: 409, createBody: { code: "card_disabled", error: "這張角色卡已停用，啟用之後才能聊天。" } });
+  setPage({ createStatus: 409, createBody: { code: "card_disabled", error: "這位員工已停用，啟用之後才能聊天。" } });
   const main = await open("#/chat");
   q(main, "new").click();
   await settle();
@@ -273,6 +273,16 @@ test("a group page shows the members in the order of the answers, the conversati
   assert.strictEqual(qa(main, "round-ended").length, 0, "a round that ended the normal way needs no line");
 });
 
+test("(P47-5) each message of the group can be reached with the keyboard, like the messages of a one-to-one chat", async () => {
+  n = 0;
+  setPage({ detail: detail({ items: [said("我想在週末市集賣手工皂"), reply("文案小編", "我先準備攤位照片")], next_after: n }) });
+  const main = await open("#/chat/group/" + GID);
+  assert.strictEqual(q(main, "said").getAttribute("tabindex"), "0");
+  const replies = qa(main, "reply");
+  assert.strictEqual(replies.length, 1);
+  assert.strictEqual(replies[0].getAttribute("tabindex"), "0");
+});
+
 test("what a model wrote is text, whatever it holds", async () => {
   n = 0;
   setPage({ detail: detail({ items: [said(EVIL), reply("文案小編", EVIL + "\n<script>1</script>"), reply("會計師", "x", { name: EVIL })], next_after: n }) });
@@ -295,13 +305,13 @@ test("grey lines: a skipped employee, a pause, a stop and a drop are in the serv
   n = 0;
   setPage({ detail: detail({ items: [
     { seq: ++n, at: 1, kind: "skipped", round: 1, profile_id: P1, name: "文案小編", reason: "busy", text: "文案小編正在別的地方工作，這次沒有回答。" },
-    { seq: ++n, at: 1, kind: "paused", round: 1, reason: "daily_limit", until: 1790090000, text: "今天的花費到了每天上限 US$3，本機明天 0:00 重新計算；還有 1 位沒回答。" },
+    { seq: ++n, at: 1, kind: "paused", round: 1, reason: "daily_limit", until: 1790090000, text: "今天的花費到了花費上限 US$3，本機明天 0:00 重新計算；還有 1 位沒回答。" },
     { seq: ++n, at: 1, kind: "round_ended", round: 1, how: "stopped" }, { seq: ++n, at: 1, kind: "round_ended", round: 2, how: "dropped" },
     { seq: ++n, at: 1, kind: "member_added", profile_id: P2, name: "會計師" }, { seq: ++n, at: 1, kind: "renamed", name: "新名字" },
     { seq: ++n, at: 1, kind: "something_new", text: "不認得" }], next_after: n }) });
   const main = await open("#/chat/group/" + GID);
   const body = text(q(main, "skipped")) + text(q(main, "paused")) + qa(main, "round-ended").map(text).join("");
-  for (const w of ["正在別的地方工作", "每天上限 US$3", "你按了停止", "你選了「不用了」"]) assert(body.includes(w), w);
+  for (const w of ["正在別的地方工作", "花費上限 US$3", "你按了停止", "你選了「不用了」"]) assert(body.includes(w), w);
   assert(text(q(main, "member_added")).includes("會計師加入了群組") && text(q(main, "renamed")).includes("新名字"));
   assert(!text(main).includes("不認得"));
 });
@@ -312,7 +322,7 @@ test("the cost line: the number asked times the per-turn limit, rounded up, what
   assert.strictEqual(ok.over, false);
   const over = app.groupCostText(["甲", "乙", "丙"], "0.5", "1.2");
   assert.strictEqual(over.over, true);
-  assert(over.text.includes("最多 US$1.50") && over.text.includes("今天還剩 US$1.20") && over.text.includes("碰到每天上限"));
+  assert(over.text.includes("最多 US$1.50") && over.text.includes("今天還剩 US$1.20") && over.text.includes("碰到花費上限"));
   const none = app.groupCostText(["甲", "乙"], null, null);
   assert(none.text.includes("未知"));
   assert.strictEqual(app.groupCostText(["甲", "乙"], "0.333", "0.999").text.includes("US$0.67"), true, "up");
@@ -472,9 +482,9 @@ test("the line about the money counts three when it is 大家 in a group of thre
   const main = await open("#/chat/group/" + GID);
   const line = text(q(main, "cost-line"));
   assert(line.startsWith("這句會請 3 位回答（文案小編、會計師、第五位），最多 US$1.50，今天還剩 US$1.20"), line);
-  assert(line.includes("可能做到一半碰到每天上限，VBear 會停下來"));
+  assert(line.includes("可能做到一半碰到花費上限，VBear 會停下來"));
   toButtons(main)[0].click();
-  assert(!text(q(main, "cost-line")).includes("碰到每天上限"), "one is within what is left");
+  assert(!text(q(main, "cost-line")).includes("碰到花費上限"), "one is within what is left");
 });
 
 test("a @名字 at the start of the words chooses that button, only for a name that is exactly a member's; taking it away goes back to 大家", async () => {
@@ -508,7 +518,7 @@ test("a red lamp: the box cannot send and says why, whatever the server's can.se
   setPage({ detail: detail({ cost: { per_turn_usd: "0.5", day_left_usd: "0", lamp: "red", group_today_usd: "1.5" } }) });
   const main = await open("#/chat/group/" + GID);
   assert.strictEqual(q(main, "send").disabled, true);
-  assert(text(q(main, "send-note")).includes("亮紅燈"));
+  assert(text(q(main, "send-note")).includes("今天的用量到你設的上限了") && q(main, "send-note").find((n) => n.getAttribute && n.getAttribute("data-limit") === "go"), "the reason in plain words, with the way to the settings");
   q(main, "input").value = "還是想送";
   q(main, "send").click();
   await settle();
@@ -605,7 +615,7 @@ test("a card the server refuses to take stays, with the server's sentence, and c
 
 const pausedView = (can) => detail({ group: { id: GID, name: "市集準備", created_at: 1, state: "paused", problem: null },
   round: { n: 1, state: "paused", to: "all", how: null, asked: [{ profile_id: P1, state: "done" }, { profile_id: P2, state: "waiting" }],
-    pause: { reason: "daily_limit", until: 1790090000, text: "今天的花費到了每天上限 US$3，本機明天 0:00 重新計算；還有 1 位沒回答。" } },
+    pause: { reason: "daily_limit", until: 1790090000, text: "今天的花費到了花費上限 US$3，本機明天 0:00 重新計算；還有 1 位沒回答。" } },
   can: { send: false, why_not_send: "這一句停在這裡；請按「繼續」或「不用了」。", stop: true, continue: true, drop: true, edit_members: false, delete: false, ...can } });
 
 test("a pause says why and has 繼續（請剩下的人回答）, 不用了 and 停止; each posts to its own route, with an empty body", async () => {
@@ -677,7 +687,7 @@ test("rename: the path at the top follows the new name the next time the page re
   page.detail = detail({ group: { id: GID, name: "週末市集", created_at: 1790000000, state: "idle", problem: null } });
   await tick();
   assert(path0().includes("週末市集") && !path0().includes("市集準備"), path0());
-  assert(path0().startsWith("聊天"), "the first step of the path is still the chat page");
+  assert(path0().startsWith("對話紀錄"), "the first step of the path is still the chat page");
 });
 
 test("who is in the group: remove one (never below two), add one who can chat (never above three), each as its own press", async () => {
@@ -745,7 +755,7 @@ test("the line that tells a group from a meeting from a dispatch is at the top o
   const main = await open("#/chat/group/" + GID);
   const what = q(main, "what");
   assert(text(what).startsWith("群組：你說話，被叫到的員工輪流回答，員工動手前都會問你。"));
-  for (const w of ["會議", "派工", "幕僚長"]) assert(text(what).includes(w), w);
+  for (const w of ["會議", "分配工作", "幕僚長"]) assert(text(what).includes(w), w);
   const links = what.findAll((x) => x.tag === "a").map((a) => a.getAttribute("href"));
   assert.deepStrictEqual(links, ["#/meetings", "#/dispatch"]);
   const all = main.findAll((x) => x.getAttribute && x.getAttribute("data-group"));

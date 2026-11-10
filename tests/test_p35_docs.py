@@ -102,7 +102,7 @@ class ChangelogV010Tests(unittest.TestCase):
 
     def test_the_page_words_it_quotes_are_the_pages(self):
         for words in ("請 CEO 組隊", "固定規則，不是 AI 判斷", "開始組隊會議", "改成你要的樣子（草稿）", "照草稿採用", "建立隊伍", "儲存隊伍",
-                      "記下：採用", "記下：不採用", "主控台記錄（未驗證身分）", "時間到沒發言", "組隊提案待你看", "去看提案", "讀不到組隊會議"):
+                      "記下：採用", "記下：不採用", "VBear 記錄（未驗證身分）", "時間到沒發言", "組隊提案待你看", "去看提案", "讀不到組隊會議"):
             self.assertIn(words, self.app, words)
         self.assertIn("插上技能只是紀錄，不會安裝或下載", self.app)
 
