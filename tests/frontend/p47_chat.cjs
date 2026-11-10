@@ -653,7 +653,9 @@ const rules15e = {
   },
   // a send refused for the limit is dressed by limitReachedNotice and the box is cleared only after a send that went through
   limitSaid(src) {
-    const body = between(src, "async function send() {", "async function stop() {");
+    // the chat page's send is the one right before its stop (the home page has a send of its own earlier in the file)
+    const stopAt = src.indexOf("async function stop() {");
+    const body = stopAt < 0 ? "" : src.slice(src.lastIndexOf("async function send() {", stopAt), stopAt);
     const clears = [...body.matchAll(/input\.value = ""/g)].length;
     const catchAt = body.indexOf("} catch (e) {");
     return body.includes("limitReachedNotice(") && clears === 1 && body.indexOf('input.value = ""') < catchAt && body.slice(catchAt).indexOf('input.value') < 0;
