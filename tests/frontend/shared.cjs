@@ -91,7 +91,7 @@ test("the fixed sentences under the switches: a new chat is needed, off takes ef
   const main = await open();
   assert(text(q(main, "new-chat-note")).includes("剛打開時，要開新的聊天，員工才會知道有共用資料夾"));
   assert(text(q(main, "off-note")).includes("下一句話") && text(q(main, "off-note")).includes("不會刪掉任何檔案"));
-  assert(text(q(main, "full-note")).includes("終端機（完整模式）") && text(q(main, "full-note")).includes("不另外告訴它有這個資料夾"));
+  assert(text(q(main, "full-note")).includes("指令視窗（「完全交給他（有風險）」）") && text(q(main, "full-note")).includes("不另外告訴它有這個資料夾"));
   assert.strictEqual(q(main, "change-note"), null, "the old long sentence is gone");
 });
 
@@ -299,17 +299,17 @@ test("the only button is 在 Finder 打開: nothing deletes, previews, cleans or
   assert(!/刪除|預覽|清空/.test(rowsHtml.replace("不會刪掉任何檔案", "").replace("不會刪", "").replace("不會自己修或刪", "").replace("請你在 Finder 刪", "")));
 });
 
-test("the nav has the page after the memory, the route is known, and the code keeps its rules", () => {
+test("(P47-1) the page is a page of the 員工 item of the menu (it lights it), the route is known, and the code keeps its rules", () => {
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
-  assert(/data-nav="shared"><span aria-hidden="true">[^<]*<\/span>共用資料夾<\/a>/.test(html));
-  assert(html.indexOf('data-nav="memory"') < html.indexOf('data-nav="shared"') && html.indexOf('data-nav="shared"') < html.indexOf('data-nav="dispatch"'));
+  assert(/data-nav="employees"><span aria-hidden="true">[^<]*<\/span>員工<\/a>/.test(html));
   const source = fs.readFileSync(path.join(root, "app.js"), "utf8");
+  assert(/\bshared: "employees"/.test(source.slice(source.indexOf("const NAV_PARENT = {"), source.indexOf("const ADVANCED_NAV"))), "the shared folder lights 員工");
   assert(/top === "shared"\) await viewShared\(\)/.test(source));
   const part = source.slice(source.indexOf("// ---------- the shared folder (P43-1"), source.indexOf("// ---------- meetings (P34-5)"));
   assert(part.length > 3000);
   const emoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}\u{FE0F}]/u;
   assert(!emoji.test(part), "no emoji in the page");
-  assert(!emoji.test(html.split('data-nav="shared"')[1].split("</li>")[0]), "no emoji in the nav");
+  assert(!emoji.test(html.split('data-nav="employees"')[1].split("</li>")[0]), "no emoji in the nav");
   assert(!/\.innerHTML\s*=|insertAdjacentHTML\s*\(/.test(part));
   assert(!/https?:\/\//.test(part), "no external address");
   assert(!/\b(confirm|alert|prompt)\s*\(/.test(part.replace(/confirmInPage/g, "")), "no native dialogs");

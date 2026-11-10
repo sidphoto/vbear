@@ -121,13 +121,13 @@ test("terminalClosedNotice: plain sentence on top, the runtime's own sentence on
   assert.strictEqual(text(tech.find((x) => x.tag === "summary")), "技術細節");
   assert(text(tech).includes(RAW_GONE), "the original is in the fold");
   const outside = text(n).replace(text(tech), "");
-  assert(outside.includes("終端機連線已關閉：這個終端已經不存在了（可能已關閉）。需要新的終端時，請從角色卡的「出發通行證」開啟。"), outside);
+  assert(outside.includes("指令視窗連線已關閉：這個終端已經不存在了（可能已關閉）。需要新的終端時，請從角色卡的「出發通行證」開啟。"), outside);
   assert(!outside.includes("attach failed"), "the English sentence is not in the main text");
   assert(!outside.includes("重新連線"), "nothing to reconnect to");
   // a reason that is not an attach failure has no fold and keeps the reconnect line when the session is not gone
   const plain = app.terminalClosedNotice("終端機已結束", false, "x");
   assert.strictEqual(byData(plain, "data-term", "tech").length, 0);
-  assert.strictEqual(text(plain), "i終端機連線已關閉：終端機已結束。如需重新開啟請點選右上方「重新連線」。", "(the first character is the notice icon)");
+  assert.strictEqual(text(plain), "i指令視窗連線已關閉：終端機已結束。如需重新開啟請點選右上方「重新連線」。", "(the first character is the notice icon)");
 });
 
 test("both terminal pages mark a vanished session as gone and use the shared notice", () => {

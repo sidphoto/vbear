@@ -106,15 +106,17 @@ const saveButtons = (main) => qa(main, "save-line");
 test("the page says first what a skill is and that it is not a skill card, and has a link in the navigation", async () => {
   setPage();
   const main = await open("#/my-skills");
-  assert.strictEqual(text(main.find((n) => n.tag === "h1")), "技能");
+  assert.strictEqual(text(main.find((n) => n.tag === "h1")), "常用做法");
   assert(text(main).includes("這裡是你存在 VBear 的做法。用的時候會變成你對員工說的話；員工照舊每個指令、每個檔案修改都會問你。"));
-  assert(text(q(main, "not-cards")).includes("『技能庫』列的是 AI 工具自己的技能檔，是另一回事。"));
+  assert(text(q(main, "not-cards")).includes("『AI 工具的外掛清單』列的是 AI 工具自己的技能檔，是另一回事。"));
   assert.strictEqual(q(main, "not-cards").find((n) => n.tag === "a").getAttribute("href"), "#/skills");
-  assert(text(q(main, "none")).includes("還沒有存任何技能"));
+  assert(text(q(main, "none")).includes("還沒有存任何常用做法"));
   assert(text(q(main, "used")).includes("0／100"));
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
-  assert(/<a href="#\/my-skills" data-nav="my-skills">[^<]*<span aria-hidden="true">[^<]*<\/span>技能<\/a>/.test(html));
-  assert(html.indexOf('data-nav="shared"') < html.indexOf('data-nav="my-skills"'), "below the shared folder");
+  // (P47-1) the page has no item of its own in the menu now: it is a page of 工作 and lights that item
+  assert(/<a href="#\/work" data-nav="work">[^<]*<span aria-hidden="true">[^<]*<\/span>工作<\/a>/.test(html));
+  const appSrc = fs.readFileSync(path.join(root, "app.js"), "utf8");
+  assert(/"my-skills": "work"/.test(appSrc.slice(appSrc.indexOf("const NAV_PARENT = {"), appSrc.indexOf("const ADVANCED_NAV"))), "lights 工作");
 });
 
 test("the skills are listed with the name, the first 80 characters, where they came from and when; markup stays text", async () => {
@@ -140,9 +142,9 @@ test("a file that cannot be read is said, with no form and no guessed list; a pa
   assert(text(main).includes("技能的檔案有問題"));
   assert.strictEqual(qa(main, "item").length, 0);
   assert.strictEqual(qa(main, "save").length, 0, "nothing to save into");
-  setPage({ bookStatus: 503, bookBody: { error: "VBear 的背景程序現在連不上。", code: "unavailable" } });
+  setPage({ bookStatus: 503, bookBody: { error: "VBear 的背景程式現在連不上。", code: "unavailable" } });
   main = await open("#/my-skills");
-  assert(text(main).includes("讀不到技能"));
+  assert(text(main).includes("讀不到常用做法"));
 });
 
 test("adding sends the name and the text as typed, clears the form and reloads", async () => {
@@ -158,7 +160,7 @@ test("adding sends the name and the text as typed, clears the form and reloads",
   assert.deepStrictEqual(skillPosts().map((c) => [c.url, c.body]), [["/api/my-skills", { name: "市集日報", text: STEPS }]]);
   assert.strictEqual(qa(main, "item").length, 1);
   assert.strictEqual(q(main, "name").value, "", "the form is empty again");
-  assert(text(h.dom().toastEl).includes("已存成技能"));
+  assert(text(h.dom().toastEl).includes("已存成常用做法"));
 });
 
 test("a refusal says why and keeps the words; a second yes must be ticked before the same words are sent again", async () => {
@@ -246,7 +248,7 @@ test("delete asks first, then posts an empty body to the delete address once", a
   qa(main, "delete")[0].click();
   await settle();
   const dlg = dialog();
-  assert(text(dlg).includes("刪除這個技能"));
+  assert(text(dlg).includes("刪除這個常用做法"));
   assert.strictEqual(skillPosts().length, 0, "pressing 刪 deletes nothing");
   dlg.find((n) => n.tag === "button" && text(n) === "取消").click();
   await settle();
@@ -266,11 +268,11 @@ const useBtn = (main) => qa(main, "use")[0];
 const chatInput = (main) => main.find((n) => n.getAttribute && n.getAttribute("data-chat") === "input");
 const groupInput = (main) => main.find((n) => n.getAttribute && n.getAttribute("data-group") === "input");
 
-test("a chat has 用技能 beside the send button; picking a skill puts its words in the box and sends nothing", async () => {
+test("a chat has 用常用做法 beside the send button; picking a skill puts its words in the box and sends nothing", async () => {       // (P47-4) the button's words
   setPage({ book: book([skill("k-000000000001", "市集日報", STEPS), skill("k-000000000002", EVIL, "第二個")]) });
   const main = await open("#/chat/" + CID);
   assert(useBtn(main), "the button is there");
-  assert.strictEqual(text(useBtn(main)), "用技能");
+  assert.strictEqual(text(useBtn(main)), "用常用做法");
   useBtn(main).click();
   await settle();
   const dlg = dialog();
@@ -329,7 +331,7 @@ test("with no skills the picker says so and points to the skills page; a book th
   let main = await open("#/chat/" + CID);
   useBtn(main).click();
   await settle();
-  assert(text(dialog()).includes("還沒有存任何技能"));
+  assert(text(dialog()).includes("還沒有存任何常用做法"));
   assert.strictEqual(dialog().find((n) => n.tag === "a").getAttribute("href"), "#/my-skills");
   assert.strictEqual(qa(dialog(), "pick").length, 0);
   dialog().find((n) => n.tag === "button" && text(n) === "取消").click();
@@ -345,7 +347,7 @@ test("with no skills the picker says so and points to the skills page; a book th
   main = await open("#/chat/" + CID);
   useBtn(main).click();
   await settle();
-  assert(text(dialog()).includes("讀不到技能"));
+  assert(text(dialog()).includes("讀不到常用做法"));
 });
 
 test("a chat a group opened has no box and so no 用技能", async () => {
@@ -356,12 +358,12 @@ test("a chat a group opened has no box and so no 用技能", async () => {
 
 // ---- 存成技能 ---------------------------------------------------------------------------------------------------
 
-test("a chat has 存成技能 beside 記住 on each spoken line, and opening the chat saves nothing", async () => {
+test("a chat has 存成常用做法 beside 記住 on each spoken line, and opening the chat saves nothing", async () => {       // (P47-4) the button's words
   setPage({ detail: chatDetail([rec("user_message", { turn: 1, text: "第一步先整理" }), rec("reply", { turn: 1, text: "好", truncated: false }),
     rec("tool_call", { turn: 1, tool: "Bash", summary: "ls" })]) });
   const main = await open("#/chat/" + CID);
   assert.strictEqual(saveButtons(main).length, 2);
-  assert(saveButtons(main).every((b) => text(b) === "存成技能"));
+  assert(saveButtons(main).every((b) => text(b) === "存成常用做法"));
   assert.strictEqual(skillPosts().length, 0);
 });
 
@@ -377,7 +379,7 @@ test("the person's words: the box brings them in, wants a name, and posts only o
   saveButtons(main)[0].click();
   await settle();
   const dlg = dialog();
-  assert(dlg && text(dlg).includes("存成技能"));
+  assert(dlg && text(dlg).includes("存成常用做法"));
   assert.strictEqual(skillPosts().length, 0, "pressing the button saves nothing");
   assert.strictEqual(q(dlg, "text").value, STEPS);
   assert.strictEqual(q(dlg, "name").value, "");
@@ -388,7 +390,7 @@ test("the person's words: the box brings them in, wants a name, and posts only o
   await settle(80);
   assert.deepStrictEqual(skillPosts().map((c) => c.body), [{ name: "市集日報", text: STEPS, source: { how: "said", chat_id: CID } }]);
   assert.strictEqual(dialog(), null, "the box closes once saved");
-  assert(text(h.dom().toastEl).includes("已存成技能"));
+  assert(text(h.dom().toastEl).includes("已存成常用做法"));
 });
 
 test("an employee's words: the reminder is there from the start and nothing is sent before 我確定 is ticked", async () => {
@@ -397,7 +399,7 @@ test("an employee's words: the reminder is there from the start and nothing is s
   saveButtons(main)[0].click();
   await settle();
   const dlg = dialog();
-  assert(text(dlg).includes("這段是員工寫的，存成技能後，你用它時會變成你對員工說的話。"));
+  assert(text(dlg).includes("這段是員工寫的，存成常用做法後，你用它時會變成你對員工說的話。"));
   assert(q(dlg, "confirm"), "the box is there at once");
   q(dlg, "name").value = "查庫存";
   q(dlg, "save").click();
@@ -473,7 +475,7 @@ const kdialog = () => h.dom().bodyEl.find((n) => n.hasClass && n.hasClass("modal
 const sdialog = () => h.dom().bodyEl.find((n) => n.hasClass && n.hasClass("modal-backdrop") && n.getAttribute("data-skill") === "dialog");
 const kpreview = (over = {}) => ({ preview_id: "pv-" + "0".repeat(16), ok: true, blockers: [], chat_id: CID, messages: 6, omitted_messages: 0, bytes: 900,
   cap_usd: "0.1", day_left_usd: "2.71", today: { spent_usd: "0.29", daily_usd: "3", lamp: "green" }, sends_to: "Anthropic", engine: "claude-chat",
-  notice: null, save_note: "整理只是提議：不會自己存。它會放進「存成技能」的視窗，你看過、可以改，按「存」才會存。", cli: { version: "2.1.318", verified: true },
+  notice: null, save_note: "整理只是提議：不會自己存。它會放進「存成常用做法」的視窗，你看過、可以改，按「存」才會存。", cli: { version: "2.1.318", verified: true },
   disclosure: "開始後，你和這位員工最近的對話（最多 20 則、12 KiB）會用你的 Claude 帳號送到 Anthropic（由本機的 Claude Code 送出）。",
   cost_note: "金額是 Claude Code 回報的估值。", ...over });
 const kitem = (over = {}) => ({ index: 0, name: "市集日報", text: STEPS, note: "根據你前面說的步驟", refuse: null, refuse_text: null, warn: [], warn_text: [], saved: false, ...over });
@@ -524,13 +526,13 @@ async function kready(over = {}) {
 const skillWrites = () => FETCH_LOG.filter((c) => c.method === "POST" && /^\/api\/my-skills(\/k-[0-9a-f]{12}(\/delete)?)?$/.test(c.url.split("?")[0]));
 const ksuggestCalls = () => FETCH_LOG.filter((c) => c.url.startsWith("/api/my-skills/suggest")).map((c) => `${c.method} ${c.url.split("?")[0]}`);
 
-test("a one-to-one chat has 整理成技能; opening it asks nothing, a group's chat has none", async () => {
+test("a one-to-one chat has 整理成常用做法 (an item of the 「⋯」 menu); opening it asks nothing, a group's chat has none", async () => {
   suggestPage();
   const main = await kopen();
   const btn = kq(main, "open");
-  assert.strictEqual(text(btn), "整理成技能");
-  assert(text(kq(main, "desk")).includes("Anthropic"));
-  assert(text(kq(main, "desk")).includes("US$0.10"));
+  assert(text(btn).startsWith("整理成常用做法"), text(btn));
+  assert(text(btn).includes("Anthropic"));         // (P47-4) the sentence that stood on the desk stands under the item
+  assert(text(btn).includes("US$0.10"));
   assert.deepStrictEqual(ksuggestCalls().filter((c) => c.startsWith("POST")), []);
   setPage({ detail: chatDetail([], { group: { id: GID, name: "市集準備" } }) });
   assert(!kq(await kopen(), "open"));
@@ -544,7 +546,7 @@ test("the preview says what is read, the most it costs, what is left and that it
   const d = kdialog();
   const t = text(d);
   for (const word of ["6 則", "US$0.10", "US$2.71", "Anthropic", "不會自己存", "最多 20 則"]) assert(t.includes(word), word);
-  assert(t.includes("你的記憶和其他技能，都不會送出"), "neither the memory nor the other skills are sent");
+  assert(t.includes("你的記憶和其他常用做法，都不會送出"), "neither the memory nor the other skills are sent");
   assert.deepStrictEqual(ksuggestCalls(), ["GET /api/my-skills/suggest", "POST /api/my-skills/suggest/preview"]);
   const pv = FETCH_LOG.find((c) => c.url === "/api/my-skills/suggest/preview");
   assert.deepStrictEqual(pv.body, { chat_id: CID });
@@ -563,7 +565,7 @@ test("a Codex chat's notice is shown, and without Claude Code the dialog says it
   await settle(80);
   const d = h.dom().bodyEl.findAll((n) => n.hasClass && n.hasClass("modal-backdrop") && n.getAttribute("data-ksuggest") === "dialog").pop();
   assert(text(d).includes("這個功能目前需要 Claude Code"));
-  assert(text(d).includes("存成技能"), "the per-line 存成技能 still works");
+  assert(text(d).includes("存成常用做法"), "the per-line 存成常用做法 still works");
   assert(!kq(d, "start"));
 });
 
@@ -614,7 +616,7 @@ test("a proposal that reads like an order carries the server's warning on the ca
 
 test("nothing worth keeping says so and can be closed; 不用了 posts an empty dismiss and the card goes away", async () => {
   const main = await kready({ view: kview({ items: [] }) });
-  assert(text(kq(main, "card")).includes("沒有值得存成技能"));
+  assert(text(kq(main, "card")).includes("沒有值得存成常用做法"));
   kq(main, "dismiss").click();
   await settle(40);
   assert(ksuggestCalls().includes(`POST /api/my-skills/suggest/${SID}/dismiss`));
@@ -666,7 +668,7 @@ test("the code keeps its rules: no markup written, no emoji, no outside address,
   assert(!/\/api\/(chats|groups|config|settings|native|agent-profiles|memory)|\/messages|\/answer|api\.(patch|del)\(/.test(part));
   assert(!/\.click\(\)|\.submit\(\)/.test(part), "no pressing of the send button for the person");
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
-  const nav = html.split("\n").find((line) => line.includes('data-nav="my-skills"'));
+  const nav = html.split("\n").find((line) => line.includes('data-nav="work"'));
   assert(nav && !/\p{Extended_Pictographic}/u.test(nav), "no emoji in the navigation line");
 });
 

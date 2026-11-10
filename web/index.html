@@ -14,34 +14,27 @@
   <nav class="side" aria-label="主要導覽">
     <div class="brand">
       <span class="brand-mark" aria-hidden="true"><img src="/logo.svg" alt="" width="32" height="32"></span>
-      <span class="brand-text">VBear<small>技能與團隊主控台</small></span>
+      <span class="brand-text">VBear<small>你的 AI 員工</small></span>
     </div>
-    <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-list"><span class="nav-toggle-bars" aria-hidden="true"></span><span id="nav-toggle-label">選單</span></button>
+    <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-list"><span class="nav-toggle-bars" aria-hidden="true"></span><span id="nav-toggle-label">進階</span></button>
     <ul class="nav" id="nav-list">
-      <li><a href="#/" data-nav="home"><span aria-hidden="true">⌂</span>冒險者大廳</a></li>
-      <li><a href="#/setup" data-nav="setup"><span aria-hidden="true">✓</span>開始設定</a></li>
-      <li><a href="#/office" data-nav="office"><span aria-hidden="true">▦</span>辦公室</a></li>
-      <li><a href="#/meetings" data-nav="meetings"><span aria-hidden="true">☷</span>會議</a></li>
-      <li><a href="#/chat" data-nav="chat"><span aria-hidden="true">※</span>聊天</a></li>
-      <li><a href="#/memory" data-nav="memory"><span aria-hidden="true">✎</span>記憶</a></li>
-      <li><a href="#/shared" data-nav="shared"><span aria-hidden="true">⇋</span>共用資料夾</a></li>
-      <li><a href="#/my-skills" data-nav="my-skills"><span aria-hidden="true">◇</span>技能</a></li>
-      <li><a href="#/dispatch" data-nav="dispatch"><span aria-hidden="true">⇉</span>派工</a></li>
-      <li><a href="#/routines" data-nav="routines"><span aria-hidden="true">↻</span>例行工作</a></li>
-      <li><a href="#/templates" data-nav="templates"><span aria-hidden="true">▤</span>團隊範本</a></li>
-      <li><a href="#/actions" data-nav="actions"><span aria-hidden="true">≡</span>AI 自己做了什麼</a></li>
-      <li><a href="#/terminals" data-nav="terminals"><span aria-hidden="true">›_</span>終端機</a></li>
-      <li><a href="#/workbench" data-nav="workbench"><span aria-hidden="true">⊞</span>終端工作台</a></li>
-      <li><a href="#/flows" data-nav="flows"><span aria-hidden="true">⇄</span>流程</a></li>
-      <li><a href="#/skills" data-nav="skills"><span aria-hidden="true">✦</span>技能庫</a></li>
-      <li><a href="#/team" data-nav="team"><span aria-hidden="true">☰</span>角色卡池</a></li>
-      <li><a href="#/projects" data-nav="projects"><span aria-hidden="true">▣</span>專案</a></li>
+      <li><a href="#/" data-nav="home"><span aria-hidden="true">⌂</span>首頁</a></li>
+      <li><a href="#/employees" data-nav="employees"><span aria-hidden="true">◎</span>員工</a></li>
+      <li><a href="#/work" data-nav="work"><span aria-hidden="true">≡</span>工作</a></li>
       <li><a href="#/settings" data-nav="settings"><span aria-hidden="true">⚙</span>設定</a></li>
+      <li class="nav-sep" data-advanced hidden>進階</li>
+      <li data-advanced hidden><a href="#/terminals" data-nav="terminals"><span aria-hidden="true">›_</span>指令視窗</a></li>
+      <li data-advanced hidden><a href="#/workbench" data-nav="workbench"><span aria-hidden="true">⊞</span>工作台</a></li>
+      <li data-advanced hidden><a href="#/flows" data-nav="flows"><span aria-hidden="true">⇄</span>流程</a></li>
+      <li data-advanced hidden><a href="#/projects" data-nav="projects"><span aria-hidden="true">▣</span>專案資料夾</a></li>
+      <li data-advanced hidden><a href="#/skills" data-nav="skills"><span aria-hidden="true">✦</span>AI 工具的外掛清單</a></li>
+      <li data-advanced hidden><a href="#/team" data-nav="team"><span aria-hidden="true">☰</span>員工詳細資料</a></li>
     </ul>
-    <div class="side-foot" id="scan-status" aria-live="polite"></div>
+    <div class="side-foot" id="scan-status" aria-live="polite" hidden></div>
   </nav>
   <div class="stage">
     <div class="waiting-bar" id="waiting-bar" role="status" aria-live="polite" hidden></div>
+    <p class="advanced-note" id="advanced-note" role="note" hidden></p>
     <main id="main" tabindex="-1"></main>
   </div>
 </div>

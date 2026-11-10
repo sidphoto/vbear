@@ -1,4 +1,4 @@
-// P44-2: the 例行工作 page (#/routines), the line over every page for what waits for the person, the routine rows of
+// P44-2: the 定時工作 page (#/routines), the line over every page for what waits for the person, the routine rows of
 // 「AI 自己做了什麼」 and the routine title of a chat in the list. The real web/app.js on a synthetic DOM, fetch answered by the test;
 // every name and text here is made up and the page shows them as text only.
 // Run: node tests/frontend/routines.cjs   (exit code 0 = pass)
@@ -86,11 +86,11 @@ const test = (name, fn) => tests.push([name, fn]);
 test("the page lists a routine with its employee, days, times, next time, limit and text, as text", async () => {
   setServer();
   const main = await open();
-  assert(text(main.find((n) => n.tag === "h1")).includes("例行工作"));
+  assert(text(main.find((n) => n.tag === "h1")).includes("定時工作"));
   const card = by(main, "data-routine", "card");
   assert(card, "a card");
   const t = text(card);
-  for (const s of ["市集日報", "文案小編", "每週一、二、三、四、五", "08:00、13:00", "請整理昨天的銷售。", "US$0.50", "開啟"]) assert(t.includes(s), s);
+  for (const s of ["市集日報", "文案小編", "每週一、二、三、四、五", "08:00、13:00", "請整理昨天的銷售。", "US$0.50", "開著"]) assert(t.includes(s), s);
   assert(text(by(card, "data-routine", "next")).includes("下一次"));
 });
 
@@ -98,7 +98,7 @@ test("the money line says what was spent, the limit, the default rule and who st
   setServer();
   const main = await open();
   const t = text(by(main, "data-routines", "money"));
-  for (const s of ["US$0.20", "US$1.50", "每天上限 US$3.00 的一半", "不會超過每天上限", "共用每天上限"]) assert(t.includes(s), s);
+  for (const s of ["US$0.20", "US$1.50", "花費上限 US$3.00 的一半", "不會超過花費上限", "共用花費上限"]) assert(t.includes(s), s);
   assert(text(by(main, "data-routines", "auto-line")).includes("沒有打開"));
   setServer({ auto: true });
   const again = await open();
@@ -168,7 +168,7 @@ test("delete asks first and posts to /delete", async () => {
 test("the new-routine form lists only employees who can chat and posts exactly the six fields", async () => {
   setServer({ routines: [] });
   const main = await open();
-  assert(text(main).includes("還沒有例行工作"));
+  assert(text(main).includes("還沒有定時工作"));
   await click(act(main, "new"));
   const form = by(main, "data-routines", "form");
   const who = by(form, "data-routine-field", "profile");
@@ -179,19 +179,19 @@ test("the new-routine form lists only employees who can chat and posts exactly t
   const [call] = posts();
   assert.strictEqual(call[1], "/api/routines");
   assert.deepStrictEqual(Object.keys(call[2]).sort(), ["days", "enabled", "name", "profile_id", "text", "times"]);
-  assert.deepStrictEqual([call[2].name, call[2].profile_id, call[2].days, call[2].times, call[2].enabled], ["晨間整理", "p-writer", [0, 1, 2, 3, 4], ["08:00"], false]);
+  assert.deepStrictEqual([call[2].name, call[2].profile_id, call[2].days, call[2].times, call[2].enabled], ["晨間整理", "p-writer", [0, 1, 2, 3, 4, 5, 6], ["08:00"], true]);
 });
 
-test("the form has 從技能帶入; opening it reads the skills and posts nothing, and the picker lists names as text", async () => {
+test("the form has 從常用做法帶入; opening it reads the skills and posts nothing, and the picker lists names as text", async () => {
   setServer({ routines: [] });
   const main = await open();
   await click(act(main, "new"));
   const form = by(main, "data-routines", "form");
-  assert(text(form).includes("之後改技能不會改這個例行工作"));
+  assert(text(form).includes("之後改常用做法不會改這個定時工作"));
   await click(act(form, "from-skill"));
   const pick = h.dom().bodyEl.find((n) => attr(n, "data-skill") === "picker");
   assert(pick, "a picker");
-  assert(text(pick).includes("從技能帶入"));
+  assert(text(pick).includes("從常用做法帶入"));
   assert(text(pick).includes("市集日報") && text(pick).includes("<b>粗體</b>"), "names as text");
   assert.strictEqual(pick.findAll((n) => n.tag === "b").length, 0, "markup stays text");
   assert.deepStrictEqual(calls.filter((c) => c[0] === "GET" && c[1] === "/api/my-skills").length, 1);
@@ -259,13 +259,13 @@ test("no skills, or a book that cannot be read, is said in the picker; the form 
   let main = await open();
   await click(act(main, "new"));
   await click(act(by(main, "data-routines", "form"), "from-skill"));
-  assert(text(h.dom().bodyEl.find((n) => attr(n, "data-skill") === "picker")).includes("還沒有存任何技能"));
+  assert(text(h.dom().bodyEl.find((n) => attr(n, "data-skill") === "picker")).includes("還沒有存任何常用做法"));
   setServer({ routines: [], book: null });
   main = await open();
   await click(act(main, "new"));
   const form = by(main, "data-routines", "form");
   await click(act(form, "from-skill"));
-  assert(text(h.dom().bodyEl.findAll((n) => attr(n, "data-skill") === "picker").pop()).includes("讀不到技能"));
+  assert(text(h.dom().bodyEl.findAll((n) => attr(n, "data-skill") === "picker").pop()).includes("讀不到常用做法"));
   by(form, "data-routine-field", "text").value = "照樣能自己寫";
   assert.strictEqual(by(form, "data-routine-field", "text").value, "照樣能自己寫");
 });
@@ -311,7 +311,8 @@ test("a run's state, the reason in words, who decided and a link to its chat are
   assert.strictEqual(items.length, 3);
   assert(text(items[0]).includes("完成") && text(items[0]).includes("自己動手第 3 項") && text(items[0]).includes("US$0.12"));
   assert.strictEqual(items[0].find((n) => n.tag === "a").getAttribute("href"), "#/chat/c-0123456789abcdef");
-  assert(text(items[1]).includes("今天的額度用完了"));
+  assert(text(items[1]).includes("今天的用量到你設的上限了"));
+  assert.strictEqual(attr(by(items[1], "data-limit", "go"), "href"), "#/settings?open=limits");
   assert(text(items[2]).includes("不確定有沒有送出") && text(items[2]).includes("不會自己再送一次"));
 });
 
@@ -327,7 +328,7 @@ test("the line over every page names the routine and its time and nothing of its
   setServer({ waiting: [WAITING, { ...WAITING, run_id: "rr-bbbbbbbbbbbb", name: "第二件", slot: "2026-11-09T13:00" }] });
   await open("#/routines");
   assert.strictEqual(bar.hidden, false);
-  assert.strictEqual(text(bar).includes("等你決定：例行工作「市集日報」08:00到時間了，另外還有 1 件"), true, text(bar));
+  assert.strictEqual(text(bar).includes("等你決定：定時工作「市集日報」08:00到時間了，另外還有 1 件"), true, text(bar));
   assert.strictEqual(attr(by(bar, "data-waiting", "link"), "href"), "#/routines");
   assert(!text(bar).includes("請整理"));
   setServer({ waiting: [] });
@@ -341,7 +342,7 @@ test("the chat list shows the routine's title where the server sent one", async 
   setHandler((url) => {
     const p = url.split("?")[0];
     if (p === "/api/chats") return jsonResponse({ chats: [
-      { id: "c-0123456789abcdef", profile_id: "p-writer", name: "文案小編", routine_title: "例行工作：市集日報 11/09 08:00", engine: "claude", turns: 1, spent_usd: "0.10", last_at: 1, open: false, waiting: false },
+      { id: "c-0123456789abcdef", profile_id: "p-writer", name: "文案小編", routine_title: "定時工作：市集日報 11/09 08:00", engine: "claude", turns: 1, spent_usd: "0.10", last_at: 1, open: false, waiting: false },
       { id: "c-fedcba9876543210", profile_id: "p-writer", name: "文案小編", engine: "claude", turns: 1, spent_usd: "0.10", last_at: 1, open: false, waiting: false }],
       cards: [], problems: [], ledger: null, limits: null });
     return null;
@@ -349,20 +350,20 @@ test("the chat list shows the routine's title where the server sent one", async 
   const main = await open("#/chat");
   const rows = main.findAll((n) => attr(n, "data-chat") === "row");
   assert.strictEqual(rows.length, 2);
-  assert(text(rows[0]).includes("例行工作：市集日報 11/09 08:00"));
-  assert(text(rows[1]).includes("文案小編") && !text(rows[1]).includes("例行工作"));
+  assert(text(rows[0]).includes("定時工作：市集日報 11/09 08:00"));
+  assert(text(rows[1]).includes("文案小編") && !text(rows[1]).includes("定時工作"));
 });
 
 test("「AI 自己做了什麼」 lists a routine VBear started, links to its chat, offers no stop and no withdraw", async () => {
   setServer();
   setHandler((url) => {
     const p = url.split("?")[0];
-    if (p === "/api/actions") return jsonResponse({ actions: [{ at: 1794000000, dispatch_id: null, seq: 0, kind: "routine_started", what: "例行工作「市集日報」開始了", by: "auto3", by_text: "自己動手第 3 項", profile_id: null, can_stop: false, can_withdraw: false, routine_id: ROUTINE.id, chat_id: "c-0123456789abcdef" }], unreadable: 0 });
+    if (p === "/api/actions") return jsonResponse({ actions: [{ at: 1794000000, dispatch_id: null, seq: 0, kind: "routine_started", what: "定時工作「市集日報」開始了", by: "auto3", by_text: "自己動手第 3 項", profile_id: null, can_stop: false, can_withdraw: false, routine_id: ROUTINE.id, chat_id: "c-0123456789abcdef" }], unreadable: 0 });
     return null;
   });
   const main = await open("#/actions");
   const row = by(main, "data-action", "row");
-  assert(row && text(row).includes("例行工作「市集日報」開始了") && text(row).includes("自己動手第 3 項"));
+  assert(row && text(row).includes("定時工作「市集日報」開始了") && text(row).includes("自己動手第 3 項"));
   assert.strictEqual(attr(row, "data-by"), "auto3");
   assert.strictEqual(by(row, "data-action", "routine-chat").getAttribute("href"), "#/chat/c-0123456789abcdef");
   assert.strictEqual(row.find((n) => n.tag === "button"), null);
@@ -407,17 +408,17 @@ test("a reminder and a missed row sit together; the line over every page counts 
   setServer({ waiting: [WAITING, MISSED, { ...MISSED, routine_id: "r-ba9876543210", name: "第二件" }] });
   const main = await open("#/routines");
   assert(by(main, "data-routine-waiting", WAITING.run_id) && by(main, "data-routine-missed", ROUTINE.id) && by(main, "data-routine-missed", "r-ba9876543210"));
-  assert.strictEqual(text(bar), "等你決定：例行工作「市集日報」08:00到時間了；VBear 剛才沒在看，錯過了 2 件例行工作 去處理");
+  assert.strictEqual(text(bar), "等你決定：定時工作「市集日報」08:00到時間了；VBear 剛才沒在看，錯過了 2 件定時工作 去處理");
   setServer({ waiting: [MISSED] });
   await open("#/routines");
-  assert.strictEqual(text(bar), "等你決定：VBear 剛才沒在看，錯過了 1 件例行工作 去處理");
+  assert.strictEqual(text(bar), "等你決定：VBear 剛才沒在看，錯過了 1 件定時工作 去處理");
   assert(!text(bar).includes("請整理"));
 });
 
 test("the page says VBear must be open and the Mac awake, and the switch for keeping the Mac awake posts only keep_awake", async () => {
   setServer();
   const main = await open();
-  assert(text(by(main, "data-routines", "awake-line")).includes("VBear 的視窗要開著、Mac 要醒著，例行工作才會做"));
+  assert(text(by(main, "data-routines", "awake-line")).includes("VBear 的視窗要開著、Mac 要醒著，定時工作才會做"));
   const panel = by(main, "data-routines", "awake");
   const box = by(panel, "data-routine-field", "keep-awake");
   assert(box && box.checked === false, "off by default");
@@ -450,8 +451,10 @@ test("a run that was a missed time is told in words: how many were lost, or that
   assert(!t.includes("asleep_") && !t.includes("superseded"), t);
 });
 
-test("the nav has the page, the bar sits over main, and the CSS can hide it", () => {
-  assert(/<a href="#\/routines" data-nav="routines">/.test(HTML));
+test("(P47-1) the page is a page of the 工作 item of the menu, the bar sits over main, and the CSS can hide it", () => {
+  assert(/<a href="#\/work" data-nav="work">/.test(HTML));
+  const appSrc = fs.readFileSync(path.join(__dirname, "..", "..", "web", "app.js"), "utf8");
+  assert(/\broutines: "work"/.test(appSrc.slice(appSrc.indexOf("const NAV_PARENT = {"), appSrc.indexOf("const ADVANCED_NAV"))), "the routines light 工作");
   assert(/id="waiting-bar"[^>]*hidden/.test(HTML));
   assert(HTML.indexOf('id="waiting-bar"') < HTML.indexOf('<main id="main"'));
   assert(/\.waiting-bar\[hidden\]/.test(fs.readFileSync(path.join(__dirname, "..", "..", "web", "style.css"), "utf8")));

@@ -55,7 +55,7 @@ function boot(hash, { fetchImpl } = {}) {
   const side = new Node("nav"); side._classes.add("side");
   const toggle = mkId("nav-toggle", "button"); toggle.setAttribute("aria-expanded", "false");
   const label = mkId("nav-toggle-label", "span"); label.textContent = "選單";
-  const navLinks = [["home", "⌂", "冒險者大廳"], ["team", "☰", "角色卡池"], ["flows", "⇄", "流程"]].map(([nav, glyph, name]) => {
+  const navLinks = [["home", "⌂", "首頁"], ["team", "☰", "員工詳細資料"], ["flows", "⇄", "流程"]].map(([nav, glyph, name]) => {
     const a = new Node("a"); a.dataset.nav = nav;
     const g = new Node("span"); g.textContent = glyph; const t = new Node("#text"); t.textContent = name;
     a.children.push(g, t);
@@ -174,10 +174,10 @@ async function test(name, fn) {
   });
 
   // ---- the phone menu --------------------------------------------------------------------------------------
-  await test("phone menu: the button names the page you are on, and going to a page puts the menu away", async () => {
+  await test("phone menu: (P47-1) the 進階 button names the advanced page you are on, and going to a page puts the menu away", async () => {
     const page = boot("#/team");
     await tick(20);
-    assert.strictEqual(page.label.textContent, "選單：角色卡池");
+    assert.strictEqual(page.label.textContent, "進階：員工詳細資料");
     page.toggle.dispatch("click");
     assert.strictEqual(page.toggle.getAttribute("aria-expanded"), "true");
     assert.ok(page.side.classList.contains("nav-open"));
@@ -189,7 +189,7 @@ async function test(name, fn) {
     page.location.hash = "#/flows";
     for (const fn of page.winListeners.hashchange || []) fn();
     await tick(20);
-    assert.strictEqual(page.label.textContent, "選單：流程");
+    assert.strictEqual(page.label.textContent, "進階：流程");
     assert.strictEqual(page.toggle.getAttribute("aria-expanded"), "false");
     assert.ok(!page.side.classList.contains("nav-open"));
   });
@@ -208,30 +208,30 @@ async function test(name, fn) {
     assert.strictEqual(Node.focused, null, "nothing to close, nothing to focus");
   });
 
-  await test("phone menu: the page name is the link's own words, not its glyph; an unknown page is just 選單", async () => {
+  await test("phone menu: the page name is the link's own words, not its glyph; an unknown page is just 進階 (the button's own word)", async () => {
     const page = boot("#/");
     await tick(20);
-    assert.strictEqual(vm.runInContext('navPageName("home")', page.ctx), "冒險者大廳");
+    assert.strictEqual(vm.runInContext('navPageName("home")', page.ctx), "首頁");
     assert.strictEqual(vm.runInContext('navPageName("nope")', page.ctx), "");
     vm.runInContext('syncNavMenu("nope")', page.ctx);
-    assert.strictEqual(page.label.textContent, "選單");
+    assert.strictEqual(page.label.textContent, "進階");
   });
 
-  await test("phone menu: index.html has the button before the list, wired by id; the CSS folds the list only at 720px and narrower", () => {
+  await test("phone menu: index.html has the button before the list, wired by id; (P47-1) the CSS puts the four items in one row and folds only the advanced list, only at 720px and narrower", () => {
     const html = fs.readFileSync(path.join(__dirname, "..", "..", "web", "index.html"), "utf8");
     assert.ok(html.indexOf('id="nav-toggle"') > html.indexOf('class="brand"') && html.indexOf('id="nav-toggle"') < html.indexOf('id="nav-list"'));
     assert.ok(/<button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-list">/.test(html));
     const css = fs.readFileSync(path.join(__dirname, "..", "..", "web", "style.css"), "utf8");
     assert.ok(/\.nav-toggle\s*\{\s*display:\s*none;/.test(css), "hidden on a wide window");
     const block = css.slice(css.lastIndexOf("@media (max-width: 720px) {\n  .nav-toggle"));
-    assert.ok(/\.nav-toggle\s*\{\s*display:\s*inline-flex/.test(block));
-    assert.ok(/\.side \.nav\s*\{\s*display:\s*none;\s*\}/.test(block) && /\.side\.nav-open \.nav\s*\{\s*display:\s*grid/.test(block));
+    assert.ok(/\.side\.adv-on \.nav-toggle\s*\{[^}]*display:\s*inline-flex/.test(block), "the button shows only with the advanced mode on");
+    assert.ok(/\.side \.nav li\[data-advanced\]\s*\{\s*display:\s*none/.test(block) && /\.side\.nav-open \.nav li\[data-advanced\]:not\(\[hidden\]\)\s*\{\s*display:\s*block/.test(block), "the advanced list is the folded part");
     assert.ok(/min-height:\s*44px/.test(css.slice(css.indexOf(".nav-toggle {"))), "a touch-sized target");
     assert.ok(!/overflow-x:\s*auto/.test(block), "the phone menu does not scroll sideways");
   });
 
   await test("source: the start-up and menu code use no innerHTML and no outside resource", () => {
-    const part = source.slice(source.indexOf("// The phone menu"), source.indexOf("let liveTimer = null;")) + source.slice(source.indexOf("async function bootstrap()"));
+    const part = source.slice(source.indexOf("// The menu is four items"), source.indexOf("let liveTimer = null;")) + source.slice(source.indexOf("async function bootstrap()"));
     assert.ok(!/innerHTML|insertAdjacentHTML/.test(part) && !/https?:\/\//.test(part) && !/\p{Extended_Pictographic}/u.test(part));
   });
 
@@ -254,7 +254,7 @@ async function test(name, fn) {
     const box = () => walk(page.main).find((n) => n.getAttribute && n.getAttribute("data-setting") === "show-mcode");
     assert.ok(box(), "the switch is on the settings page");
     assert.ok(page.main.textContent.includes("顯示 MCODE"));
-    assert.ok(page.main.textContent.includes("關掉不會刪除已有的 MCODE 角色卡"));
+    assert.ok(page.main.textContent.includes("關掉不會刪除已有的 MCODE 員工"));
     assert.ok(!box().checked, "off by default");
     box().checked = true;
     box().dispatch("change", { target: box() });

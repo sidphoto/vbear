@@ -237,8 +237,10 @@ test("the route and the nav: #/setup is a page, the nav and the settings page le
   const main = await open("#/setup");
   assert(byAttr(main, "data-setup", "page").length === 1);
   const html = fs.readFileSync(path.join(__dirname, "..", "..", "web", "index.html"), "utf8");
-  assert(/<a href="#\/setup" data-nav="setup">[^<]*<span aria-hidden="true">[^<]*<\/span>開始設定<\/a>/.test(html));
-  assert(html.indexOf('data-nav="setup"') < html.indexOf('data-nav="office"'), "near the top of the nav");
+  // (P47-1) the start-up page has no item of its own in the menu: it is a page of 設定 (it lights that item), and the settings page leads to it
+  assert(/<a href="#\/settings" data-nav="settings">[^<]*<span aria-hidden="true">[^<]*<\/span>設定<\/a>/.test(html));
+  const appSrc = fs.readFileSync(path.join(__dirname, "..", "..", "web", "app.js"), "utf8");
+  assert(/\bsetup: "settings"/.test(appSrc.slice(appSrc.indexOf("const NAV_PARENT = {"), appSrc.indexOf("const ADVANCED_NAV"))), "the start-up lights 設定");
   const link = app.setupSettings ? app.setupSettings() : null;
   assert(!link || attr(link.find((n) => attr(n, "data-setup") === "open"), "href") === "#/setup");
 });
@@ -248,7 +250,7 @@ test("home: a person who has not finished and has no ready tool is sent to the s
   const main = await open("#/");
   assert.strictEqual(global.location.hash, "#/setup");
   assert(calls.some((c) => c[1] === "/api/setup/settle" && c[0] === "POST"));
-  assert(!text(main).includes("冒險者大廳"), "the lobby was not drawn first");
+  assert(!text(main).includes("等你決定"), "the home page was not drawn first");
 });
 
 test("home: an upgrader with a ready tool stays on the lobby and is told once", async () => {
@@ -262,7 +264,8 @@ test("home: an upgrader with a ready tool stays on the lobby and is told once", 
   setPage({ config: { setup_done: true, setup_notice: false, onboarding_dismissed: true } });
   const again = await open("#/");
   assert.strictEqual(byAttr(again, "data-setup", "upgrade-notice").length, 0);
-  assert(!calls.some((c) => c[1].startsWith("/api/setup/")), "no tool was asked");
+  // (P47-2: a home page with no employee reads the start-up's tool list, from the server's own cache, to tick its first step; it never asks a tool itself)
+  assert(!calls.some((c) => c[1].startsWith("/api/setup/") && (c[0] !== "GET" || c[1].includes("force"))), "no tool was asked");
 });
 
 test("home: the server saying nothing (no setup_done, no config, a failed settle) forces nobody anywhere", async () => {
@@ -280,10 +283,10 @@ test("home: the server saying nothing (no setup_done, no config, a failed settle
 });
 
 test("the first game stays on the lobby, after the start-up (the lobby is where it is drawn)", async () => {
-  setPage({ config: { setup_done: true, onboarding_dismissed: false }, tools: [ready("claude")] });
+  setPage({ config: { setup_done: true, onboarding_dismissed: false, advanced_mode: true }, tools: [ready("claude")] });
   const main = await open("#/");
   assert.strictEqual(global.location.hash, "#/");
-  assert(text(main).includes("冒險者大廳") && text(main).includes("新手第一局"), "the first game is still on the lobby");
+  assert(text(main).includes("首頁") && text(main).includes("新手第一局"), "the first game is still on the home page (P47-2: in its advanced part)");
 });
 
 test("the terminal of the start-up page is named after the tool and the action, and explained in plain words", () => {

@@ -1,3 +1,3 @@
 """VBear: a local console for running and supervising coding agents."""
 
-__version__ = "0.20.0"
+__version__ = "0.21.0"

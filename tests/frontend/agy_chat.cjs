@@ -104,8 +104,8 @@ test("a command card of an AGY chat says it runs in AGY's sandbox, not the Codex
   const all = text(node);
   for (const w of ["員工想執行指令", "ls -a", "員工的工作資料夾"]) assert(all.includes(w), w);
   const warn = text(q(node, "sandbox-warning"));
-  for (const w of ["AGY 的沙盒", "不能連網", "只能寫工作資料夾", "暫存資料夾", "看得懂"]) assert(warn.includes(w), w);
-  assert(!all.includes("可能在沙盒外執行"), "the Codex warning is not on an AGY card");
+  for (const w of ["AGY 的保護範圍（沙盒）", "不能連網", "只能寫工作資料夾", "暫存資料夾", "看得懂"]) assert(warn.includes(w), w);
+  assert(!all.includes("可能在保護範圍（沙盒）外執行"), "the Codex warning is not on an AGY card");
   assert(!/Bash|Edit|read/.test(all.replace(/ls -a/g, "")), "the words of the tools are not shown: " + all);
   assert(q(node, "allow") && q(node, "deny") && q(node, "modify"));
   assert.strictEqual(text(q(node, "modify")), "改內容再問");
@@ -115,7 +115,7 @@ test("a command card of an AGY chat says it runs in AGY's sandbox, not the Codex
 
 test("the Codex command card keeps its own warning", () => {
   const node = app.chatCardNode(agyCommand({ input: { command: "ls", cwd: ".", actions: [] } }), { edit: { open: false }, onAnswer() {}, redraw() {}, engine: "codex-chat" });
-  assert(text(q(node, "sandbox-warning")).includes("可能在沙盒外執行"));
+  assert(text(q(node, "sandbox-warning")).includes("可能在保護範圍（沙盒）外執行"));
 });
 
 test("asking again with an AGY card says the change goes in as the next message and AGY asks again", () => {
@@ -256,12 +256,14 @@ test("the list shows the AGY notice for an AGY card and opens an AGY chat only w
   for (const state of ["unverified", "hooks", "policy", "unsupported", "folder"]) {
     setPage({ list: listing({ support: support({ agy: agySupport({ state, verified: false, why: "虛構的原因" }) }) }) });
     main = await open("#/chat?profile=emp-5");
-    assert.strictEqual(q(main, "open").disabled, true, state);
-    assert(text(main).includes("AGY 準備好之前") && !text(main).includes("這個 Claude Code 版本通過聊天驗證之前"), state);
+    // (P47-4) the card's own button leads to the page of one reason and one action: never a start button while AGY is not ready
+    assert.notStrictEqual(text(q(main, "prep-action")), "開始聊天", state);
+    assert(text(q(main, "prep-reason")).includes("AGY") && !text(main).includes("這個 Claude Code 版本通過聊天驗證之前"), state);
+    assert.strictEqual(posts("/api/chats").length, 0, "nothing was opened by opening the page");
   }
   setPage({ list: listing({ support: support({ agy: agySupport() }) }) });
   main = await open("#/chat?profile=emp-1");
-  assert.strictEqual(q(main, "open").disabled, false, "a Claude card does not wait for AGY");
+  assert.strictEqual(text(q(main, "prep-action")), "開始聊天", "a Claude card does not wait for AGY");
   assert(q(main, "support") && !q(main, "agy-support"));
 });
 
@@ -295,7 +297,7 @@ test("the chat page of an AGY employee says what AGY does differently: the sandb
   const note = text(q(main, "agy-note"));
   for (const w of ["不能連網", "送到 Google", "AGY 員工會用到你自己裝的 AGY 技能", "不是帳單", "超過花費上限", "Google 方案"]) assert(note.includes(w), w);
   assert.strictEqual(q(main, "codex-note"), null);
-  assert(text(main).includes("工具：AGY"));
+  assert(text(q(main, "line")).includes("AGY・每件事先問你・對話會送到 Google"));
   assert.strictEqual(q(main, "plan-usage"), null, "AGY reports no plan use");
   noMarkup(main);
 });
@@ -307,7 +309,7 @@ test("a card that asks while an AGY chat is open is drawn as an AGY card", async
   assert(cardNode && text(cardNode).includes("員工想讀取檔案") && q(cardNode, "read-note") && !q(cardNode, "modify"));
   setPage({ detail: agyDetail({ live: live({ state: "waiting_for_you", turn: 1, cards: [agyCommand()] }) }) });
   const again = await open(`#/chat/${AGY_CID}`);
-  assert(text(q(again, "sandbox-warning")).includes("AGY 的沙盒"));
+  assert(text(q(again, "sandbox-warning")).includes("AGY 的保護範圍（沙盒）"));
 });
 
 test("deleting an AGY chat says AGY keeps its own copy and where", async () => {
@@ -325,7 +327,7 @@ test("the first-time notes name AGY: what it costs, that it goes to Google, the 
   assert(app.CHAT_INTRO.some(([t]) => t === "用 AGY 聊天"));
   const agy = app.CHAT_INTRO.find(([t]) => t === "用 AGY 聊天")[1];
   for (const w of ["Google 方案", "送到 Google", "不是帳單", "超過花費上限", "驗證聊天", "AGY 員工會用到你自己裝的 AGY 技能", "讀取檔案", "沒有可以改的內容", "下一則訊息"]) assert(agy.includes(w), w);
-  assert(all.includes("Claude Code 或 Codex、而且已啟用的角色卡可以聊天（AGY 的員工也可以"), "the old sentence stays, with AGY beside it");
+  assert(all.includes("Claude Code 或 Codex、而且已啟用的員工可以聊天（AGY 的員工也可以"), "the old sentence stays, with AGY beside it");
 });
 
 // ---- memory and the shared folder: off, and a yes to Google first -----------------------------------------------------------
@@ -500,19 +502,30 @@ test("a dispatch proposal with an AGY employee (v0.20.0): the tick says AGY cann
   assert.strictEqual(sent.confirm_company, undefined);
 });
 
-test("the chief of staff's desk on an AGY CEO's chat says the talk goes to Claude Code; other CEOs' desks do not", async () => {
-  setHandler(() => jsonResponse({ ok: true, chiefs: [], dispatch: [] }));
+test("the chief of staff's menu item on an AGY CEO's chat says the talk goes to Claude Code; other CEOs' items do not", async () => {
+  // (P47-4) the sentence that stood beside the button now stands under the item 「請幕僚長安排」 of the 「⋯」 menu
+  setHandler((url) => {
+    const p = url.split("?")[0];
+    if (p === "/api/chats") return jsonResponse(listing());
+    if (p === `/api/chats/${AGY_CID}`) return jsonResponse(agyDetail({ card: { id: "emp-5", name: "AGY CEO", position: "planner", tool: "agy", engine: "agy-chat", enabled: true, can_chat: true, code: null, reason: null } }));
+    if (p === `/api/chats/${AGY_CID}/stream`) return { ok: false, status: 503, headers: { get: () => "" }, json: async () => ({}) };
+    return jsonResponse({ ok: true, chiefs: [], dispatch: [], suggestions: [] });
+  });
   const real = global.setInterval;
   global.setInterval = () => 0;
   try {
-    const agy = app.chiefDesk(AGY_CID, { tool: "agy" });
-    assert(text(q(agy.node, "agy-sends", "data-chief")).includes("AGY") && text(q(agy.node, "agy-sends", "data-chief")).includes("Claude Code（Anthropic）"));
-    assert.strictEqual(q(agy.node, "codex-sends", "data-chief"), null);
-    agy.stop();
-    const claude = app.chiefDesk(AGY_CID, { tool: "claude" });
-    assert.strictEqual(q(claude.node, "agy-sends", "data-chief"), null);
-    claude.stop();
+    global.location.hash = `#/chat/${AGY_CID}`;
+    await app.route(); await settle();
+    const main = h.dom().mainEl;
+    const item = main.find((n) => n.getAttribute && n.getAttribute("data-chat-menu") === "chief");
+    assert(item, "the CEO's menu has the item");
+    const says = q(item, "agy-sends", "data-chief");
+    assert(says && text(says).includes("AGY") && text(says).includes("Claude Code（Anthropic）"));
+    assert.strictEqual(q(item, "codex-sends", "data-chief"), null);
   } finally { global.setInterval = real; }
+  const claude = app.chiefDesk(AGY_CID, { tool: "claude" });
+  assert.strictEqual(q(claude.node, "agy-sends", "data-chief"), null);
+  claude.stop();
   assert(app.CHIEF_NEEDS_WHY.includes("Codex 或 AGY"));
 });
 
@@ -524,7 +537,7 @@ test("a role card of an AGY employee can chat and says what AGY is for; a card o
   const agy = mk("agy");
   const btn = agy.find((n) => n.getAttribute && n.getAttribute("data-pcard") === "chat");
   assert.notStrictEqual(btn.disabled, true);
-  assert.strictEqual(text(agy.find((n) => n.getAttribute && n.getAttribute("data-pcard") === "agy-note")), "AGY 的員工可以聊天（每個指令都問你）；要在終端機出發請選完整模式。");
+  assert.strictEqual(text(agy.find((n) => n.getAttribute && n.getAttribute("data-pcard") === "agy-note")), "AGY 的員工可以聊天（每個指令都問你）；要在指令視窗開始工作請選「完全交給他（有風險）」。");
   const grok = mk("grok");
   assert.strictEqual(grok.find((n) => n.getAttribute && n.getAttribute("data-pcard") === "chat").disabled, true);
   assert.strictEqual(grok.find((n) => n.getAttribute && n.getAttribute("data-pcard") === "agy-note"), null);

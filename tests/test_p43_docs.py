@@ -107,7 +107,7 @@ class SharedFolderDocsTests(unittest.TestCase):
             self.assertIn(word, self.adr, word)
 
     def test_the_glossary_has_the_new_term_and_the_changed_ones(self):
-        for term in ("**共用資料夾**：", "_避免_：shared folder", "群組", "派工"):
+        for term in ("**共用資料夾**：", "_避免_：shared folder", "群組", "分配工作"):
             self.assertIn(term, self.glossary, term)
         self.assertIn("共用資料夾", self.glossary[self.glossary.index("**群組**"):self.glossary.index("**共用資料夾**")])
 
@@ -126,7 +126,7 @@ class SharedFolderDocsTests(unittest.TestCase):
         self.assertIn("4,096 bytes", self.section)
 
     def test_the_words_the_documents_quote_are_the_ones_the_page_uses(self):
-        for words in ("讓這幾位都能用共用資料夾", "替這次派工的員工打開共用資料夾", "在 Finder 打開", "還要檢查一次", "這段時間共用資料夾裡新增或改過",
+        for words in ("讓這幾位都能用共用資料夾", "替這次分配工作的員工打開共用資料夾", "在 Finder 打開", "還要檢查一次", "這段時間共用資料夾裡新增或改過",
                       "不要在 Finder 裡直接打開你不認得的檔案", "每位員工預設都是關的"):
             self.assertIn(words, self.app, words)
 

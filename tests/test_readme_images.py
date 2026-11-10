@@ -180,10 +180,10 @@ class ReadmeImages(unittest.TestCase):
         source, so a rename cannot leave a README describing a button that is gone."""
         app = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
         quoted = ("接手提醒", "改成只觀看", "這是你剛開的終端，可以直接打字；打的字會直接送給 Agent", "核准計畫並開啟自動執行…",
-                  "終端工作台", "標記：", "這是什麼", "打開角色卡", "回角色卡池", "回任務卡", "往下捲動看更多", "確認啟動",
+                  "終端工作台", "標記：", "這是什麼", "打開角色卡", "回員工詳細資料", "回任務卡", "往下捲動看更多", "確認啟動",
                   "這個終端沒有關聯任務卡", "現在打字可能打斷它", "名冊，不代表正在出勤", "收藏中", "生效中", "看七項細節",
                   # v0.9.0: the wizard's step 2, the full-mode pass, the meeting pages and the office's meeting room
-                  "VBear 內建：審查關卡（給任務卡的審查位）", "出發方式", "回復預設", "貼上職位指示", "VBear 沒有限制這張卡",
+                  "VBear 內建：審查關卡（給專案的審查位）", "出發方式", "回復預設", "貼上職位指示", "VBear 沒有限制這張卡",
                   "開會討論", "預覽（還不會開始）", "開始開會", "代發言", "董事長桌", "去核准", "寫進任務卡", "輪到你：董事長核准")
         for phrase in quoted:
             self.assertIn(phrase, app, phrase)
@@ -214,13 +214,15 @@ class ChangelogRelease(unittest.TestCase):
 
     def test_the_release_heading_matches_the_version(self):
         headings = [h for h in re.findall(r"^## (.+)$", self.text, re.M) if h != "Unreleased"]
-        self.assertTrue(headings[0].startswith("v0.20.0"), headings[:3])
-        self.assertTrue(headings[1].startswith("v0.19.0"), headings[:3])
-        self.assertTrue(headings[2].startswith("v0.18.0"), headings[:3])
+        self.assertTrue(headings[0].startswith("v0.21.0"), headings[:4])            # (P47-6 put v0.21.0 in front)
+        self.assertTrue(headings[1].startswith("v0.20.0"), headings[:4])
+        self.assertTrue(headings[2].startswith("v0.19.0"), headings[:4])
+        self.assertTrue(headings[3].startswith("v0.18.0"), headings[:4])
         init = (ROOT / "vbear" / "__init__.py").read_text(encoding="utf-8")
         # P46-6 wrote the v0.20.0 section and left the version number alone: the coordinator bumps it when the release is made, and it is
-        # 0.19.0 until then and 0.20.0 after (the heading and the number must never disagree once it is bumped)
-        self.assertIn('__version__ = "0.20.0"', init)
+        # 0.19.0 until then and 0.20.0 after (the heading and the number must never disagree once it is bumped). P47-6 wrote the v0.21.0
+        # section and again left the number: it stays 0.20.0 until the coordinator bumps it to 0.21.0 and this line is changed with it.
+        self.assertIn('__version__ = "0.21.0"', init)
 
     def test_the_v090_section_covers_positions_professions_and_the_hover_box(self):
         section = self.text[self.text.index("## v0.9.0"):self.text.index("## v0.8.9")]

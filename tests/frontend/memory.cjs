@@ -83,7 +83,7 @@ test("the page says where memory goes and which words belong to the card, first"
   assert.strictEqual(text(main.find((n) => n.tag === "h1")), "記憶");
   assert(text(main).includes(WHERE), "the company line, from the server");
   assert(text(main).includes("Anthropic") && text(main).includes("OpenAI"));
-  assert(text(q(main, "split")).includes("只有這位員工要照做的，寫在角色卡的固定指示；換一位員工也該知道的，放記憶。"));
+  assert(text(q(main, "split")).includes("只有這位員工要照做的，寫在員工的固定指示；換一位員工也該知道的，放記憶。"));
   assert(text(q(main, "used")).includes("0／50 條、0／4,000 字"));
   assert(text(q(main, "used")).includes("記憶越長，員工每次開新程序會多花一點"));
   assert.strictEqual(qa(main, "group").length, 3);
@@ -431,7 +431,7 @@ test("who takes the memory: each employee with the tool and the company, a switc
   assert.strictEqual(q(codex, "card-switch").checked, false, "Codex starts off");
   assert(text(grok).includes("這位員工的 AI 工具還不能聊天，用不到記憶"));
   assert.strictEqual(q(grok, "card-switch"), null);
-  assert(text(main).includes("在終端機（完整模式）出發時不帶記憶"));
+  assert(text(main).includes("在指令視窗（「完全交給他（有風險）」）開始工作時不帶記憶"));
   assert(text(q(main, "cards-note")).includes("Codex") && text(q(main, "cards-note")).includes("OpenAI"));
 });
 
@@ -489,14 +489,14 @@ test("a page that sends no cards shows no switches and no guess", async () => {
   setPage({ memory: { ...view([]), cards: undefined } });
   const main = await open();
   assert.strictEqual(qa(main, "card").length, 0);
-  assert(text(main).includes("在終端機（完整模式）出發時不帶記憶"));
+  assert(text(main).includes("在指令視窗（「完全交給他（有風險）」）開始工作時不帶記憶"));
 });
 
-test("the nav has the memory page after the chat, the route is known, and the code keeps its rules", () => {
+test("(P47-1) the memory page is a page of the 員工 item of the menu (it lights it), the route is known, and the code keeps its rules", () => {
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
-  assert(html.includes('data-nav="memory"'));
-  assert(html.indexOf('data-nav="chat"') < html.indexOf('data-nav="memory"') && html.indexOf('data-nav="memory"') < html.indexOf('data-nav="dispatch"'));
+  assert(html.includes('data-nav="employees"'));
   const source = fs.readFileSync(path.join(root, "app.js"), "utf8");
+  assert(/\bmemory: "employees"/.test(source.slice(source.indexOf("const NAV_PARENT = {"), source.indexOf("const ADVANCED_NAV"))), "the memory page lights 員工");
   assert(/top === "memory"\) await viewMemory\(\)/.test(source));
   const part = source.slice(source.indexOf("// ---------- memory (P42-1"), source.indexOf("// ---------- meetings (P34-5)"));
   assert(part.length > 3000);

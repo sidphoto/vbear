@@ -23,13 +23,13 @@ PATH = "/api/settings/autonomy"
 
 # the wording of plan.md (P40), word for word
 TITLE_1 = "幕僚長可以自己建新員工"
-EFFECT_1 = "幕僚長提議要新員工時，VBear 不等你確認就建好（一律安全模式），你可以在「AI 自己做了什麼」撤回。"
-TITLE_2 = "幕僚長可以自己派工給員工"
-EFFECT_2 = ("幕僚長的提議一到就開始派工，不再停在提議卡；員工照舊每個指令都問你。提議要新員工（而第 1 項沒勾）、VBear 拿掉了東西、"
+EFFECT_1 = "幕僚長提議要新員工時，VBear 不等你確認就建好（一律每件事先問我），你可以在「AI 自己做了什麼」撤回。"
+TITLE_2 = "幕僚長可以自己分配工作給員工"
+EFFECT_2 = ("幕僚長的提議一到就開始分配工作，不再停在提議卡；員工照舊每個指令都問你。提議要新員工（而第 1 項沒勾）、VBear 拿掉了東西、"
             "或幕僚長有問題要問你時，還是會停下來等你。")
 OFF4 = {"create_cards": False, "dispatch": False, "routines": False, "auto_continue": False}
 TITLE_5 = "碰到上限暫停的工作，倒數結束後自動接續"
-EFFECT_5 = ("派工碰到每天上限或 AI 工具的方案用量上限暫停時，到了恢復時間 VBear 自己按「繼續」（每份派工最多 3 次，全部加起來每天最多 5 次）。"
+EFFECT_5 = ("分配工作碰到花費上限或 AI 工具的方案用量上限暫停時，到了恢復時間 VBear 自己按「繼續」（每份分配工作最多 3 次，全部加起來每天最多 5 次）。"
             "被打斷的那一步不會重做，下一步會被告知上一步可能不完整。AI 工具沒說恢復時間時（Claude Code 目前都沒說）不會自己接續；群組不會自己接續。")
 LATER = "第 4 項（不必每次問）會在之後的版本加入。"
 
@@ -52,12 +52,15 @@ class TableTests(unittest.TestCase):
         self.assertEqual((second["title"], second["effect"]), (TITLE_2, EFFECT_2))
         fifth = autonomy.ITEMS[4]
         self.assertEqual((fifth["title"], fifth["effect"]), (TITLE_5, EFFECT_5))
+        third = autonomy.ITEMS[2]
+        self.assertEqual(third["title"], "定時工作到時間可以自己開始")
+        self.assertIn("定時工作不會自己建立或啟用，只有你能。", third["effect"])
         self.assertEqual(autonomy.LATER_NOTE, LATER)
 
     def test_the_three_things_never_allowed_are_listed(self):
         self.assertEqual(len(autonomy.NEVER), 3)
         joined = "".join(autonomy.NEVER)
-        for word in ("每天", "完整模式", "技能"):
+        for word in ("每天", "完全交給他（有風險）", "技能"):
             self.assertIn(word, joined)
 
 

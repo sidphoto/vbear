@@ -57,6 +57,21 @@ Never, whatever the person ticked in 「自己動手」:
      code reaches no feature's writer, and memory and the shared folder are off for an AGY employee until the person says yes to Google).
      The behaviour is tested in tests/test_agy_chat_protocol.py, tests/test_p46_agy_chat_daemon.py and tests/test_p46_features.py.
 
+  15. (P47, ADR 0013) the plain navigation of v0.21.0 changes only what the screen shows. Five rules, tested where the thing is:
+     15a  the advanced mode (settings, ``advanced_mode``) is only a display: in ``vbear/`` only ``config.py`` (its default) and ``server.py``
+          (``CONFIG_WRITABLE`` and the line that makes it a boolean) name it, so no Python reads it to decide a behaviour; switching it changes
+          none of the autonomy settings, the spending limits, the chat limits or the launch mode of an employee; ``web/app.js`` names it only to
+          read it (``conf.advanced_mode``) and as the body of the settings switch's POST to /api/config. (This file, ``AdvancedModeIsADisplay`` and ``AdvancedModeChangesNothingElse``.)
+     15b  nothing new is asked of the server and nothing about the data changes: the ``/api/`` paths ``web/app.js`` uses are a subset of those
+          of v0.20.0, the routes of ``vbear/server.py`` are those of v0.20.0, and the kinds of a chat's record (``chat_store.KINDS``,
+          ``_OPTIONAL``, ``_ALTERNATIVES``) and their fields are those of v0.20.0. (This file, ``NothingNewIsAsked``.)
+     15c  the home page sends nothing by itself: only the press of 「送出」 sends one message (P47-2, tests/frontend/p47_home.cjs).
+     15d  the spending limit and a routine are changed only by the person's press: the settings page sends nothing when it loads, the limit is
+          saved by 「儲存」 alone, a routine kept on goes through ``confirmInPage`` when 「自己動手」 item 3 is on (P47-3, tests/frontend/p47_settings.cjs).
+     15e  the lighter chat page keeps every confirmation and warning, and a spending limit that stops a message is said in plain words with a way to
+          raise it, the person's words kept in the box (P47-4, tests/frontend/p47_chat.cjs).
+     P47-6's documentation test checks that the five files exist and carry the number of their rule.
+
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
 ``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py``, ``vbear/skillbook*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
 staff, of dispatch, of groups and of memory (the suggestions, P42-4) are held to it the day they are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
@@ -2106,6 +2121,336 @@ class AgyFeatureRules(unittest.TestCase):
             for word in ("memory", "shared", "confirm_company", "send_to_google"):
                 self.assertNotIn(word, text)
             self.assertEqual(body["model"], {"tool": "agy", "model_id": ""})
+
+
+# ===================================================================================================================================
+# 15a, 15b (P47-1, ADR 0013): the plain navigation changes only what the screen shows. 15c, 15d and 15e are in the front-end tests named in
+# the module's description above; P47-6's documentation test checks that those files carry their rule.
+# ===================================================================================================================================
+
+ADVANCED_MODE = "advanced_mode"
+
+
+def _advanced_mode_nodes(tree):
+    """Every place of a syntax tree that names the advanced mode as a string (a key, a name in a set, a call's text) or as a name."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and node.value == ADVANCED_MODE:
+            yield node
+        elif isinstance(node, ast.Name) and node.id == ADVANCED_MODE:
+            yield node
+        elif isinstance(node, ast.Attribute) and node.attr == ADVANCED_MODE:
+            yield node
+        elif isinstance(node, ast.keyword) and node.arg == ADVANCED_MODE:
+            yield node
+
+
+def advanced_mode_uses(source: str, label: str = "<source>", allow: str = "") -> list[str]:
+    """The places of a Python source that name the advanced mode, except the ones ``allow`` names: "default" (a key of the default config),
+    "server" (the set of keys the console may write, and the line that turns the value into a boolean and nothing else)."""
+    tree = ast.parse(source)
+    parents = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parents[child] = parent
+    found = []
+    for node in _advanced_mode_nodes(tree):
+        parent = parents.get(node)
+        ok = False
+        if allow == "default":
+            ok = isinstance(parent, ast.Dict) and node in parent.keys
+        elif allow == "server":
+            if isinstance(parent, ast.Set):
+                ok = True
+            elif isinstance(parent, ast.Tuple) and isinstance(parents.get(parent), ast.Compare):
+                branch = parents.get(parents[parent])
+                ok = (isinstance(branch, ast.If) and len(branch.body) == 1 and isinstance(branch.body[0], ast.Assign)
+                      and ast.dump(branch.body[0].value) == ast.dump(ast.parse("bool(value)").body[0].value))
+        if not ok:
+            found.append(f"{label}:{getattr(node, 'lineno', '?')} names the advanced mode")
+    return found
+
+
+# the lines of web/app.js that may name the advanced mode: reading it from the console's config, and the key of the settings switch's save
+APP_ADVANCED_READ = re.compile(r"\b(?:conf|config)\.advanced_mode\b")
+APP_ADVANCED_SAVE = re.compile(r"""(?:saveConf\(|api\.post\("/api/config",\s*)\{\s*advanced_mode:""")
+APP_SENDS = re.compile(r"""api\.(?:post|patch|send|del)\(|fetch\(|localStorage|store\.set""")
+
+
+def app_advanced_uses(source: str, label: str = "<app.js>") -> list[str]:
+    """The lines of the page's code that name the advanced mode in any other way than the two allowed: read from a config, or sent as the
+    key of the save of the settings switch (to /api/config). A line that sends something else with it (any other path, the browser's storage)
+    is a use."""
+    found = []
+    for number, line in enumerate(source.splitlines(), 1):
+        if ADVANCED_MODE not in line or line.lstrip().startswith("//"):
+            continue
+        rest = APP_ADVANCED_READ.sub("", line)
+        rest = APP_ADVANCED_SAVE.sub("", rest)
+        if ADVANCED_MODE in rest:
+            found.append(f"{label}:{number}: {line.strip()[:90]}")
+        elif APP_SENDS.search(line) and not APP_ADVANCED_SAVE.search(line):
+            found.append(f"{label}:{number}: sends it: {line.strip()[:90]}")
+    return found
+
+
+class AdvancedModeIsADisplay(unittest.TestCase):
+    """15a"""
+
+    def test_15a_only_config_and_server_name_the_advanced_mode(self):
+        named = {}
+        for path in sorted(PACKAGE.rglob("*.py")):
+            relative = path.relative_to(PACKAGE).as_posix()
+            if ADVANCED_MODE in path.read_text(encoding="utf-8"):
+                named[relative] = path
+        self.assertEqual(sorted(named), ["config.py", "server.py"], "no other Python file reads the advanced mode to decide anything")
+
+    def test_15a_config_has_it_only_as_its_default_and_server_only_as_a_writable_key_turned_into_a_boolean(self):
+        self.assertEqual(advanced_mode_uses((PACKAGE / "config.py").read_text(encoding="utf-8"), "config.py", "default"), [])
+        self.assertEqual(advanced_mode_uses((PACKAGE / "server.py").read_text(encoding="utf-8"), "server.py", "server"), [])
+        self.assertEqual(cfg_default()["advanced_mode"], False, "off unless the person turns it on")
+
+    def test_15a_the_scan_fires_on_small_made_up_sources(self):
+        read = "def mode(conf):\n    if conf.get('advanced_mode'):\n        return 'full'\n    return 'safe'\n"
+        self.assertEqual(len(advanced_mode_uses(read, "x.py")), 1)
+        attr = "def f(c):\n    return c.advanced_mode\n"
+        self.assertEqual(len(advanced_mode_uses(attr, "x.py")), 1)
+        kw = "launch(advanced_mode=True)\n"
+        self.assertEqual(len(advanced_mode_uses(kw, "x.py")), 1)
+        self.assertEqual(len(advanced_mode_uses("DEFAULT = {'advanced_mode': False}\n", "x.py", "server")), 1, "a default belongs to config.py, not the server")
+        self.assertEqual(advanced_mode_uses("DEFAULT = {'advanced_mode': False}\n", "x.py", "default"), [])
+        self.assertEqual(advanced_mode_uses("W = {'a', 'advanced_mode'}\n", "x.py", "server"), [])
+        ok = "for key in body:\n    if key in ('advanced_mode', 'usage_enabled'):\n        value = bool(value)\n"
+        self.assertEqual(advanced_mode_uses(ok, "x.py", "server"), [])
+        bad = "for key in body:\n    if key in ('advanced_mode', 'usage_enabled'):\n        value = bool(value)\n        grant(value)\n"
+        self.assertEqual(len(advanced_mode_uses(bad, "x.py", "server")), 1, "the line may do nothing but make a boolean")
+        other = "for key in body:\n    if key in ('advanced_mode',):\n        full_mode = True\n"
+        self.assertEqual(len(advanced_mode_uses(other, "x.py", "server")), 1)
+
+    def test_15a_the_page_names_it_only_to_read_it_and_to_save_the_switch(self):
+        source = (Path(__file__).resolve().parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertEqual(app_advanced_uses(source), [])
+        self.assertGreaterEqual(len([line for line in source.splitlines() if ADVANCED_MODE in line]), 2, "and it does name it (the scan is looking at something)")
+
+    def test_15a_the_page_scan_fires_on_small_made_up_sources(self):
+        reads = ["const advanced = !!conf.advanced_mode;", "const on = !!(conf && conf.advanced_mode);", "if (config.advanced_mode) show();"]
+        for line in reads:
+            self.assertEqual(app_advanced_uses(line), [], line)
+        saves = ["on: { change: (e) => saveConf({ advanced_mode: e.target.checked }) }", 'await api.post("/api/config", { advanced_mode: true });']
+        for line in saves:
+            self.assertEqual(app_advanced_uses(line), [], line)
+        for line in ['await api.post("/api/dispatch", { advanced_mode: conf.advanced_mode });',
+                     'await api.post("/api/chats", { profile_id: p, mode: conf.advanced_mode ? "full" : "safe" });',
+                     'store.set("mode", conf.advanced_mode);',
+                     'const mode = advanced_mode ? "full" : "safe";',
+                     'fetch("/x?m=" + conf.advanced_mode);',
+                     'api.post("/api/settings/autonomy", { advanced_mode: true });']:
+            self.assertEqual(len(app_advanced_uses(line)), 1, line)
+        self.assertEqual(app_advanced_uses("// the advanced_mode switch\n"), [], "a comment is not a use")
+
+
+class AdvancedModeChangesNothingElse(unittest.TestCase):
+    """15a, the behaviour: a console with the advanced mode turned on and off answers everything else the same."""
+
+    def setUp(self):
+        import tempfile
+        import threading
+        import urllib.error
+        import urllib.request
+        from http.server import ThreadingHTTPServer
+        from vbear import config as cfg, server
+        from vbear.index import Store
+        self.tmp = tempfile.TemporaryDirectory(prefix="vbear-p47-adv-")
+        self.addCleanup(self.tmp.cleanup)
+        home = Path(self.tmp.name) / "h"
+        home.mkdir()
+        patch = mock.patch.dict(os.environ, {"HOME": str(home), "VBEAR_HOME": str(home / ".vbear"), "VBEAR_RUNTIME_AUTOSTART": "0"})
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.token = "synthetic-test-token"
+        self.console = c = server.Console.__new__(server.Console)
+        c.lock = threading.Lock()
+        c.auth_token = self.token
+        c.store = Store()
+        c.store._static = {"skills": [], "roles": []}
+        c.store.set_conf(cfg.load())
+        c.runtime = mock.Mock(binary=lambda: "unused")
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
+        c.port = self.httpd.server_address[1]
+        self.httpd.RequestHandlerClass = server.make_handler(c)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.addCleanup(self.httpd.server_close)
+        self.addCleanup(self.httpd.shutdown)
+        self._urllib = urllib
+
+    def call(self, path, method="GET", body=None):
+        headers = {"Authorization": f"Bearer {self.token}", "X-VBear": "1", "Origin": f"http://127.0.0.1:{self.console.port}",
+                   "Content-Type": "application/json"}
+        data = json.dumps(body).encode() if body is not None else None
+        req = self._urllib.request.Request(f"http://127.0.0.1:{self.console.port}" + path, data=data, method=method, headers=headers)
+        try:
+            with self._urllib.request.urlopen(req, timeout=15) as response:
+                return response.status, json.loads(response.read())
+        except self._urllib.error.HTTPError as exc:
+            with exc:
+                return exc.code, json.loads(exc.read() or b"{}")
+
+    def snapshot(self):
+        autonomy = self.call("/api/settings/autonomy")
+        config = self.call("/api/config")
+        profiles = self.call("/api/agent-profiles")
+        self.assertEqual((autonomy[0], config[0], profiles[0]), (200, 200, 200), (autonomy, config, profiles))
+        conf = dict(config[1]["config"])
+        conf.pop(ADVANCED_MODE, None)
+        return {"autonomy": autonomy[1], "config": conf,
+                "launch_modes": sorted((p["id"], p.get("launch_mode")) for p in profiles[1]["profiles"])}
+
+    def test_15a_switching_it_changes_no_autonomy_setting_no_limit_and_no_launch_mode(self):
+        from vbear import agent_profiles as ap
+        card = ap.save_profile(None, {"name": "虛構員工", "position": "pm", "model": {"tool": "claude"}})["id"]
+        self.assertEqual(self.call("/api/config", "POST", {"meeting_limits": {"daily_usd": 7}})[0], 200)
+        self.assertEqual(self.call("/api/config", "POST", {"chat_limits": {"per_turn_usd": 0.5}})[0], 200)
+        self.assertEqual(self.call("/api/settings/autonomy", "POST", {"create_cards": False, "dispatch": False, "routines": True, "auto_continue": False})[0], 200)
+        before = self.snapshot()
+        self.assertIn(card, [p[0] for p in before["launch_modes"]])
+        self.assertEqual(before["config"]["meeting_limits"]["daily_usd"], 7)
+        self.assertEqual(before["config"]["chat_limits"]["per_turn_usd"], 0.5)
+        for value in (True, False, True):
+            status, out = self.call("/api/config", "POST", {ADVANCED_MODE: value})
+            self.assertEqual(status, 200, out)
+            self.assertIs(self.call("/api/config")[1]["config"][ADVANCED_MODE], value)
+            self.assertEqual(self.snapshot(), before, f"advanced mode {value} changed nothing else")
+        self.assertEqual(self.call("/api/config", "POST", {ADVANCED_MODE: "yes"})[0], 200)
+        self.assertIs(self.call("/api/config")[1]["config"][ADVANCED_MODE], True, "a value that is not a boolean is made one")
+        self.assertEqual(self.snapshot(), before)
+
+def cfg_default():
+    from vbear import config as cfg
+    return cfg.DEFAULT_CONFIG
+
+
+# --- 15b ---------------------------------------------------------------------------------------------------------------------------
+# What v0.20.0 (f920402) had. A later version may use fewer of these; it may not use one that is not here.
+V0200_APP_API_PREFIXES = frozenset({
+    "/api/actions", "/api/agent-builder/catalog", "/api/agent-builder/intent-check?", "/api/agent-profiles",
+    "/api/agent-profiles/", "/api/annotations", "/api/armory", "/api/auth", "/api/chat-support/verify", "/api/chats",
+    "/api/chats/", "/api/chief", "/api/chief/", "/api/chief/preview?chat_id=", "/api/config", "/api/dispatch",
+    "/api/dispatch/", "/api/first-ceo", "/api/flows", "/api/flows/", "/api/flows/storage", "/api/folders/inspect?path=",
+    "/api/governance", "/api/groups", "/api/groups/", "/api/live", "/api/meetings", "/api/meetings/", "/api/meetings/ledger",
+    "/api/meetings/preview", "/api/meetings/verify", "/api/memory", "/api/memory/", "/api/memory/cards", "/api/memory/clear",
+    "/api/memory/export", "/api/memory/suggest", "/api/memory/suggest/", "/api/memory/suggest/preview", "/api/my-skills",
+    "/api/my-skills/", "/api/my-skills/suggest", "/api/my-skills/suggest/", "/api/my-skills/suggest/preview",
+    "/api/native/agent-launches", "/api/native/agent-previews", "/api/native/claude-verification", "/api/native/sessions/",
+    "/api/native/terminals", "/api/overview", "/api/rescan", "/api/role-translations", "/api/role-translations/batch",
+    "/api/role-translations/batch/cancel", "/api/roles", "/api/routines", "/api/routines/", "/api/routines/missed/",
+    "/api/routines/settings", "/api/routines/waiting/", "/api/settings/autonomy", "/api/setup/daily-limit",
+    "/api/setup/settle", "/api/setup/terminals", "/api/setup/tools", "/api/setup/tools/", "/api/setup/tools?force=1",
+    "/api/shared", "/api/shared/cards", "/api/shared/reveal", "/api/skills", "/api/skills/", "/api/staffing", "/api/staffing/",
+    "/api/staffing/preview", "/api/staffing/suggest?task_id=", "/api/staffing?task_id=", "/api/task-templates", "/api/tasks",
+    "/api/tasks/", "/api/templates", "/api/templates/applies/", "/api/templates/apply", "/api/templates/mine",
+    "/api/templates/mine/", "/api/templates/preview", "/api/term/", "/api/translations", "/api/translations/batch",
+    "/api/translations/batch/cancel", "/api/translations/orphans", "/api/translations/verify", "/api/waiting",
+})
+
+V0200_SERVER_ROUTES = frozenset({
+    "/api/", "/api/actions", "/api/agent-builder/catalog", "/api/agent-builder/intent-check", "/api/agent-profiles",
+    "/api/agent-profiles/", "/api/annotations", "/api/armory", "/api/auth", "/api/chat-support", "/api/chat-support/verify",
+    "/api/chats", "/api/chats/", "/api/chief", "/api/chief/", "/api/chief/preview", "/api/config", "/api/dispatch",
+    "/api/dispatch/", "/api/first-ceo", "/api/flows", "/api/flows/", "/api/flows/storage", "/api/folders/inspect",
+    "/api/governance", "/api/groups", "/api/groups/", "/api/live", "/api/meetings", "/api/meetings/", "/api/meetings/ledger",
+    "/api/meetings/preview", "/api/meetings/verify", "/api/memory", "/api/memory/", "/api/memory/cards", "/api/memory/clear",
+    "/api/memory/export", "/api/memory/suggest", "/api/memory/suggest/", "/api/memory/suggest/preview", "/api/my-skills",
+    "/api/my-skills/", "/api/my-skills/suggest", "/api/my-skills/suggest/", "/api/my-skills/suggest/preview",
+    "/api/native/agent-launches", "/api/native/agent-previews", "/api/native/claude-verification", "/api/native/sessions",
+    "/api/native/sessions/", "/api/native/terminals", "/api/overview", "/api/rescan", "/api/role-translations",
+    "/api/role-translations/batch", "/api/role-translations/batch/cancel", "/api/roles", "/api/routines", "/api/routines/",
+    "/api/routines/settings", "/api/settings/autonomy", "/api/setup/daily-limit", "/api/setup/settle", "/api/setup/terminals",
+    "/api/setup/tools", "/api/setup/tools/", "/api/shared", "/api/shared/cards", "/api/shared/reveal", "/api/skills",
+    "/api/skills/", "/api/staffing", "/api/staffing/", "/api/staffing/preview", "/api/staffing/suggest", "/api/task-templates",
+    "/api/tasks", "/api/tasks/", "/api/templates", "/api/templates/", "/api/templates/apply", "/api/templates/mine",
+    "/api/templates/preview", "/api/term/", "/api/translations", "/api/translations/batch", "/api/translations/batch/cancel",
+    "/api/translations/orphans", "/api/translations/verify", "/api/waiting",
+})
+
+CHAT_KINDS_V0200 = {
+    "chat_created": ("profile_id",),
+    "user_message": ("text", "turn"),
+    "turn_started": ("cap_usd", "turn"),
+    "process_started": ("budget_usd", "instructions", "mode"),
+    "session_ready": ("model", "permission_mode"),
+    "reply": ("text", "truncated", "turn"),
+    "tool_call": ("summary", "tool", "tool_use_id", "turn"),
+    "tool_result": ("is_error", "source", "text", "tool", "tool_use_id", "truncated", "turn"),
+    "card": ("card_id", "editable", "input", "reason", "state", "tool", "turn"),
+    "card_decision": ("card_id", "decision", "turn", "value"),
+    "auto_allowed": ("reason", "summary", "tool", "tool_use_id", "turn"),
+    "denied": ("by", "reason", "summary", "tool", "tool_use_id", "turn"),
+    "turn_ended": ("cost_usd", "is_error", "reason", "reported", "subtype", "total_usd", "turn"),
+    "process_ended": ("reason", "returncode"),
+    "anomaly": ("event_type", "fields"),
+    "error": ("message", "turn"),
+    "session_bound": ("thread_id",),
+    "usage": ("delta_tokens", "total_tokens", "turn"),
+    "plan_usage": ("primary_pct", "primary_resets_at", "primary_window_min", "reached", "secondary_pct", "secondary_resets_at", "secondary_window_min", "turn"),
+    "card_edit_sent": ("card_id", "text"),
+}
+CHAT_OPTIONAL_V0200 = {"turn_ended": ("estimate", "tokens"), "user_message": ("origin",)}
+CHAT_ALTERNATIVES_V0200 = {"session_ready": ("claude_code_version", "cli_version")}
+API_PREFIX = re.compile(r"""["'`](/api/[^"'`$\s]*)""")
+
+
+def app_api_prefixes(source: str) -> set[str]:
+    """The /api/ paths the page uses, each cut at the first ``${``, quote or space: ``/api/chats/${id}`` is ``/api/chats/``."""
+    return set(API_PREFIX.findall(source))
+
+
+def server_routes(source: str) -> set[str]:
+    """Every string of the console that is a path under /api/ (the routes it answers)."""
+    return {n.value for n in ast.walk(ast.parse(source)) if isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value.startswith("/api/")}
+
+
+def chat_record_shape(kinds, optional, alternatives) -> dict:
+    """The kinds of a chat's record and the names of their fields (not the checks of their values)."""
+    return {"kinds": {k: tuple(sorted(v)) for k, v in kinds.items()},
+            "optional": {k: tuple(sorted(v)) for k, v in optional.items()},
+            "alternatives": {k: tuple(sorted(v)) for k, v in alternatives.items()}}
+
+
+class NothingNewIsAsked(unittest.TestCase):
+    """15b"""
+
+    def test_15b_the_page_uses_no_path_that_v0200_did_not(self):
+        source = (Path(__file__).resolve().parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        used = app_api_prefixes(source)
+        self.assertGreater(len(used), 60, "the scan is looking at something")
+        self.assertEqual(sorted(used - V0200_APP_API_PREFIXES), [], "a path v0.20.0 did not use")
+
+    def test_15b_the_console_answers_the_routes_of_v0200_and_no_other(self):
+        used = server_routes((PACKAGE / "server.py").read_text(encoding="utf-8"))
+        self.assertEqual(sorted(used - V0200_SERVER_ROUTES), [], "a new route")
+        self.assertEqual(sorted(V0200_SERVER_ROUTES - used), [], "a route of v0.20.0 that is gone")
+
+    def test_15b_the_record_of_a_chat_has_the_kinds_and_fields_of_v0200(self):
+        from vbear.runtime import chat_store
+        shape = chat_record_shape(chat_store.KINDS, chat_store._OPTIONAL, chat_store._ALTERNATIVES)
+        self.assertEqual(shape["kinds"], {k: tuple(sorted(v)) for k, v in CHAT_KINDS_V0200.items()})
+        self.assertEqual(shape["optional"], {k: tuple(sorted(v)) for k, v in CHAT_OPTIONAL_V0200.items()})
+        self.assertEqual(shape["alternatives"], {k: tuple(sorted(v)) for k, v in CHAT_ALTERNATIVES_V0200.items()})
+
+    def test_15b_the_scans_fire_on_small_made_up_sources(self):
+        new_path = 'api.get("/api/spending");\nconst x = `/api/chats/${id}/summary`;\n'
+        self.assertEqual(app_api_prefixes(new_path) - V0200_APP_API_PREFIXES, {"/api/spending"}, "a new path is caught; a longer one under a known prefix is the same prefix")
+        self.assertEqual(app_api_prefixes('api.get("/api/chats/" + id)') - V0200_APP_API_PREFIXES, set())
+        route = 'if path == "/api/spending":\n    return 1\nif path.startswith("/api/chats/"):\n    return 2\n'
+        self.assertEqual(server_routes(route) - V0200_SERVER_ROUTES, {"/api/spending"})
+        kinds = dict(CHAT_KINDS_V0200)
+        base = chat_record_shape({k: dict.fromkeys(v) for k, v in kinds.items()}, {k: dict.fromkeys(v) for k, v in CHAT_OPTIONAL_V0200.items()},
+                                 {k: dict.fromkeys(v) for k, v in CHAT_ALTERNATIVES_V0200.items()})
+        self.assertEqual(base["kinds"], {k: tuple(sorted(v)) for k, v in CHAT_KINDS_V0200.items()}, "the helper reads a table the way the test does")
+        more = chat_record_shape({**{k: dict.fromkeys(v) for k, v in kinds.items()}, "spending": {"usd": None}}, {}, {})
+        self.assertNotEqual(more["kinds"], base["kinds"], "a new kind is caught")
+        fewer = {k: dict.fromkeys(v) for k, v in kinds.items()}
+        fewer["reply"] = {"text": None, "turn": None, "truncated": None, "extra": None}
+        self.assertNotEqual(chat_record_shape(fewer, {}, {})["kinds"], base["kinds"], "a new field of a kind is caught")
 
 
 if __name__ == "__main__":

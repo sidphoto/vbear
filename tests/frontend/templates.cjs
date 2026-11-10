@@ -64,7 +64,7 @@ function previewOf(body, over = {}) {
     }
     return { from: r.from, name: it.name, days: it.days, times: it.times, assignee };
   });
-  const problems = routines.filter((r) => !r.assignee.kind).map((r) => ({ code: "no_assignee", from: r.from, text: `例行工作「${r.name}」還沒有交給任何員工，請在預覽裡選一位。` }));
+  const problems = routines.filter((r) => !r.assignee.kind).map((r) => ({ code: "no_assignee", from: r.from, text: `例行工作「${r.name}」還沒有交給任何員工，請在預覽裡選一位。` }));   // the server's own sentence (vbear/templates.py)
   const now = state.counts;
   const after = (k, add, max) => ({ now: now[k], add, after: now[k] + add, max });
   const pv = { tool: body.tool, cards, skills: body.skills.map((s) => ({ from: s.from, name: find("skills", s.from).name })), routines,
@@ -76,7 +76,7 @@ function previewOf(body, over = {}) {
 }
 function setServer(over = {}) {
   state = { builtin: [shop, studio], mine: [], tools: TOOLS_READY, counts: { cards: 2, skills: 1, routines: 0 }, problems: [], mine_readable: true, preview: null, previewFails: null,
-    applies: [], apply: null, undoPreview: null, undo: null, ...over };
+    applies: [], apply: null, undoPreview: null, undo: null, profiles: [], ...over };
   calls = [];
   setHandler((url, opts = {}) => {
     const p = url.split("?")[0];
@@ -89,7 +89,11 @@ function setServer(over = {}) {
     if (p === "/api/live") return jsonResponse({ runtime: { available: true, problems: [] }, sessions: [], attention: [], projects: [], panes: [], usage: { sessions: [] } });
     if (p === "/api/config") return jsonResponse({ config: { advanced_mode: false }, state_dir: "/x", runtime_socket: "" });
     if (p === "/api/waiting") return jsonResponse({ waiting: [] });
+    if (p === "/api/agent-profiles" && method === "GET") {
+      return state.profiles === null ? jsonResponse({ error: "讀不到員工", code: "bad_request" }, false, 500) : jsonResponse({ ok: true, profiles: state.profiles });
+    }
     if (p === "/api/templates" && method === "GET") {
+
       return jsonResponse({ ok: true, builtin: state.builtin, mine: state.mine, mine_readable: state.mine_readable, problem: state.mine_readable ? null : "你存的團隊範本的檔案有問題",
         problems: state.problems, applies: state.applies, counts: state.counts, current: { cards: [], skills: [], routines: [] }, limits: {}, tools: state.tools });
     }
@@ -113,7 +117,7 @@ function appliedOf(body) {
   const items = [];
   body.cards.forEach((c, i) => items.push({ kind: "card", id: `prof-${String(i).padStart(12, "a")}`, from: c.from, state: "made", why: null, name: c.name || "新員工" }));
   body.skills.forEach((x, i) => items.push({ kind: "skill", id: `k-${String(i).padStart(12, "1")}`, from: x.from, state: "made", why: null, name: "新技能" }));
-  body.routines.forEach((x, i) => items.push({ kind: "routine", id: `r-${String(i).padStart(12, "2")}`, from: x.from, state: "made", why: null, name: "新例行工作" }));
+  body.routines.forEach((x, i) => items.push({ kind: "routine", id: `r-${String(i).padStart(12, "2")}`, from: x.from, state: "made", why: null, name: "新定時工作" }));
   const n = (k) => items.filter((i) => i.kind === k).length;
   return { id: A1, at: 1760000000, tool: body.tool, state: "done", undone_at: null, counts: { cards: n("card"), skills: n("skill"), routines: n("routine") },
     left: { cards: n("card"), skills: n("skill"), routines: n("routine") }, items };
@@ -121,7 +125,7 @@ function appliedOf(body) {
 function undoPreviewOf(id) {
   return { apply: id, delete: [{ kind: "routine", id: "r-111111111111", name: "整理昨天的花費" }, { kind: "skill", id: "k-111111111111", name: "寫商品介紹" }, { kind: "card", id: "prof-aaaaaaaaaaaa", name: "會計" }],
     keep: [{ kind: "card", id: "prof-bbbbbbbbbbbb", name: "商品文案", why: "chatted", text: "你跟他聊過天" }], gone: [{ kind: "skill", id: "k-222222222222", name: null }], unsure: 0,
-    notes: [{ code: "terminal", text: "如果你在終端機用過這些員工，VBear 看不出來；確定再刪。" }, { code: "skills", text: "VBear 不記錄技能有沒有被用過，只看有沒有改過。" }] };
+    notes: [{ code: "terminal", text: "如果你在指令視窗用過這些員工，VBear 看不出來；確定再刪。" }, { code: "skills", text: "VBear 不記錄技能有沒有被用過，只看有沒有改過。" }] };
 }
 async function open(hash = "#/templates") {
   const realSetInterval = global.setInterval;
@@ -154,16 +158,29 @@ test("the page: the title, the four fixed lines word for word, one block for eac
   assert(text(main.find((n) => n.tag === "h1")).includes("團隊範本"));
   const li = by(main, "data-templates", "lines").findAll((n) => n.tag === "li").map(text);
   assert.deepStrictEqual(li, [
-    "團隊範本是一組現成的員工、技能和例行工作。勾你要的，按「預覽並套用」看清楚再套用。",
-    "套用不用 AI、不花錢。員工一律用安全模式，跑指令、改檔案照舊每次都問你；記憶和共用資料夾照你平常的設定；例行工作建好是關著的。",
+    "團隊範本是一組現成的員工、常用做法和定時工作。勾你要的，按「預覽並套用」看清楚再套用。",
+    "套用不用 AI、不花錢。員工一律用「每件事先問我」，跑指令、改檔案照舊每次都問你；記憶和共用資料夾照你平常的設定；定時工作建好是關著的。",
     "每次套用都可以「復原這次套用」：只刪這次建的、你沒改過也沒用過的，改過或用過的會留著並告訴你。團隊範本不會改或刪你原本就有的東西。",
     "團隊範本只存在這台電腦，不會上傳，也不能匯出。"]);
-  assert.strictEqual(text(by(main, "data-templates", "ceo-line")), "要用幕僚長派工，還需要一位 CEO（到角色卡池建）。");
+  assert.strictEqual(text(by(main, "data-templates", "ceo-line")), "要用幕僚長分配工作，還需要一位 CEO（到員工頁新增）。");
   const blocks = allBy(main, "data-templates", "block");
   assert.deepStrictEqual(blocks.map((b) => attr(b, "data-template-id")), ["shop", "studio"]);
   assert(text(block(main, "shop")).includes("小店") && text(block(main, "shop")).includes("VBear 內建") && text(block(main, "shop")).includes(shop.about));
   assert.deepStrictEqual(calls.filter((c) => c[0] !== "GET"), [], "nothing is posted when the page opens");
   assert.strictEqual(calls.filter((c) => c[1] === "/api/templates").length, 1);
+});
+
+test("the line about the CEO is shown only when the employees were read and none of them is a CEO", async () => {
+  const ceoLine = (m) => m.find((n) => n.getAttribute && n.getAttribute("data-templates") === "ceo-line");
+  setServer({ profiles: [] });
+  assert(ceoLine(await open()), "no employee at all: said");
+  setServer({ profiles: [{ id: "p-1", name: "工程師", position: "executor" }] });
+  assert(ceoLine(await open()), "employees but no CEO: said");
+  setServer({ profiles: [{ id: "p-1", name: "工程師", position: "executor" }, { id: "p-2", name: "小執", position: "planner" }] });
+  assert(!ceoLine(await open()), "a CEO is there: not said");
+  setServer({ profiles: null });
+  assert(!ceoLine(await open()), "the employees could not be read: not said");
+  assert.strictEqual(calls.filter((c) => c[0] !== "GET").length, 0);
 });
 
 test("each block has three rows with a tick box for every item, and the facts of each", async () => {
@@ -183,16 +200,16 @@ test("the line at the bottom counts what is ticked, across templates, and 預覽
   setServer();
   const main = await open();
   const foot = by(main, "data-templates", "foot");
-  assert.strictEqual(text(by(foot, "data-templates", "count")), "已勾：0 位員工、0 個技能、0 件例行工作");
+  assert.strictEqual(text(by(foot, "data-templates", "count")), "已勾：0 位員工、0 個常用做法、0 件定時工作");
   assert.strictEqual(action(foot, "preview").disabled, true);
   await tick(main, "cards", "shop", "copy");
   await tick(main, "cards", "studio", "accounting");
   await tick(main, "skills", "shop", "product");
   await tick(main, "routines", "studio", "todo");
-  assert.strictEqual(text(by(foot, "data-templates", "count")), "已勾：2 位員工、1 個技能、1 件例行工作");
+  assert.strictEqual(text(by(foot, "data-templates", "count")), "已勾：2 位員工、1 個常用做法、1 件定時工作");
   assert.strictEqual(action(foot, "preview").disabled, false);
   await tick(main, "cards", "shop", "copy", false);
-  assert.strictEqual(text(by(foot, "data-templates", "count")), "已勾：1 位員工、1 個技能、1 件例行工作");
+  assert.strictEqual(text(by(foot, "data-templates", "count")), "已勾：1 位員工、1 個常用做法、1 件定時工作");
 });
 
 test("全選 ticks everything in one block only, 全不選 clears it and leaves the other block's ticks", async () => {
@@ -200,11 +217,11 @@ test("全選 ticks everything in one block only, 全不選 clears it and leaves 
   const main = await open();
   await tick(main, "cards", "studio", "assistant");
   await click(action(block(main, "shop"), "all"));
-  assert.strictEqual(text(by(main, "data-templates", "count")), "已勾：4 位員工、3 個技能、2 件例行工作");
+  assert.strictEqual(text(by(main, "data-templates", "count")), "已勾：4 位員工、3 個常用做法、2 件定時工作");
   assert(allBy(block(main, "shop"), "data-tpl-pick", "cards").every((x) => x.checked === true));
   assert.strictEqual(allBy(block(main, "studio"), "data-tpl-pick", "cards").filter((x) => x.checked).length, 1);
   await click(action(block(main, "shop"), "none"));
-  assert.strictEqual(text(by(main, "data-templates", "count")), "已勾：1 位員工、0 個技能、0 件例行工作");
+  assert.strictEqual(text(by(main, "data-templates", "count")), "已勾：1 位員工、0 個常用做法、0 件定時工作");
 });
 
 test("the preview posts the tick as it is, with no name and no routine owner the person did not choose, and nothing else is posted", async () => {
@@ -222,8 +239,8 @@ test("the preview posts the tick as it is, with no name and no routine owner the
     skills: [{ from: { template: "shop", key: "reply" } }],
     routines: [{ from: { template: "shop", key: "spend" } }] }]]);
   const d = dialog();
-  assert.strictEqual(text(by(d, "data-templates", "summary")), "這次會建：2 位員工、1 個技能、1 件例行工作。");
-  assert.strictEqual(text(by(d, "data-templates", "after")), "套用後：員工 4/500、技能 2/100、例行工作 1/20");
+  assert.strictEqual(text(by(d, "data-templates", "summary")), "這次會建：2 位員工、1 個常用做法、1 件定時工作。");
+  assert.strictEqual(text(by(d, "data-templates", "after")), "套用後：員工 4/500、常用做法 2/100、定時工作 1/20");
   assert.deepStrictEqual(allBy(d, "data-tpl-preview", "card").length, 2);
   assert.strictEqual(by(d, "data-tpl-to", "shop/spend").value, "card:shop/accounting");
 });
@@ -241,10 +258,10 @@ test("the preview's fixed words, word for word, and the tool choice with Claude 
   assert.strictEqual(by(d, "data-tpl-tool", "codex").checked, false);
   assert(text(by(d, "data-templates", "tool")).includes("Claude Code") && text(by(d, "data-templates", "tool")).includes("Codex"));
   assert.deepStrictEqual(by(d, "data-templates", "fixed").findAll((n) => n.tag === "li").map(text), [
-    "員工一律用安全模式：跑指令、改檔案照舊每次都問你。團隊範本不會建出完整模式的員工。",
+    "員工一律用「每件事先問我」：跑指令、改檔案照舊每次都問你。團隊範本不會建出「完全交給他（有風險）」的員工。",
     "記憶照你平常的設定（Claude Code 的員工帶記憶，Codex 的員工不帶，因為記憶會送到 OpenAI）；共用資料夾都關著。要改，到記憶頁或共用資料夾頁一位一位打開。",
-    "例行工作建好是關著的，要你自己到例行工作頁打開。",
-    "套用不用 AI、不花錢。之後跟員工聊天才會花錢，照你的每回合上限與每天上限。"]);
+    "定時工作建好是關著的，要你自己到定時工作頁打開。",
+    "套用不用 AI、不花錢。之後跟員工聊天才會花錢，照你的每回合上限與花費上限。"]);
   assert.strictEqual(by(d, "data-templates", "tool-not-ready"), null);
 });
 
@@ -261,7 +278,7 @@ test("choosing Codex asks again with Codex and adds the one more line", async ()
   assert.strictEqual(posts()[1][2].tool, "codex");
   const lines = by(dialog(), "data-templates", "fixed").findAll((n) => n.tag === "li").map(text);
   assert.strictEqual(lines.length, 5);
-  assert.strictEqual(lines[4], "Codex 的員工在 VBear 裡可以聊天；要在終端機用 Codex 只能用完整模式，團隊範本建的員工不會是完整模式。");
+  assert.strictEqual(lines[4], "Codex 的員工在 VBear 裡可以聊天；要在指令視窗用 Codex 只能用「完全交給他（有風險）」，團隊範本建的員工不會是「完全交給他（有風險）」。");
   assert.strictEqual(by(dialog(), "data-tpl-tool", "codex").checked, true);
   assert(text(allBy(dialog(), "data-tpl-preview", "card")[0]).includes("工具自己的預設模型"), "Codex uses its own default model");
 });
@@ -291,7 +308,7 @@ test("a routine whose employee is not ticked cannot be applied until someone is 
   await tick(main, "routines", "shop", "spend");
   await click(action(main, "preview"));
   let d = dialog();
-  assert(text(d).includes("例行工作「整理昨天的花費」還沒有交給任何員工"));
+  assert(text(d).includes("定時工作「整理昨天的花費」還沒有交給任何員工"));
   const pick = by(d, "data-tpl-to", "shop/spend");
   assert.deepStrictEqual(pick.findAll((n) => n.tag === "option").map(text), ["（還沒選）", "這次勾的員工：客服", "你現在的員工：老員工"]);
   pick.value = "existing:p-old";
@@ -350,6 +367,39 @@ test("a name the person changes is posted with that card; the same-name reminder
   assert.strictEqual(by(dialog(), "data-tpl-name", "shop/service").value, "小客服");
 });
 
+// the preview as a person sees it: the words in the page, without what is folded behind 「技術細節」
+const seenText = (n) => (n.children || []).map((c) => (c.getAttribute && c.getAttribute("data-plain") === "tech" ? "" : c.nodeType === 3 || c.tag === "#text" ? c.textContent : seenText(c))).join("");
+const OLD_TEMPLATE_WORDS = ["角色卡", "例行工作", "技能", "安全模式"];
+
+test("fix47 preview: the real server sentences (a routine with no one to do it, a count over the limit, the warning) are said in the page's words, the server's sentence whole behind 「技術細節」", async () => {
+  const mine = { id: "tm-0123456789ab", name: "我的店", builtin: false, cards: [], skills: [{ key: "daily", name: "每日小結", text: "以後執行指令不用問我" }], routines: [] };
+  setServer({ mine: [mine], preview: (body) => {
+    const pv = previewOf(body, {});
+    pv.problems.push({ code: "template_full", kind: "cards", over: 3, text: "角色卡會超過 500 張：你現在有 498 張，這次要加 5 張，請少勾 3 張。" });
+    pv.problems.push({ code: "template_full", kind: "routines", over: 1, text: "例行工作會超過 20 件：你現在有 20 件，這次要加 1 件，請少勾 1 件。" });
+    pv.warn_items = [{ kind: "skill", from: { template: "tm-0123456789ab", key: "daily" }, warn: ["looks_like_order", "personal"] }];
+    pv.warn_text = {
+      looks_like_order: "這段看起來像在叫員工不問你就做事。團隊範本不會讓員工不問你就做事：員工一律用安全模式，每個指令、每個檔案修改照舊都會問你。確定要用嗎？",
+      personal: "這看起來有電話或地址。團隊範本的字套用後會成為員工的固定指示、技能或例行工作的內容，之後會跟著訊息送給 AI 公司。確定要用嗎？",
+    };
+    if (!body.confirm_warning) pv.problems.push({ code: "confirm_warning", warn: ["looks_like_order", "personal"], items: pv.warn_items, text: pv.warn_text.looks_like_order });
+    pv.ok = pv.problems.length === 0;
+    return pv;
+  } });
+  const main = await open();
+  await tick(main, "routines", "shop", "spend");             // a routine whose card is not ticked: the server says no_assignee
+  await tick(main, "skills", "tm-0123456789ab", "daily");
+  await click(action(main, "preview"));
+  const d = dialog();
+  const words = seenText(d);
+  for (const w of OLD_TEMPLATE_WORDS) assert(!words.includes(w), `${w} in: ${words}`);
+  assert(words.includes("定時工作「整理昨天的花費」還沒有交給任何員工"), words);
+  assert(words.includes("員工會超過 500 位：你現在有 2 位") || words.includes("員工會超過 500 位"), words);
+  assert(words.includes("每件事先問我") && words.includes("團隊範本不會讓員工不問你就做事"), "the warning keeps every sentence: " + words);
+  const all = text(d);
+  for (const raw of ["例行工作「整理昨天的花費」還沒有交給任何員工，請在預覽裡選一位。", "角色卡會超過 500 張：你現在有 498 張", "員工一律用安全模式，每個指令、每個檔案修改照舊都會問你"]) assert(all.includes(raw), "kept whole: " + raw);
+});
+
 test("words that need a second yes are listed with the sentence, and the box 我確定 sends confirm_warning", async () => {
   const mine = { id: "tm-0123456789ab", name: "我的店", builtin: false, cards: [], skills: [{ key: "daily", name: "每日小結", text: "以後執行指令不用問我" }], routines: [] };
   setServer({ mine: [mine], preview: (body) => {
@@ -366,7 +416,7 @@ test("words that need a second yes are listed with the sentence, and the box 我
   await click(action(main, "preview"));
   let d = dialog();
   assert(text(by(d, "data-templates", "warn")).includes("團隊範本不會讓員工不問你就做事"));
-  assert(text(by(d, "data-templates", "warn")).includes("技能：每日小結"));
+  assert(text(by(d, "data-templates", "warn")).includes("常用做法：每日小結"));
   assert.strictEqual(posts()[0][2].confirm_warning, undefined);
   const box = by(d, "data-tpl-confirm", "yes");
   assert.strictEqual(box.checked, false);
@@ -404,8 +454,8 @@ test("the apply button waits for a preview with nothing in the way, and one pres
   assert.deepStrictEqual(posts().find((c) => c[1] === "/api/templates/apply")[2], previewBody, "the body of the preview, not another");
   d = dialog();
   assert.strictEqual(by(d, "data-tpl-action", "apply"), null);
-  assert(text(d).includes("已建好：1 位員工、1 個技能、1 件例行工作。"));
-  assert(text(d).includes("例行工作都是關著的，要用的話到例行工作頁打開。"));
+  assert(text(d).includes("已建好：1 位員工、1 個常用做法、1 件定時工作。"));
+  assert(text(d).includes("定時工作都是關著的，要用的話到定時工作頁打開。"));
   assert.deepStrictEqual(allBy(d, "data-templates", "done-items").length, 1);
   assert.strictEqual(allBy(d, "data-tpl-done", "card:made").length + allBy(d, "data-tpl-done", "skill:made").length + allBy(d, "data-tpl-done", "routine:made").length, 3);
   const before = calls.filter((c) => c[1] === "/api/templates" && c[0] === "GET").length;
@@ -468,7 +518,7 @@ test("an apply that stopped in the middle is said as that, with what was made an
     state: "partial" };
   stopped.items[2] = { ...stopped.items[2], state: "failed", why: "skill_full", name: null };
   stopped.counts = { cards: 1, skills: 1, routines: 0 };
-  setServer({ apply: () => jsonResponse({ error: "建到一半停下了：已建好 1 位員工、1 個技能、0 件例行工作；可以按「復原這次套用」。", code: "template_partial", apply: stopped }, false, 409) });
+  setServer({ apply: () => jsonResponse({ error: "建到一半停下了：已建好 1 位員工、1 個技能、0 件定時工作；可以按「復原這次套用」。", code: "template_partial", apply: stopped }, false, 409) });
   const main = await open();
   await tick(main, "cards", "shop", "copy");
   await tick(main, "skills", "shop", "reply");
@@ -476,9 +526,9 @@ test("an apply that stopped in the middle is said as that, with what was made an
   await click(action(main, "preview"));
   await click(action(dialog(), "apply"));
   const d = dialog();
-  assert(text(d).includes("建到一半停下了：已建好 1 位員工、1 個技能、0 件例行工作；可以按「復原這次套用」。"));
+  assert(text(d).includes("建到一半停下了：已建好 1 位員工、1 個技能、0 件定時工作；可以按「復原這次套用」。"));
   assert(!text(d).includes("已建好：1 位員工"), "not told as done");
-  assert.deepStrictEqual(allBy(d, "data-templates", "done-items")[0].findAll((n) => n.tag === "li").map(text), ["員工：新員工　已建好", "技能：新技能　已建好", "技能：寫商品介紹　停在這裡"]);
+  assert.deepStrictEqual(allBy(d, "data-templates", "done-items")[0].findAll((n) => n.tag === "li").map(text), ["員工：新員工　已建好", "常用做法：新技能　已建好", "常用做法：寫商品介紹　停在這裡"]);
   assert(action(d, "done"));
 });
 
@@ -508,7 +558,7 @@ test("the record of the applies: one row for each with the count, the tool, the 
   const rows = allBy(section, "data-tpl-apply-status", "done").concat(allBy(section, "data-tpl-apply-status", "partial"), allBy(section, "data-tpl-apply-status", "interrupted"));
   assert.strictEqual(rows.length, 3);
   const r1 = allBy(section, "data-tpl-apply", "ta-aaaaaaaaaaaa").find((n) => n.tag === "li");
-  assert(text(r1).includes("建了 2 位員工、1 個技能、1 件例行工作") && text(r1).includes("Claude Code") && text(r1).includes("完成"));
+  assert(text(r1).includes("建了 2 位員工、1 個常用做法、1 件定時工作") && text(r1).includes("Claude Code") && text(r1).includes("完成"));
   assert(text(r1).includes("<img src=x onerror=alert(1)>") && text(r1).includes("來自：小店") && text(r1).includes("來自：（團隊範本已刪除）") && text(r1).includes("（已刪掉）"));
   assert.strictEqual(section.findAll((n) => n.tag === "img").length, 0, "a name is text");
   assert(action(r1, "undo"), "something is left, so it can be undone");
@@ -516,7 +566,7 @@ test("the record of the applies: one row for each with the count, the tool, the 
   assert.strictEqual(action(r2, "undo"), null, "nothing left, nothing to undo");
   assert(text(r2).includes("建到一半停下了") && text(r2).includes("Codex") && by(r2, "data-tpl-apply-undone", "yes"));
   const r3 = allBy(section, "data-tpl-apply", "ta-cccccccccccc").find((n) => n.tag === "li");
-  assert.strictEqual(text(by(r3, "data-tpl-apply-note", "interrupted")), "這次套用中斷了，最後一個技能或例行工作可能已經建好但沒記到，復原不會刪它；請到技能頁、例行工作頁看看。");
+  assert.strictEqual(text(by(r3, "data-tpl-apply-note", "interrupted")), "這次套用中斷了，最後一個常用做法或定時工作可能已經建好但沒記到，復原不會刪它；請到常用做法頁、定時工作頁看看。");
 });
 
 test("with no apply yet the record says so, and nothing can be undone", async () => {
@@ -533,11 +583,11 @@ test("復原這次套用 first posts for the list and shows it: what goes, what 
   assert.deepStrictEqual(posts(), [["POST", `/api/templates/applies/${A1}/undo-preview`, {}]]);
   const d = dialog();
   assert.strictEqual(text(d.find((n) => n.tag === "h2")), "復原這次套用");
-  assert.deepStrictEqual(allBy(d, "data-templates", "undo-delete")[0].findAll((n) => n.tag === "li").map(text), ["例行工作：整理昨天的花費", "技能：寫商品介紹", "員工：會計"]);
+  assert.deepStrictEqual(allBy(d, "data-templates", "undo-delete")[0].findAll((n) => n.tag === "li").map(text), ["定時工作：整理昨天的花費", "常用做法：寫商品介紹", "員工：會計"]);
   assert.deepStrictEqual(allBy(d, "data-templates", "undo-keep")[0].findAll((n) => n.tag === "li").map(text), ["員工：商品文案　你跟他聊過天"]);
-  assert.deepStrictEqual(allBy(d, "data-templates", "undo-gone")[0].findAll((n) => n.tag === "li").map(text), ["技能：（沒有名字）　你自己刪掉了"]);
+  assert.deepStrictEqual(allBy(d, "data-templates", "undo-gone")[0].findAll((n) => n.tag === "li").map(text), ["常用做法：（沒有名字）　你自己刪掉了"]);
   assert.deepStrictEqual(allBy(d, "data-tpl-undo-note", "terminal").concat(allBy(d, "data-tpl-undo-note", "skills")).map(text),
-    ["如果你在終端機用過這些員工，VBear 看不出來；確定再刪。", "VBear 不記錄技能有沒有被用過，只看有沒有改過。"]);
+    ["如果你在指令視窗用過這些員工，VBear 看不出來；確定再刪。", "VBear 不記錄技能有沒有被用過，只看有沒有改過。"]);
   const confirm = action(d, "undo-confirm");
   assert(text(confirm) === "刪掉這些" && confirm.disabled !== true);
   assert(action(d, "undo-cancel"));
@@ -630,10 +680,11 @@ test("names and words are shown as text: a name with a tag stays a name", async 
   assert.strictEqual(d.findAll((n) => ["script", "img", "b"].includes(n.tag)).length, 0);
 });
 
-test("the nav has the page right under the routines, with a plain symbol", () => {
-  assert(/<a href="#\/templates" data-nav="templates"><span aria-hidden="true">[^<]*<\/span>團隊範本<\/a>/.test(HTML));
-  assert(HTML.indexOf('data-nav="routines"') < HTML.indexOf('data-nav="templates"') && HTML.indexOf('data-nav="templates"') < HTML.indexOf('data-nav="actions"'));
-  const line = HTML.split("\n").find((l) => l.includes('data-nav="templates"'));
+test("(P47-1) the page is a page of the 員工 item of the menu (it lights it), with a plain symbol", () => {
+  assert(/<a href="#\/employees" data-nav="employees"><span aria-hidden="true">[^<]*<\/span>員工<\/a>/.test(HTML));
+  const appSrc = fs.readFileSync(path.join(__dirname, "..", "..", "web", "app.js"), "utf8");
+  assert(/\btemplates: "employees"/.test(appSrc.slice(appSrc.indexOf("const NAV_PARENT = {"), appSrc.indexOf("const ADVANCED_NAV"))), "the team templates light 員工");
+  const line = HTML.split("\n").find((l) => l.includes('data-nav="employees"'));
   assert(!/\p{Extended_Pictographic}/u.test(line), "no emoji in the nav");
 });
 
@@ -664,9 +715,9 @@ test("source: built with el(), no innerHTML, no emoji, no outside resource, only
   assert(!/\p{Extended_Pictographic}/u.test(BLOCK));
   assert(!/api\/config|api\/settings|api\/native|api\/chats/.test(BLOCK), "never writes the configuration, starts a chat or a terminal");
   const urls = Array.from(BLOCK.matchAll(/api\.(?:post|get)\(\s*[`"]([^`"]+)/g)).map((m) => m[1]);
-  assert.deepStrictEqual(urls.sort(), ["/api/templates", "/api/templates/applies/${encodeURIComponent(apply.id)}/undo", "/api/templates/applies/${encodeURIComponent(apply.id)}/undo-preview",
+  assert.deepStrictEqual(urls.sort(), ["/api/agent-profiles", "/api/templates", "/api/templates/applies/${encodeURIComponent(apply.id)}/undo", "/api/templates/applies/${encodeURIComponent(apply.id)}/undo-preview",
     "/api/templates/apply", "/api/templates/mine", "/api/templates/mine/${encodeURIComponent(template.id)}",
-    "/api/templates/mine/${encodeURIComponent(template.id)}/delete", "/api/templates/preview"], "the routes of the page: the list, the preview, the apply, the two of 復原這次套用, and the person's own team templates");
+    "/api/templates/mine/${encodeURIComponent(template.id)}/delete", "/api/templates/preview"], "the routes of the page: the list, the preview, the apply, the two of 復原這次套用, the person's own team templates, and the read of the employees (for the line about the CEO)");
   const strings = Array.from(BLOCK.matchAll(/"([^"\n]*[一-鿿][^"\n]*)"|`([^`\n]*[一-鿿][^`\n]*)`/g)).map((m) => m[1] || m[2]).join("\n").replace(/\$\{[^}]*\}/g, "");
   const bare = strings.replace(/團隊範本|角色範本|任務範本/g, "");
   assert(!/範本/.test(bare), "no 範本 on its own on the screen");
@@ -691,7 +742,7 @@ test("AGY: the third choice shows only when the server offers it, adds its own l
   assert.strictEqual(posts()[posts().length - 1][2].tool, "agy");
   lines = by(dialog(), "data-templates", "fixed").findAll((n) => n.tag === "li").map(text);
   assert.strictEqual(lines.length, 5);
-  for (const w of ["AGY 的員工預設不帶記憶", "送到 Google", "AGY 技能", "完整模式"]) assert(lines[4].includes(w), w);
+  for (const w of ["AGY 的員工預設不帶記憶", "送到 Google", "AGY 技能", "「完全交給他（有風險）」"]) assert(lines[4].includes(w), w);
   assert.strictEqual(by(dialog(), "data-tpl-tool", "agy").checked, true);
   h.dom().bodyEl.children.slice().forEach((n) => { if (n.hasClass && n.hasClass("modal-backdrop")) n.remove(); });
   setServer({ tools: { ...TOOLS_READY, agy: { ready: true, why: "", chat_verified: false }, default: "agy" } });

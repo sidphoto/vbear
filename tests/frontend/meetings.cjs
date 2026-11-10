@@ -74,7 +74,7 @@ function setPage(over = {}) {
     if (p === "/api/flows") return jsonResponse({ ok: true, flows: [] });
     if (p === "/api/agent-profiles") return jsonResponse({ ok: true, profiles: page.profiles });
     if (p === "/api/tasks") return jsonResponse({ ok: true, tasks: page.tasks });
-    if (p === "/api/config") return jsonResponse({ ok: true, config: {} });
+    if (p === "/api/config") return jsonResponse({ ok: true, config: { advanced_mode: true } });   // P47-2: the board is the advanced part of the home page
     if (p === "/api/agent-builder/catalog") return jsonResponse({ ok: false });
     if (p === "/api/meetings" && method === "GET") return page.meetingsError ? jsonResponse({ error: page.meetingsError }, false, 500) : jsonResponse({ meetings: page.meetings });
     if (p === "/api/meetings/ledger") return jsonResponse(page.ledger);
@@ -264,6 +264,9 @@ test("home: a meeting that waits for the chairman is on the 'your turn' board, a
   assert(text(card).includes("沒有回報的呼叫以每次上限計"), text(card));
   assert.strictEqual(main.findAll((n) => n.tag === "img").length, 0);
   assert(text(main).includes("1 場會議等你"));
+  const row = main.find((n) => n.getAttribute && n.getAttribute("data-home-row") === "meeting");
+  assert(row && text(row).includes("要花錢的事") && text(row).includes(EVIL) && !/US\$/.test(text(row)), "and a row of 等你決定, without the amount");
+  assert.strictEqual(row.find((n) => n.tag === "a").getAttribute("href"), "#/meetings/" + MID);
   // the board's key changes when a meeting joins it, so the 5-second refresh repaints
   const k0 = app.boardKey(app.boardGroups({ runtime: { available: true } }, { flows: [] }, { meetings: [] }), { liveError: "", projects: [] });
   const k1 = app.boardKey(g, { liveError: "", projects: [] });
@@ -307,7 +310,7 @@ test("red lamp: no new meeting can be previewed, and the page says why", async (
   assert.strictEqual(q(main, "lamp").getAttribute("data-lamp"), "red");
   assert(text(q(main, "lamp")).includes("不能開新的會議"));
   assert.strictEqual(q(main, "preview").disabled, true);
-  assert(text(main).includes("今日額度已用完"));
+  assert(text(main).includes("今天的用量到你設的上限了（或已封鎖）"));
 });
 
 function fill(main, { topic = "下個月的貼文", chair = "ceo", speakers = ["law"], flags = [], taskId = "" } = {}) {
@@ -603,7 +606,7 @@ test("every code the back end ends a turn with has plain words; no cost is claim
   const seats = qa(main, "seat");
   assert(text(seats[0]).includes("簡體"), text(seats[0]));
   const reason = text(q(seats[1], "reason"));
-  assert(reason.includes("主控台重新啟動"), reason);
+  assert(reason.includes("VBear 重新啟動"), reason);
   assert(!reason.includes("最壞情況"), "a turn that never ran is not said to be charged: " + reason);
 });
 
@@ -647,7 +650,7 @@ test("the chairman's desk: approve or reject with a note, marked as an unverifie
   const desk = q(main, "chairman");
   assert(desk);
   assert(text(desk).includes("輪到你：董事長核准"));
-  assert(text(desk).includes("主控台記錄（未驗證身分）"));
+  assert(text(desk).includes("VBear 記錄（未驗證身分）"));
   assert(text(desk).includes("R3") && text(desk).includes("出現關鍵字"), "why it came to the chairman");
   assert(q(main, "approve") && q(main, "reject"));
   q(main, "chairman-note").value = "同意，但先小量";
@@ -931,7 +934,7 @@ test("a running meeting shows the time left by the console's clock, and the spea
   assert.strictEqual(typeof app.meetingClockText, "function");
   const clock = { started_at: 1790000000, deadline_at: 1790000900, speakers_until: 1790000720, max_minutes: 15, remaining_s: 600.4 };
   const words = app.meetingClockText(clock);
-  for (const piece of ["剩下 10 分 00 秒", "最多 15 分鐘", "最後 3 分鐘留給 CEO", "發言者還有 7 分 00 秒", "主控台"]) assert(words.includes(piece), piece + " | " + words);
+  for (const piece of ["剩下 10 分 00 秒", "最多 15 分鐘", "最後 3 分鐘留給 CEO", "發言者還有 7 分 00 秒", "VBear"]) assert(words.includes(piece), piece + " | " + words);
   const late = app.meetingClockText({ ...clock, remaining_s: 100 });
   assert(late.includes("剩下 1 分 40 秒") && late.includes("發言時間已到"), late);
   for (const bad of [null, {}, { ...clock, remaining_s: "600" }, { ...clock, max_minutes: 15.5 }, { ...clock, deadline_at: null }]) {
@@ -956,10 +959,12 @@ test("a speaker the meeting's clock skipped reads 時間到沒發言", () => {
 
 // ---- navigation, wording, rules of the code -------------------------------------------------------------------------
 
-test("the nav has the meetings, and the code keeps its rules", () => {
+test("(P47-1) the meetings are a page of the 工作 item of the menu (it lights it), and the code keeps its rules", () => {
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
-  assert(html.includes('data-nav="meetings"'));
-  assert(html.indexOf('data-nav="office"') < html.indexOf('data-nav="meetings"') && html.indexOf('data-nav="meetings"') < html.indexOf('data-nav="terminals"'));
+  assert(html.includes('data-nav="work"'));
+  const appSrc = fs.readFileSync(path.join(root, "app.js"), "utf8");
+  const parents = appSrc.slice(appSrc.indexOf("const NAV_PARENT = {"), appSrc.indexOf("const ADVANCED_NAV"));
+  assert(/\bmeetings: "work"/.test(parents), "the meetings light 工作");
   const source = fs.readFileSync(path.join(root, "app.js"), "utf8");
   assert(!/\.innerHTML\s*=|insertAdjacentHTML\s*\(/.test(source));
   assert(!/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}]/u.test(fs.readFileSync(path.join(root, "style.css"), "utf8")));

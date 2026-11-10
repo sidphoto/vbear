@@ -93,13 +93,17 @@ class ChiefDocsTests(unittest.TestCase):
             self.assertIn(word, self.adr, word)
 
     def test_the_glossary_has_the_new_terms_and_the_old_ones_say_what_is_now(self):
-        for term in ("**派工**：", "**提議卡**：", "**AI 自己做了什麼**：", "**幕僚長**：", "**CEO**："):
+        for term in ("**分配工作**：", "**提議卡**：", "**AI 自己做了什麼**：", "**幕僚長**：", "**CEO**："):
             self.assertIn(term, self.glossary, term)
         self.assertNotIn("派工做好之前", self.glossary)
+        self.assertNotIn("分配工作做好之前", self.glossary)
         self.assertNotIn("現在只會聊天", self.glossary)
 
     def test_the_words_the_documents_quote_are_the_ones_the_page_uses(self):
-        for words in ("請幕僚長安排", "確認派工", "不採用", "你改過", "AI 自己做了什麼", "幕僚長目前需要 Claude Code", "VBear 依派工送出"):
+        # (P47) the page says 依分配工作; the security model's section quotes the same words (the v0.15.0 changelog entry keeps the words of its day)
+        self.assertIn("VBear 依分配工作送出", self.section)
+        self.assertNotIn("VBear 依派工送出", self.section)
+        for words in ("請幕僚長安排", "確認派工", "不採用", "你改過", "AI 自己做了什麼", "幕僚長目前需要 Claude Code", "VBear 依分配工作送出"):
             self.assertIn(words, self.app, words)
 
 

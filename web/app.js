@@ -659,7 +659,7 @@ function termDimsForRequest(term) {
 
 function initTerminalInstance({ TerminalClass, FitAddonClass, termElem, options = {} }) {
   if (!TerminalClass || !FitAddonClass) {
-    return { ok: false, error: "無法載入終端機模組 (xterm.js)", term: null, fitAddon: null };
+    return { ok: false, error: "無法載入指令視窗模組 (xterm.js)", term: null, fitAddon: null };
   }
   let term = null;
   let fitAddon = null;
@@ -708,7 +708,7 @@ function initTerminalInstance({ TerminalClass, FitAddonClass, termElem, options 
     if (term && typeof term.dispose === "function") {
       try { term.dispose(); } catch (_) {}
     }
-    return { ok: false, error: err ? err.message : "終端機初始化失敗", term: null, fitAddon: null };
+    return { ok: false, error: err ? err.message : "指令視窗初始化失敗", term: null, fitAddon: null };
   }
 }
 
@@ -930,13 +930,14 @@ function authRequiredView() {
   return el("div", { class: "section" },
     el("h1", null, "請從 VBear 開啟"),
     notice("warn", "VBear 只接受從它自己打開的視窗。這個分頁沒有通行證，可能是直接輸入了網址，或 VBear 重新啟動過。"),
-    el("p", null, "打開 VBear App，或在終端機執行 ", el("code", null, "python3 -m vbear launch"), "，會自動開一個可以使用的分頁。"));
+    el("p", null, "打開 VBear App，或在指令視窗執行 ", el("code", null, "python3 -m vbear launch"), "，會自動開一個可以使用的分頁。"));
 }
 
 let toastTimer;
 function toast(msg) {
   const t = document.getElementById("toast");
-  t.textContent = msg;
+  // a line that already carries its original in brackets (the terminal words, P19) is not said again
+  t.textContent = typeof msg === "string" && !msg.includes("（原文：") ? plainLine(msg) : msg;
   t.classList.add("show");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
@@ -959,6 +960,143 @@ function categoryZh(label) {
   const k = label.trim().toLowerCase();
   return Object.prototype.hasOwnProperty.call(CATEGORY_ZH, k) ? CATEGORY_ZH[k] : label;
 }
+
+// ---------- plain words (v0.21, P47-1) -------------------------------------------------------------------------------------
+// One company's way of speaking (ADR 0013): WORDS is the table of the words a person sees (what to say, what not to say any more, and
+// where). It is data only: a test (and the sweep of P47-5) reads it; nothing here changes a program name, an API path, a data field,
+// an event kind or a `data-*` attribute. Each entry: use (what the screen says), avoid (words that must not be on a page the person
+// sees, searched literally), loose (words too common to search literally, for a human to look at), scope ("all": every page of the
+// normal mode; "title": an advanced page changes only its menu name and its h1; "new": a new word, nothing to avoid), note.
+const WORDS = {
+  home:          { use: "首頁", avoid: ["冒險者大廳", "大廳"], loose: [], scope: "all", note: "" },
+  employee:      { use: "員工", avoid: ["角色卡"], loose: ["角色"], scope: "all", note: "指那份設定時寫「員工設定」" },
+  employeeList:  { use: "我的員工", avoid: ["角色卡池", "我的角色卡", "名冊"], loose: [], scope: "all", note: "首頁區塊；選單與頁名是「員工」；舊 #/team 在進階叫「員工詳細資料」" },
+  newEmployee:   { use: "新增員工", avoid: ["新角色卡", "拿卡", "起手牌組"], loose: [], scope: "all", note: "起手牌組 = 一次新增幾位常用的員工" },
+  startWork:     { use: "開始工作", avoid: ["出發"], loose: [], scope: "all", note: "進階頁的「出發」標題級改「開指令視窗」" },
+  preflight:     { use: "開始前的檢查", avoid: ["出發通行證"], loose: [], scope: "title", note: "進階頁內文暫時沿用" },
+  tool:          { use: "用哪個 AI", avoid: ["陣營"], loose: [], scope: "all", note: "也可以說「AI 工具」" },
+  look:          { use: "外觀", avoid: ["種族"], loose: [], scope: "all", note: "" },
+  positionName:  { use: "職位名稱", avoid: [], loose: ["planner", "executor", "reviewer"], scope: "all", note: "CEO、執行者、審查者……（CARD_POSITION_LABEL），不寫英文代號" },
+  safeMode:      { use: "每件事先問我", avoid: ["安全模式"], loose: [], scope: "all", note: "只在自己的工作資料夾裡做；跑指令、改檔案前都先問你" },
+  fullMode:      { use: "完全交給他（有風險）", avoid: ["完整模式"], loose: [], scope: "all", note: "ADR 0002 的白話警告與「我了解」一字不減" },
+  sandbox:       { use: "保護範圍", avoid: ["沙盒"], loose: [], scope: "all", note: "第一次出現寫「保護範圍（沙盒）」" },
+  project:       { use: "專案", avoid: ["任務卡"], loose: [], scope: "all", note: "一個專案就是你電腦上的一個資料夾" },
+  addFolder:     { use: "加入一個資料夾", avoid: ["導入專案"], loose: [], scope: "all", note: "" },
+  terminal:      { use: "指令視窗", avoid: ["終端機", "終端工作台"], loose: ["終端", "Agent"], scope: "title", note: "進階；一般頁出現時寫「指令視窗」" },
+  workbench:     { use: "工作台", avoid: [], loose: ["終端工作台"], scope: "title", note: "進階" },
+  projectFolder: { use: "專案資料夾", avoid: [], loose: ["專案"], scope: "title", note: "進階；舊 #/projects 頁名" },
+  pluginList:    { use: "AI 工具的外掛清單", avoid: ["技能庫", "技能卡"], loose: [], scope: "title", note: "進階；一般頁出現時寫「AI 工具的外掛」" },
+  recipe:        { use: "常用做法", avoid: ["存成技能", "用技能", "整理成技能", "從技能帶入"], loose: ["技能"], scope: "all", note: "用的人存的技能；AI 工具自己的技能不是它" },
+  assign:        { use: "分配工作", avoid: ["派工"], loose: [], scope: "all", note: "「所有派工」改「所有分配工作」" },
+  routine:       { use: "定時工作", avoid: ["例行工作", "排程", "定時任務"], loose: [], scope: "all", note: "" },
+  spendLimit:    { use: "花費上限", avoid: ["每天上限", "每日上限", "亮紅燈"], loose: ["額度", "預算"], scope: "all", note: "「每回合最多」與「方案用量上限」照舊" },
+  limitReached:  { use: "今天的用量到你設的上限了", avoid: ["額度用完", "額度已用完"], loose: [], scope: "all", note: "一定接「明天 0 點重新算；可以到設定調高」" },
+  toolBash:      { use: "執行指令", avoid: ["Bash"], loose: [], scope: "all", note: "英文名收進卡片「技術細節」" },
+  toolEdit:      { use: "修改檔案", avoid: ["Edit"], loose: [], scope: "all", note: "" },
+  toolWrite:     { use: "建立或覆蓋檔案", avoid: ["Write"], loose: [], scope: "all", note: "" },
+  toolRead:      { use: "讀取檔案", avoid: ["Read"], loose: [], scope: "all", note: "" },
+  toolGrep:      { use: "搜尋檔案內容", avoid: ["Grep"], loose: [], scope: "all", note: "" },
+  toolGlob:      { use: "找檔名", avoid: ["Glob"], loose: [], scope: "all", note: "" },
+  oldText:       { use: "原本的內容", avoid: ["原本的字串"], loose: [], scope: "all", note: "其他欄位：要寫入的內容、改成、指令、檔案、位置、要找的字、員工的說明" },
+  history:       { use: "對話紀錄", avoid: ["工作階段"], loose: ["session"], scope: "all", note: "" },
+  chatList:      { use: "對話紀錄", avoid: [], loose: ["聊天"], scope: "all", note: "清單；單頁是「和 {名字} 的對話」；動詞「聊天」「開始聊天」照用" },
+  deleteChat:    { use: "刪除這個對話", avoid: ["刪除這個聊天"], loose: [], scope: "all", note: "" },
+  runtime:       { use: "VBear 的背景程式", avoid: ["VBear runtime", "背景程序"], loose: ["daemon"], scope: "all", note: "伺服器的原句不改，只在畫面翻成白話（plainWords）" },
+  aiTool:        { use: "AI 工具", avoid: ["Agent CLI"], loose: [], scope: "all", note: "" },
+  manualReview:  { use: "要你檢查", avoid: ["manual_review", "待人工處理"], loose: [], scope: "all", note: "VBear 不確定這件事有沒有收尾，先停下來等你看" },
+  orphan:        { use: "找不到原技能的翻譯", avoid: ["孤兒翻譯"], loose: [], scope: "all", note: "設定的進階區" },
+  setupBlock:    { use: "AI 工具", avoid: [], loose: [], scope: "new", note: "設定裡的區塊名；頁名「開始設定」保留" },
+  console:       { use: "VBear", avoid: ["主控台"], loose: [], scope: "all", note: "對用的人說時" },
+  brandSub:      { use: "你的 AI 員工", avoid: ["技能與團隊主控台"], loose: [], scope: "all", note: "品牌小字" },
+  advancedMode:  { use: "進階模式", avoid: [], loose: [], scope: "new", note: "設定裡的開關；打開後選單多出工程頁並顯示路徑與診斷；不改變任何權限" },
+  waiting:       { use: "等你決定", avoid: [], loose: [], scope: "new", note: "首頁最上面一塊：所有要用的人決定的事" },
+  limits:        { use: "用量與上限", avoid: [], loose: [], scope: "new", note: "設定裡預設收起的一塊：今天已花、花費上限（可自填）、狀態" },
+};
+// -> [{ key, term, use }] for the words a page of that scope must not say (`avoid` only, searched literally). scope "all": the pages of
+// the normal mode; "title": the menu names and the h1 of the advanced pages (and, for a page of scope "all", nothing of this).
+function wordsToAvoid(scope) {
+  const out = [];
+  for (const [key, w] of Object.entries(WORDS)) {
+    if (w.scope !== scope) continue;
+    for (const term of w.avoid) out.push({ key, term, use: w.use });
+  }
+  return out;
+}
+
+const LIMIT_SETTINGS_HREF = "#/settings?open=limits";
+const LIMIT_REACHED_TEXT = "今天的用量到你設的上限了，所以這則沒有送出（沒有花錢）。明天 0 點會重新算；要現在繼續，可以調高上限。";
+// The sentences the server and the screen really say, said in plain words with what to do next (ADR 0013 decision 8). The server's own
+// text and codes are not changed (a test finds each sentence in the Python sources). `re`: finds it; `text` (+ `next`): the plain words
+// that take the place of the whole sentence; `swaps`: instead, change only some words of it and keep the rest; `limit`: the day's
+// spending limit stopped it (it gets limitReachedNotice's sentence and a way to the settings); `label`: a vocabulary change only,
+// nothing to hide, so no 「技術細節」; `normalOnly`: not on an advanced page (onAdvancedPage). The original is kept whole in `detail`. A sentence this table does not know is shown as it is.
+const PLAIN_ERRORS = [
+  { key: "limit_red", limit: true, re: /今天的額度已用完（亮紅燈）|額度用完（亮紅燈）/ },
+  { key: "limit_budget", limit: true, re: /今天剩下的額度不到 US\$0\.01|^額度不夠，沒有送出[。.]?$/ },
+  { key: "runtime_down", re: /無法連線到 VBear runtime|VBear runtime 背景程序(?:無法連線|無法使用|無法啟動或連線|沒有在執行)|VBear runtime (?:未連線|未啟動或無法連線|無法連線)|與 VBear runtime 的連線中斷/,
+    text: "VBear 的背景程式沒有在跑，員工現在不能回話。", next: "關掉 VBear 再打開通常就好。" },
+  { key: "cli_version", re: /Agent CLI 版本檢查/, text: "VBear 沒能確認這個 AI 工具的版本，所以先不啟動它。", next: "請到「AI 工具」看看它有沒有裝好、能不能開。" },
+  { key: "manual_review", normalOnly: true, re: /manual_review|(?:待|需要|等待)人工處理/, next: "VBear 不確定這件事有沒有收尾，先停下來等你看。",
+    swaps: [[/[（(]\s*manual_review\s*[）)]/g, ""], [/manual_review/g, "要你檢查"], [/(?:等待|需要|待)人工處理/g, "要你檢查"]] },
+  { key: "chat_unverified", re: /聊天模式還沒有(?:在這台 Mac 上)?通過驗證/,
+    text: "這個 AI 工具還沒做過聊天用的安全檢查，所以現在不能聊天。", next: "到這位員工的準備頁，做一次安全檢查，通過後就能聊。" },
+  { key: "chat_admin_policy", re: /這台 Mac 上有管理員政策或系統設定，可能蓋過 VBear 的設定，所以不啟動聊天/,
+    text: "這台電腦的 AI 工具有管理員設定，VBear 不能用它聊天。", next: "可以到「AI 工具」看看有沒有別的工具能用。" },
+  { key: "orphan", re: /孤兒翻譯/, label: true, swaps: [[/孤兒翻譯/g, "找不到原技能的翻譯"]] },
+];
+// x: the original (a string, or an Error or a server answer that carries it).
+// -> { text, next, detail, known, limit }. Known: `text` is the plain words and `detail` the original, whole. Not known: `text` is the
+// original as it came, `detail` is empty, and nothing is guessed.
+// An advanced page (指令視窗, 工作台, 流程, 專案資料夾, AI 工具的外掛清單, 員工詳細資料) changes only its menu name and its title this version, so a rule
+// marked `normalOnly` leaves what such a page says as it is. Before any page is drawn (navTop is still empty) it applies.
+function onAdvancedPage() { return navTop !== "" && ADVANCED_NAV.has(navOf(navTop) || ""); }
+function plainWords(x) {
+  const raw = typeof x === "string" ? x.trim()
+    : x && typeof x.message === "string" ? x.message.trim()
+    : x && typeof x.error === "string" ? x.error.trim() : "";
+  const none = { text: raw, next: "", detail: "", known: false, limit: false };
+  if (!raw) return none;
+  const hit = PLAIN_ERRORS.find((e) => e.re.test(raw) && !(e.normalOnly && onAdvancedPage()));
+  if (!hit) return none;
+  if (hit.limit) return { text: LIMIT_REACHED_TEXT, next: "", detail: raw, known: true, limit: true };
+  if (hit.swaps) {
+    const swapped = hit.swaps.reduce((s, [re, to]) => s.replace(re, to), raw);
+    return { text: swapped, next: hit.next || "", detail: hit.label ? "" : raw, known: true, limit: false };
+  }
+  return { text: hit.text, next: hit.next || "", detail: raw, known: true, limit: false };
+}
+function plainTechFold(detail) {
+  return el("details", { class: "small term-tech plain-tech", "data-plain": "tech" },
+    el("summary", null, "技術細節"), el("code", { class: "term-tech-raw" }, detail));
+}
+// The plain words as a line of text: for a toast, which holds one line, the plain words then the original in brackets.
+function plainLine(x) {
+  const w = plainWords(x);
+  return w.known ? `${w.text}${w.next}${w.detail ? `（原文：${w.detail}）` : ""}` : w.text;
+}
+// A notice whose words are the plain words, with the original behind 「技術細節」. A sentence that is not known is shown as it is.
+function plainNotice(kind, x) {
+  const w = plainWords(x);
+  if (!w.known) return noticeBox(kind, w.text);
+  if (w.limit) return limitReachedNotice(w.detail, { kind });
+  return noticeBox(kind, [`${w.text}${w.next}`, w.detail ? plainTechFold(w.detail) : null]);
+}
+// What the person sees when the day's spending limit stopped something: what happened (nothing was sent, nothing was spent), when it
+// counts again, and a button to the place that raises it. `raw`: the original sentence, kept whole in 「技術細節」. opts.text: another
+// first sentence for a place where it is not one message that stopped (a routine, a group); opts.kind: "warn" (default) or "info".
+// The limit itself is never changed here: this only says that it stopped something.
+function limitReachedNotice(raw, opts) {
+  const o = opts || {};
+  const detail = typeof raw === "string" ? raw.trim() : raw && typeof raw.message === "string" ? raw.message.trim() : "";
+  const text = typeof o.text === "string" && o.text ? o.text : LIMIT_REACHED_TEXT;
+  const node = noticeBox(o.kind || "warn", [text,
+    el("p", { class: "plain-limit-go", style: "margin:8px 0 0" },
+      el("a", { class: "btn small", href: LIMIT_SETTINGS_HREF, "data-limit": "go" }, "到設定調高")),
+    detail ? plainTechFold(detail) : null]);
+  node.setAttribute("data-limit", "reached");
+  return node;
+}
+// ---------- end of plain words ----------------------------------------------------------------------------------------------
 
 const TOOL = { claude: "Claude Code", codex: "Codex CLI", shared: "skills CLI", agy: "Antigravity（AGY）", grok: "Grok", mcode: "MCODE" };
 const ACT = {
@@ -1338,7 +1476,7 @@ function renderTranslationActivity() {
   const closeKey = T.error ? T.error : job ? job.id : null;
   setKids(box,
     el("span", { role: "status", "aria-live": "polite", "aria-atomic": "true" },
-      T.error ? `翻譯狀態未知：${T.error}` : job ? `${job.automatic ? "自動重翻" : "技能翻譯"} ${status} · ${job.done}/${job.total} · 失敗 ${job.failed}` : ""),
+      T.error ? "暫時讀不到翻譯的進度" : job ? `${job.automatic ? "自動重翻" : "技能翻譯"} ${status} · ${job.done}/${job.total} · 失敗 ${job.failed}` : ""),
     T.waiting ? el("span", { class: "small" }, `${T.waiting} 個等待下次掃描`) : null,
     job && job.error ? el("span", { class: "small", "data-bar": "reason" }, job.error.message) : null,
     active ? el("button", { class: "btn small", type: "button", "aria-disabled": String(job.status === "cancelling"),
@@ -1473,16 +1611,16 @@ function translationSettings(conf, saveConf) {
     el("label", null, "使用自己電腦上已登入的工具：", engine),
     el("label", { class: "switch" }, auto, el("span", null, "原文變更時自動重翻（預設關閉）")),
     el("p", { class: "small muted" }, "第一次開啟需確認資料送出、額度與費用。更換引擎會關閉自動重翻，請重新同意。關閉時也會停止目前工作。"),
-    el("p", null, `孤兒翻譯：${T.error ? "未知" : T.counts.orphan || 0}`),
+    el("p", null, `找不到原技能的翻譯：${T.error ? "未知" : T.counts.orphan || 0}`),
     el("p", { class: "small", "data-translation": "roles" }, RT.error || !RT.loaded ? "職業名稱翻譯：狀態未知"
-      : `職業名稱翻譯：已翻 ${RT.counts.fresh || 0} · 未翻 ${roleUntranslated()}（在角色卡精靈的「職業」裡翻譯）`),
+      : `職業名稱翻譯：已翻 ${RT.counts.fresh || 0} · 未翻 ${roleUntranslated()}（在員工精靈的「職業」裡翻譯）`),
     el("button", { class: "btn small", type: "button", on: { click: async () => {
       if (T.error) return;
-      if (!(await confirmInPage("檢查孤兒翻譯", `目前有 ${T.counts.orphan || 0} 個索引已找不到的翻譯；只清除快取，不會刪除技能。`, "繼續"))) return;
+      if (!(await confirmInPage("檢查找不到原技能的翻譯", `目前有 ${T.counts.orphan || 0} 個索引已找不到的翻譯；只清除快取，不會刪除技能。`, "繼續"))) return;
       if (!(await confirmInPage("最後確認", "確定清除目前索引裡不存在的翻譯快取？", "清除"))) return;
       try { await api.del("/api/translations/orphans"); await refreshTranslations(); viewSettings(); }
       catch (e) { toast(e.message); }
-    } } }, "清除孤兒翻譯"),
+    } } }, "清除找不到原技能的翻譯"),
     el("p", { class: "small muted" }, T.provider === "fake" ? "QA 假 CLI；不打真模型。" : "翻譯前會核對版本。若未通過：這個 Claude Code 版本的翻譯安全邊界還沒驗證。Codex 翻譯仍未開放。"),
     el("p", { class: "small muted" }, "驗證會花極少量額度，只送固定的無害提示，不送技能資料。"),
     conf.translation_engine === "claude" ? el("button", { class: "btn small", type: "button", on: { click: verifyTranslationBoundary } }, "驗證") : null);
@@ -2015,7 +2153,12 @@ function roleCard(r) {
 function emptyState(title, detail) {
   return el("div", { class: "empty-state" }, el("strong", null, title), detail ? el("span", null, detail) : null);
 }
+// A message in a box. A text that is a string goes through plainWords (P47-1): a sentence the table knows is said in plain words with the
+// original behind 「技術細節」; any other text is shown as it is. A text that is nodes (or a list) is the caller's own words.
 function notice(kind, text) {
+  return typeof text === "string" ? plainNotice(kind, text) : noticeBox(kind, text);
+}
+function noticeBox(kind, text) {
   const ico = { warn: "!", info: "i", bad: "×" }[kind] || "i";
   return el("div", { class: `notice ${kind}`, role: kind === "bad" ? "alert" : "note" }, el("span", { class: "ico", "aria-hidden": "true" }, ico), el("div", null, text));
 }
@@ -2109,7 +2252,7 @@ function terminalClosedNotice(reason, sessionGone, goneAdvice) {
   const v = terminalClosedView(reason);
   const next = sessionGone ? goneAdvice : "如需重新開啟請點選右上方「重新連線」。";
   const said = v.text && !/[。！？.!?]$/.test(v.text) ? v.text + "。" : v.text;
-  return notice("info", [`終端機連線已關閉${said ? "：" + said : ""}${next}`,
+  return notice("info", [`指令視窗連線已關閉${said ? "：" + said : ""}${next}`,
     v.detail ? el("details", { class: "small term-tech", "data-term": "tech" },
       el("summary", null, "技術細節"), el("code", { class: "term-tech-raw" }, v.detail)) : null]);
 }
@@ -2121,7 +2264,7 @@ function staleNotice() {
 }
 function corruptNotice() {
   if (!D.overview || !D.overview.config_corrupt) return null;
-  return notice("bad", "設定檔（config.json）無法讀取。你原本選的掃描範圍目前不明，所以主控台已關閉所有掃描來源，也不會重新掃描，畫面上是先前的索引。請修復或刪除 ~/.vbear/config.json 後重新啟動主控台；原檔不會被覆寫。");
+  return notice("bad", "設定檔（config.json）無法讀取。你原本選的掃描範圍目前不明，所以 VBear 已關閉所有掃描來源，也不會重新掃描，畫面上是先前的索引。請修復或刪除 ~/.vbear/config.json 後重新啟動 VBear；原檔不會被覆寫。");
 }
 function runtimeNotice() {
   const h = D.live && D.live.runtime;
@@ -2142,7 +2285,7 @@ function herdrMigrationNotice() {
   } } }, "知道了");
   const wrap = el("div", { class: "notice info" },
     el("span", { class: "ico", "aria-hidden": "true" }, "i"),
-    el("div", null, "主控台已改用內建的 VBear runtime，不再支援 Herdr，設定已自動切換。在 Herdr 或其他終端自行啟動的 Agent 不會出現在這裡；請從角色卡的「出發通行證」開啟。 ", ack));
+    el("div", null, "VBear 已改用內建的背景程式，不再支援 Herdr，設定已自動切換。在 Herdr 或其他終端自行啟動的 AI 工具不會出現在這裡；請從員工的「開始前的檢查」開啟。 ", ack));
   return wrap;
 }
 function sectionHead(title, sub, action) {
@@ -2152,19 +2295,68 @@ function sectionHead(title, sub, action) {
 
 // ---------- views ----------------------------------------------------------
 
+// The home page (v0.21, P47-2, ADR 0013): what waits for the person to decide, their employees (a click on an avatar is a chat), what is on today,
+// and one box to say what they want to the CEO. A person with no employee sees three steps instead. The page shows no amount of money and sends
+// nothing by itself: the only write it can make is the person's own press of 送出 (and the buttons of a row of 「等你決定」, which are the
+// routines page's own requests). The parts of the old lobby (the board, task cards, skill search, recent projects) are under 「進階」 and only in
+// the advanced mode, which decides nothing but what is shown.
+let homeTick = null;     // the refresh of the home page every 5 seconds (route() runs it); null on any other page
 async function viewHome() {
   const token = seq;
   // /api/flows reads live state from the cache /api/live fills, so live goes first.
-  const [, , tasksRes, profilesRes, catalogRes, configRes] = await Promise.all([loadStatic(), loadLive().then(() => loadFlows()),
+  const [, , tasksRes, profilesRes, catalogRes, configRes, chatsRes, routinesRes, waitingRes, ledgerRes] = await Promise.all([loadStatic(), loadLive().then(() => loadFlows()),
     api.get("/api/tasks").catch(() => null), api.get("/api/agent-profiles").catch(() => null),
-    api.get("/api/agent-builder/catalog").catch(() => null), api.get("/api/config").catch(() => null), loadMeetings(), loadStaffingList(), loadDispatchList(), loadGroupList()]);
-  const L = D.live;
+    api.get("/api/agent-builder/catalog").catch(() => null), api.get("/api/config").catch(() => null),
+    api.get("/api/chats").catch(() => null), api.get("/api/routines").catch(() => null), api.get("/api/waiting").catch(() => null),
+    api.get("/api/meetings/ledger").catch(() => null), loadMeetings(), loadStaffingList(), loadDispatchList(), loadGroupList()]);
   const setup = setupGateWanted(configRes) ? await setupGate(configRes) : setupGateQuiet(configRes);
   if (token !== seq) return;
   if (setup.redirect) { location.hash = welcomeWanted(configRes) ? "#/welcome" : "#/setup"; return; }
-  const ceoDoor = await ceoLobbyDoor(await ceoPlan(), configRes, profilesRes);       // P38-8
+  const conf = configRes && configRes.config && typeof configRes.config === "object" ? configRes.config : null;
+  const advanced = conf && typeof conf.advanced_mode === "boolean" ? conf.advanced_mode : navAdvanced;   // a display only: which blocks are drawn
+  const profiles = profilesRes && Array.isArray(profilesRes.profiles) ? profilesRes.profiles.filter((p) => p && typeof p === "object" && typeof p.id === "string") : null;
+  const toolsRes = profiles && !profiles.length ? await api.get("/api/setup/tools").catch(() => null) : null;
   if (token !== seq) return;
+  noteTasks(tasksRes && tasksRes.tasks);
+  const state = {
+    token, profiles, conf, catalog: catalogRes && catalogRes.ok ? catalogRes : null, chats: chatsRes, routines: routinesRes,
+    lamp: ledgerRes && typeof ledgerRes.lamp === "string" ? ledgerRes.lamp : "", waitingList: waitingRes && Array.isArray(waitingRes.waiting) ? waitingRes.waiting : null,
+    shown: "", now: () => new Date(),
+  };
+  const board = boardGroups(D.live, D.flows, D.meetings, D.staffing, D.dispatch, D.groups);
+  boardShownKey = boardKey(board, boardKeyContext());
+  const waiting = homeWaiting(state, board);
+  const advancedPart = advanced ? homeAdvanced({ tasksRes, profilesRes, catalogRes, configRes, board }) : null;
   const main = claim(token);
+  let body;
+  if (profiles === null) {
+    body = [el("section", { class: "section", "data-home": "team" }, sectionHead(WORDS.employeeList.use, null),
+      notice("warn", "讀不到員工的資料，所以先不顯示。重新整理看看；還是不行，請到「設定」看一下 VBear 的狀態。")), homeToday(state)];
+  } else if (!profiles.length) body = [homeFirstSteps(toolsRes, chatsRes)];
+  else body = [homeTeam(state), homeToday(state), homeAsk(state)];
+  setKids(main,
+    el("h1", null, WORDS.home.use),
+    el("p", { class: "lede" }, "這裡看有什麼等你決定、你的員工，和今天要做的事。"),
+    corruptNotice(),
+    staleNotice(),
+    herdrMigrationNotice(),
+    setup.notice ? setupUpgradeNotice() : null,
+    runtimeNotice(),
+    waiting.node,
+    body,
+    advancedPart ? advancedPart.node : null);
+  homeTick = async () => {
+    if (token !== seq) return;
+    await state.refreshWaiting();
+    if (advancedPart) await advancedPart.refresh();
+  };
+  activeViewCleanup = () => { homeTick = null; };
+  // no auto-focus on the boxes: it would scroll the page past what waits for the person
+}
+
+// The old lobby, kept whole for the advanced mode: the first game, the board of flows, task cards, the skill search, recent projects, skills with problems.
+function homeAdvanced({ tasksRes, profilesRes, catalogRes, configRes, board }) {
+  const L = D.live;
   const onboardingHost = el("div", { id: "h-onboarding" });
   const onboardingInput = () => ({
     profiles: profilesRes && Array.isArray(profilesRes.profiles) ? profilesRes.profiles : null,
@@ -2198,22 +2390,11 @@ async function viewHome() {
   input.addEventListener("input", searchSoon);
   input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { searchSoon.cancel(); location.hash = `#/skills?q=${encodeURIComponent(input.value.trim())}`; } });
   const examples = ["網站安全", "做簡報", "剪影片", "部署網站", "寫小說", "設計品牌"];
-
-  noteTasks(tasksRes && tasksRes.tasks);
-  const board = boardGroups(L, D.flows, D.meetings, D.staffing, D.dispatch, D.groups);
-  boardShownKey = boardKey(board, boardKeyContext());
   const recentProjects = (L.projects || []).filter((p) => p.live_session_ids.length || p.last_activity).slice(0, 6);
   const problemSkills = (D.overview.skills_with_problems || []).map((id) => D.byId.get(id)).filter(Boolean);
-
-  setKids(main, 
-    el("h1", null, "冒險者大廳"),
-    el("p", { class: "lede" }, "這裡看哪些任務在等你、隊伍走到哪一步。"),
-    corruptNotice(),
-    staleNotice(),
-    herdrMigrationNotice(),
-    setup.notice ? setupUpgradeNotice() : null,
-    runtimeNotice(),
-    ceoDoor,
+  const node = el("section", { class: "section home-advanced", "data-home": "advanced" },
+    el("h2", null, "進階"),
+    el("p", { class: "small muted" }, "這一區只有在設定打開進階模式時才看得到。"),
     onboardingHost,
     el("div", { id: "h-board" }, boardSection(board)),
     taskCardsSection(tasksRes && tasksRes.tasks, { flows: D.flows && !D.flows.error ? D.flows.flows || [] : undefined,
@@ -2230,10 +2411,468 @@ async function viewHome() {
       recentProjects.length ? el("div", { class: "grid" }, recentProjects.map(projectCard)) : emptyState("最近沒有工作紀錄", null)),
     problemSkills.length ? el("section", { class: "section" },
       sectionHead("需要留意的技能", "可使用的技能中，結構檢查發現問題的項目"),
-      el("div", { class: "grid" }, problemSkills.slice(0, 6).map((s) => skillCard(s)))) : null,
-  );
-  // no auto-focus on the search box: it would scroll the page past the first-game steps and the "your turn" board
+      el("div", { class: "grid" }, problemSkills.slice(0, 6).map((s) => skillCard(s)))) : null);
+  // the board repaints only when something it shows changed, so the search box keeps its focus
+  const refresh = async () => {
+    const box = document.getElementById("h-board");
+    if (!box) return;
+    const g = boardGroups(D.live, D.flows, D.meetings, D.staffing, D.dispatch, D.groups);
+    const key = boardKey(g, boardKeyContext());
+    if (key === boardShownKey) return;
+    boardShownKey = key;
+    setKids(box, boardSection(g));
+  };
+  return { node, refresh };
 }
+
+// ---------- plain pages (v0.21, P47-2) ----------------------------------------------------------------------------------------
+// The home page's blocks, the employees' page and the work page. They read what the console already has (GET only) and set every name and
+// sentence as text. A page never guesses: what could not be read is said so, never shown as zero or as an empty team.
+
+const HOME_CEO_ASK = "CEO 要動手前都會先問你。";
+const HOME_BUSY_TEXT = "CEO 還在回上一則（或有卡片在等你決定），所以這句話沒有送出。字已經放在他的對話的輸入框裡，按「送出」才會送。";
+const HOME_LIMIT_KINDS = ["red", "budget"];
+const HOME_UNREAD_TEXT = "讀不到這位員工現在能不能聊天的狀態。";            // only what is known: it says nothing about what was or was not done
+const HOME_UNREAD_NOTHING_DONE = "所以沒有開對話，也沒有送出任何字。";    // said only where nothing was made or sent before the state was read
+
+// The chats a routine opened (they are not "a chat with" anyone for the home page): the ids in the routines' runs.
+function homeRoutineChatIds(routinesRes) {
+  const ids = new Set();
+  const list = routinesRes && typeof routinesRes === "object" && Array.isArray(routinesRes.routines) ? routinesRes.routines : [];
+  for (const r of list) for (const run of r && Array.isArray(r.runs) ? r.runs : []) if (run && typeof run.chat_id === "string" && run.chat_id) ids.add(run.chat_id);
+  return ids;
+}
+// The chats the person talked in with one employee, newest first. A chat with a problem, one a routine opened and one in a group are not.
+function homeChatsOf(chatsRes, routinesRes, profileId) {
+  const list = chatsRes && typeof chatsRes === "object" && Array.isArray(chatsRes.chats) ? chatsRes.chats : [];
+  const routine = homeRoutineChatIds(routinesRes);
+  // a chat the server labels with a routine's title is that routine's own run (the server reads it from the whole record, so it holds for a deleted routine
+  // or a run older than the last ten that GET /api/routines lists): it is never "the chat with" the employee
+  return list.filter((c) => c && typeof c === "object" && typeof c.id === "string" && c.profile_id === profileId && !c.problem && !routine.has(c.id)
+    && typeof c.routine_title !== "string")
+    .sort((a, b) => (Number(b.last_at) || 0) - (Number(a.last_at) || 0));
+}
+// The employee who is the CEO: the first CEO the person made (config first_ceo_id) when that card is there, else the first card whose position is CEO.
+function homeCeoOf(profiles, conf) {
+  const list = (Array.isArray(profiles) ? profiles : []).filter((p) => p && p.enabled !== false);
+  const id = conf && typeof conf.first_ceo_id === "string" ? conf.first_ceo_id : "";
+  return list.find((p) => p.id === id) || list.find((p) => cardPosition(p) === "planner") || null;
+}
+function homeCardOf(chatsRes, profileId) {
+  const cards = chatsRes && typeof chatsRes === "object" && Array.isArray(chatsRes.cards) ? chatsRes.cards : null;
+  return cards ? cards.find((c) => c && c.id === profileId) || null : null;
+}
+function homeWhen(sec, now) {
+  const t = Number(sec);
+  if (!Number.isFinite(t) || t <= 0) return "";
+  const d = new Date(t * 1000);
+  const two = (n) => String(n).padStart(2, "0");
+  const dayStart = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const gap = Math.round((dayStart(now) - dayStart(d)) / 86400000);
+  if (gap === 0) return `${two(d.getHours())}:${two(d.getMinutes())}`;
+  if (gap === 1) return "昨天";
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+// Opens the chat with an employee, and with `opts.text` sends it, the way the chat page's 送出 does. One call = at most one POST /api/chats (when
+// there is no chat with them yet; opening costs nothing) and at most one POST to its /messages. A card that cannot chat yet leads to the page that
+// prepares it (nothing is sent). A chat whose turn is running or that has a card waiting is not sent into: the words are kept for the box of that chat.
+// -> { ok, sent, kept, error, chatId }. It always goes to the chat page when it is not an error.
+async function openChatWith(profileId, opts = {}) {
+  const text = typeof opts.text === "string" ? opts.text : "";
+  const [chatsRes, routinesRes] = await Promise.all([api.get("/api/chats").catch(() => null), api.get("/api/routines").catch(() => null)]);
+  const card = homeCardOf(chatsRes, profileId);
+  const prepare = () => {            // the page that makes the chat ready; the words wait under the employee's id (no chat to put them in yet)
+    if (text.trim()) ceoDrafts.set(profileId, text);
+    location.hash = `#/chat?profile=${encodeURIComponent(profileId)}`;
+  };
+  if (card && card.can_chat === false) { prepare(); return { ok: false, sent: false, kept: false, error: null, chatId: "", reason: card.reason || "" }; }
+  let chat = homeChatsOf(chatsRes, routinesRes, profileId)[0] || null;
+  // The AI tool of this employee cannot chat yet (not checked for chat, held back by an administrator's policy, not logged in...): a new chat would be
+  // opened for nothing and a send would be refused, so the person goes to the page that says why, and the words wait under the employee's id.
+  // Reading a chat that is already there (no words to send) is still allowed.
+  // Only a state that was read and says "start" opens a chat or sends: a read that failed or a card that is not in the list is not a go (R2 Q1).
+  const prep = chatPrepState(card, chatsRes);
+  if ((!prep || prep.kind !== "start") && (!chat || text.trim())) { prepare(); return { ok: false, sent: false, kept: false, error: null, chatId: "", reason: prep ? prep.reason : HOME_UNREAD_TEXT + HOME_UNREAD_NOTHING_DONE }; }
+  if (!chat) {
+    try {
+      const r = await api.post("/api/chats", { profile_id: profileId });
+      chat = r && r.chat && typeof r.chat.id === "string" ? { id: r.chat.id, open: false, waiting: false } : null;
+    } catch (e) {
+      prepare();
+      toast("現在還不能開對話：" + e.message);
+      return { ok: false, sent: false, kept: false, error: e, chatId: "" };
+    }
+    if (!chat) { prepare(); return { ok: false, sent: false, kept: false, error: null, chatId: "" }; }
+  }
+  const go = () => { location.hash = `#/chat/${encodeURIComponent(chat.id)}`; };
+  if (!text.trim()) { go(); return { ok: true, sent: false, kept: false, error: null, chatId: chat.id }; }
+  if (chat.open === true || chat.waiting === true) {
+    ceoDrafts.set(chat.id, text);          // the chat page takes it into its box; only the send button there sends it
+    go();
+    return { ok: true, sent: false, kept: true, error: null, chatId: chat.id };
+  }
+  try { await api.post(`/api/chats/${encodeURIComponent(chat.id)}/messages`, { text }); }
+  catch (e) {
+    // The server says this AI tool cannot chat after all (the state changed since it was read): read the real state now, so the person is told the real
+    // reason and gets the way to the page that prepares it (R2 Q2); the words stay where they are.
+    let fresh = null;
+    if (CHAT_NOT_READY_CODES.includes(e.code)) {
+      const data = await api.get("/api/chats").catch(() => null);
+      fresh = data ? chatPrepState(homeCardOf(data, profileId), data) : null;
+    }
+    return { ok: false, sent: false, kept: false, error: e, chatId: chat.id, prep: fresh };
+  }
+  go();
+  return { ok: true, sent: true, kept: false, error: null, chatId: chat.id };
+}
+
+// ---- 等你決定 ----
+// The rows of what waits for the person, from what the old lobby's 「輪到你」 and the line over every page listed (the same in the normal and
+// in the advanced mode). `g`: boardGroups(...); `list`: GET /api/waiting's rows (null = not read); `lamp`: today's lamp ("red" = at the limit).
+// -> { rows: [{ kind, key, text, href?, act? }], notes: [what could not be read], complete }. A paused dispatch or group that has its countdown row is not said twice.
+function homeWaitingRows(g, list, lamp) {
+  const rows = [];
+  const notes = [];
+  const resumeDispatch = new Set();
+  const resumeGroup = new Set();
+  if (list === null) notes.push("讀不到定時工作和接著做的提醒");
+  for (const w of Array.isArray(list) ? list : []) {
+    if (!w || typeof w !== "object" || typeof w.name !== "string") continue;
+    if (w.kind === "routine_due" && typeof w.run_id === "string") {
+      const at = typeof w.slot === "string" ? w.slot.slice(11, 16) : "";
+      rows.push({ kind: "routine_due", key: "due:" + w.run_id, text: `定時工作「${w.name}」${at}到時間了，還沒開始。`, act: { type: "due", id: w.run_id } });
+    } else if (w.kind === "routine_missed" && typeof w.routine_id === "string") {
+      rows.push({ kind: "routine_missed", key: "missed:" + w.routine_id, text: `定時工作「${w.name}」錯過了 ${Number.isFinite(w.count) ? w.count : 1} 次（VBear 剛才沒在看）。`, act: { type: "missed", id: w.routine_id } });
+    } else if (w.kind === "dispatch_resume" && typeof w.dispatch_id === "string") {
+      resumeDispatch.add(w.dispatch_id);
+      rows.push({ kind: "dispatch_resume", key: "dr:" + w.dispatch_id, text: `分配工作「${w.name}」${typeof w.text === "string" ? w.text : "暫停了"}`, href: `#/dispatch/${encodeURIComponent(w.dispatch_id)}` });
+    } else if (w.kind === "group_resume" && typeof w.group_id === "string") {
+      resumeGroup.add(w.group_id);
+      rows.push({ kind: "group_resume", key: "gr:" + w.group_id, text: `群組「${w.name}」${typeof w.text === "string" ? w.text : "暫停了"}`, href: `#/chat/group/${encodeURIComponent(w.group_id)}` });
+    }
+  }
+  if (g.error) notes.push(`讀不到流程：${g.error}`);
+  for (const f of g.yourTurnFlows) {
+    const why = f.attention_reason || (f.phase && f.phase.reason) || "";
+    rows.push({ kind: "flow", key: "f:" + f.id, text: `流程「${f.task_missing ? "（專案已刪除或無法讀取）" : f.task_title}」等你處理${why ? "：" + why : ""}`, href: `#/flows/${encodeURIComponent(f.id)}` });
+  }
+  for (const s of g.yourTurnSessions) {
+    rows.push({ kind: "session", key: "s:" + s.terminal_id, text: `指令視窗「${s.role_label || TOOL[s.agent] || "未命名"}」在等你回覆`, href: `#/term/${encodeURIComponent(s.pane_id)}` });
+  }
+  if (g.meetingsError) notes.push(`讀不到會議：${g.meetingsError}`);
+  for (const m of g.yourTurnMeetings || []) rows.push({ kind: "meeting", key: "m:" + m.id, text: `會議「${m.topic || "（沒有議題）"}」等你核准`, href: `#/meetings/${encodeURIComponent(m.id)}` });
+  if (g.staffingError) notes.push(`讀不到組隊會議：${g.staffingError}`);
+  for (const x of g.yourTurnStaffing || []) rows.push({ kind: "staffing", key: "st:" + x.id, text: `組隊會議「${staffingTurnTitle(x)}」等你決定要不要採用`, href: `#/staffing/${encodeURIComponent(x.id)}` });
+  if (g.dispatchError) notes.push(`讀不到分配工作：${g.dispatchError}`);
+  for (const r of g.yourTurnDispatch || []) {
+    if (r.state === "proposed") rows.push({ kind: "dispatch_proposed", key: "dp:" + r.id, text: `幕僚長的提議「${r.title || "（沒有名稱）"}」等你確認（分配工作）`, href: `#/dispatch/${encodeURIComponent(r.id)}` });
+    else if (!resumeDispatch.has(r.id)) rows.push({ kind: "dispatch_paused", key: "dq:" + r.id, text: `分配工作「${r.title || "（沒有名稱）"}」暫停了，等你按「繼續」`, href: `#/dispatch/${encodeURIComponent(r.id)}` });
+  }
+  if (g.groupsError) notes.push(`讀不到群組：${g.groupsError}`);
+  for (const r of g.yourTurnGroups || []) {
+    if (r.waiting === true) rows.push({ kind: "group_waiting", key: "gw:" + r.id, text: `群組「${r.name || "（沒有名稱）"}」有員工想動手，等你按「允許這一次」或「拒絕」`, href: `#/chat/group/${encodeURIComponent(r.id)}` });
+    else if (!resumeGroup.has(r.id)) rows.push({ kind: "group_paused", key: "gq:" + r.id, text: `群組「${r.name || "（沒有名稱）"}」暫停了，等你按「繼續」或「不用了」`, href: `#/chat/group/${encodeURIComponent(r.id)}` });
+  }
+  if (lamp === "red") rows.push({ kind: "limit", key: "limit", text: "今天的用量到上限了，員工明天 0 點前不會再回話。", href: LIMIT_SETTINGS_HREF, link: "到設定看" });
+  return { rows, notes, complete: !notes.length && g.runtimeAvailable === true };
+}
+
+const HOME_ROW_BUTTONS = {
+  due: [["wait-start", "現在開始", true], ["wait-skip", "這次跳過", false]],
+  missed: [["missed-run", "補做", true], ["missed-dismiss", "不用了", false]],
+};
+function homeRowNode(row, act) {
+  const buttons = row.act
+    ? HOME_ROW_BUTTONS[row.act.type].map(([key, label, primary]) => el("button", { type: "button", class: `btn small${primary ? " primary" : ""}`, "data-home-action": key,
+      on: { click: (e) => { e.target.disabled = true; act(key, row.act.id); } } }, label))
+    : [el("a", { class: "btn small", href: row.href, "data-home-action": "go" }, row.link || "去看看")];
+  const node = el("div", { class: "home-row", "data-home-row": row.kind },
+    el("span", { class: "home-dot", "aria-hidden": "true" }), el("span", { class: "home-row-text" }, row.text), el("span", { class: "home-row-go" }, buttons));
+  if (row.kind === "limit") node.setAttribute("data-home", "limit-reached");
+  return node;
+}
+// The block. `state.refreshWaiting()` reads again (the same GETs as the page) and repaints the list only when it changed.
+function homeWaiting(state, board) {
+  const list = el("div", { class: "home-rows", "data-home": "waiting-list" });
+  const note = (m) => notice("warn", m);
+  const requests = {
+    "wait-start": (id) => api.post(`/api/routines/waiting/${encodeURIComponent(id)}`, { action: "start" }),
+    "wait-skip": (id) => api.post(`/api/routines/waiting/${encodeURIComponent(id)}`, { action: "skip" }),
+    "missed-run": (id) => api.post(`/api/routines/missed/${encodeURIComponent(id)}`, { action: "run" }),
+    "missed-dismiss": (id) => api.post(`/api/routines/missed/${encodeURIComponent(id)}`, { action: "dismiss" }),
+  };
+  const done = { "wait-start": "已開始", "wait-skip": "這次跳過了", "missed-run": "已開始補做", "missed-dismiss": "不補做了" };
+  const act = async (key, id) => {
+    try { await requests[key](id); toast(done[key]); } catch (e) { toast(e.message); }
+    await state.refreshWaiting();
+    refreshWaitingBar();
+  };
+  const paint = (g) => {
+    const m = homeWaitingRows(g, state.waitingList, state.lamp);
+    const key = JSON.stringify([m.rows, m.notes, m.complete]);
+    if (key === state.shown) return;
+    state.shown = key;
+    setKids(list,
+      m.notes.map(note),
+      m.rows.length ? el("div", { class: "home-row-list" }, m.rows.map((r) => homeRowNode(r, act)))
+        : el("p", { class: "small muted", "data-home": "waiting-none" }, m.complete ? "現在沒有要你決定的事。" : "目前讀得到的資料裡，沒有要你決定的事。"));
+  };
+  paint(board);
+  state.refreshWaiting = async () => {
+    if (state.token !== seq) return;
+    await Promise.all([loadLive().then(() => loadFlows()), loadMeetings(), loadStaffingList(), loadDispatchList(), loadGroupList()]);
+    const [w, l] = await Promise.all([api.get("/api/waiting").catch(() => null), api.get("/api/meetings/ledger").catch(() => null)]);
+    if (state.token !== seq) return;
+    state.waitingList = w && Array.isArray(w.waiting) ? w.waiting : null;
+    state.lamp = l && typeof l.lamp === "string" ? l.lamp : "";
+    paint(boardGroups(D.live, D.flows, D.meetings, D.staffing, D.dispatch, D.groups));
+  };
+  return { node: el("section", { class: "section home-block", "data-home": "waiting" }, sectionHead(WORDS.waiting.use, null), list) };
+}
+
+// ---- 我的員工 ----
+// The avatar of one employee: a click talks with them (openChatWith). One that cannot chat is grey, with the reason under it.
+function homeAvatar(p, chatsRes) {
+  const card = homeCardOf(chatsRes, p.id);
+  const off = !!card && card.can_chat === false;
+  const pos = cardPosition(p);
+  const reason = off ? plainWords(card.reason || "現在不能聊天").text : "";
+  const btn = el("button", { type: "button", class: `home-avatar${off ? " home-avatar-off" : ""}`, "data-employee": p.id, "data-employee-action": "chat",
+    "aria-label": `和 ${p.name || p.id} 聊天${off ? "（現在不能聊天）" : ""}`, on: { click: () => { openChatWith(p.id); } } },
+    el("span", { class: "home-avatar-art", "aria-hidden": "true" }, cardAvatar(p, 3)),
+    el("span", { class: "home-avatar-name" }, p.name || p.id),
+    el("span", { class: "home-avatar-pos small muted" }, pos ? CARD_POSITION_LABEL[pos] : ""));
+  return el("div", { class: "home-person" }, btn, reason ? el("span", { class: "small muted home-avatar-why", "data-employee-note": p.id }, reason) : null);
+}
+function homeNewEmployee(state) {
+  return el("button", { type: "button", class: "btn small", "data-employee-action": "new", on: { click: () => {
+    if (!state.catalog) { toast("現在還不能新增員工，請稍後再試。"); return; }
+    openCardWizard({ catalog: state.catalog, profiles: state.profiles || [], existing: null, onSaved: () => route() });
+  } } }, WORDS.newEmployee.use);
+}
+function homeTeam(state) {
+  const ceo = homeCeoOf(state.profiles, state.conf);
+  const people = [...(ceo ? [ceo] : []), ...state.profiles.filter((p) => !ceo || p.id !== ceo.id)];
+  return el("section", { class: "section home-block", "data-home": "team" },
+    sectionHead(WORDS.employeeList.use, "點頭像就能聊", homeNewEmployee(state)),
+    el("div", { class: "home-people" }, people.map((p) => homeAvatar(p, state.chats))));
+}
+
+// ---- 今天 ----
+// -> { readable, total, left, next: { name, time } | null }: from GET /api/routines. `left` counts the times of the routines that are on and
+// run today that have not come yet; `now` is a Date (the page's clock; a test passes its own).
+function homeTodayModel(res, now) {
+  if (!res || typeof res !== "object" || !Array.isArray(res.routines) || res.readable === false) return { readable: false, total: 0, left: 0, next: null };
+  const day = (now.getDay() + 6) % 7;
+  const minutes = now.getHours() * 60 + now.getMinutes();
+  let left = 0;
+  let next = null;
+  for (const r of res.routines) {
+    if (!r || r.enabled !== true || !Array.isArray(r.days) || !r.days.includes(day)) continue;
+    for (const t of Array.isArray(r.times) ? r.times : []) {
+      const m = /^(\d\d):(\d\d)$/.exec(String(t));
+      if (!m) continue;
+      const v = Number(m[1]) * 60 + Number(m[2]);
+      if (v <= minutes) continue;
+      left += 1;
+      if (!next || v < next.v) next = { v, name: String(r.name || ""), time: m[0] };
+    }
+  }
+  return { readable: true, total: res.routines.length, left, next: next ? { name: next.name, time: next.time } : null };
+}
+function homeToday(state) {
+  const now = state.now();
+  const m = homeTodayModel(state.routines, now);
+  let line;
+  if (!m.readable) line = "讀不到定時工作，所以看不出今天還有什麼要做。";
+  else if (!m.total) line = "還沒有定時工作。";
+  else if (!m.left) line = "今天沒有還沒到的定時工作。";
+  else line = `今天還有 ${m.left} 件，下一件 ${m.next.time}「${m.next.name}」`;
+  const chats = state.chats && Array.isArray(state.chats.chats) ? state.chats : null;
+  const routineIds = homeRoutineChatIds(state.routines);
+  const names = new Map((state.profiles || []).map((p) => [p.id, p.name || p.id]));
+  const seen = new Set();
+  const recent = [];
+  for (const c of chats ? chats.chats.slice().sort((a, b) => (Number(b.last_at) || 0) - (Number(a.last_at) || 0)) : []) {
+    if (!c || c.problem || routineIds.has(c.id) || typeof c.routine_title === "string" || !(c.turns > 0) || seen.has(c.profile_id) || !names.has(c.profile_id)) continue;
+    seen.add(c.profile_id);
+    recent.push(`${names.get(c.profile_id)}（${homeWhen(c.last_at, now)}）`);
+    if (recent.length >= 3) break;
+  }
+  return el("section", { class: "section home-block", "data-home": "today" },
+    sectionHead("今天", null),
+    el("p", { "data-home-today": "routines" }, line, " ", el("a", { class: "btn small", href: "#/routines" }, "看定時工作")),
+    chats ? (recent.length ? el("p", { class: "small", "data-home-today": "chats" }, "最近聊過：", recent.join("、")) : el("p", { class: "small muted", "data-home-today": "chats" }, "最近還沒聊過天。"))
+      : el("p", { class: "small muted", "data-home-today": "chats" }, "讀不到最近的對話。"));
+}
+
+// ---- 想做什麼？跟 CEO 說 ----
+function homeAsk(state) {
+  const ceo = homeCeoOf(state.profiles, state.conf);
+  const head = sectionHead("想做什麼？跟 CEO 說", null);
+  if (!ceo) {
+    return el("section", { class: "section home-block", "data-home": "ask" }, head,
+      el("p", null, "先建立一位 CEO，就能在這裡直接跟他說。"),
+      el("a", { class: "btn primary", href: "#/ceo", "data-home": "ask-ceo" }, "建立 CEO"));
+  }
+  const card = homeCardOf(state.chats, ceo.id);
+  const prep = card ? chatPrepState(card, state.chats) : null;
+  if (prep && prep.kind !== "start") {         // cannot chat yet (card off, tool not checked for chat, policy...): one reason and one way to the page that prepares it
+    return el("section", { class: "section home-block", "data-home": "ask" }, head,
+      el("p", null, `${ceo.name || "CEO"} 現在還不能聊天：${plainWords(prep.reason || "").text || "原因不明"}`),
+      el("a", { class: "btn primary", href: `#/chat?profile=${encodeURIComponent(ceo.id)}`, "data-home": "ask-prepare" }, "先把聊天準備好"));
+  }
+  const talked = state.chats && Array.isArray(state.chats.chats) ? state.chats.chats.some((c) => c && c.turns > 0 && !c.problem) : false;
+  const input = el("textarea", { rows: "3", maxlength: "20000", "data-home": "ask-input", "aria-label": "要對 CEO 說的話", placeholder: "例如：幫我把下個月的家庭開銷整理成表（Cmd/Ctrl + Enter 送出）",
+    on: { keydown: (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } } } });
+  const result = el("div", { "data-home": "ask-result", "aria-live": "polite" });
+  const button = el("button", { type: "button", class: "btn primary", "data-home": "ask-send", on: { click: () => send() } }, "送出");
+  let busy = false;
+  async function send() {
+    const text = input.value;
+    if (busy || !text.trim()) return;
+    if (state.lamp === "red") { setKids(result, limitReachedNotice(null)); return; }       // the limit would stop it: nothing is sent
+    busy = true; button.disabled = true; setKids(result);
+    let r;
+    try { r = await openChatWith(ceo.id, { text }); }
+    catch (e) { r = { ok: false, error: e }; }
+    busy = false; button.disabled = false;
+    if (r.error) {
+      const w = plainWords(r.error);
+      const limit = w.limit || HOME_LIMIT_KINDS.includes(r.error.code);
+      if (!limit && CHAT_NOT_READY_CODES.includes(r.error.code)) setKids(result, chatNotReadyNotice(r.error, ceo.id, r.prep, { scope: "home", go: "ask-prepare", keep: () => input.value }));
+      else setKids(result, limit ? limitReachedNotice(r.error.message) : notice("bad", r.error.message || "沒有送出"));
+    } else if (r.kept) toast(HOME_BUSY_TEXT);
+    else if (r.reason) setKids(result, notice("warn", plainWords(r.reason).text));
+    else if (r.ok) input.value = "";
+  }
+  return el("section", { class: "section home-block", "data-home": "ask" }, head,
+    talked ? null : el("p", { class: "small" }, "跟 CEO 說第一句話吧。"),
+    el("div", { class: "home-ask-row" }, input, button),
+    el("p", { class: "small muted" }, HOME_CEO_ASK),
+    result);
+}
+
+// ---- the three steps of a person with no employee ----
+// What the chat support (GET /api/chats' `support`) says of each AI tool that can chat: [{ id, name, state, ready }], or null when it was not read.
+// A tool can be installed and logged in and still not be able to chat (not checked for chat yet, held back by an administrator's policy), so
+// "ready" for a chat is this and not the tool's own readiness.
+function chatSupportGlance(data) {
+  const sup = data && typeof data === "object" && data.support && typeof data.support === "object" ? data.support : null;
+  if (!sup) return null;
+  const sub = (x) => (x && typeof x === "object" && typeof x.state === "string" ? x.state : "");
+  return [["claude", "Claude Code", sub(sup), "verified"], ["codex", "Codex", sub(sup.codex), "ready"], ["agy", "AGY", sub(sup.agy), "ready"]]
+    .map(([id, name, state, good]) => ({ id, name, state, ready: state === good }));
+}
+// The line of step 1: whether a chat can start with the tools there are, in plain words. -> { done, line }
+function homeToolStep(toolReady, rows, glance) {
+  const unread = rows ? "還沒有就緒的 AI 工具。" : "讀不到 AI 工具的狀態。";
+  if (!glance) return { done: false, line: toolReady ? "AI 工具已就緒，但讀不到聊天的狀態。" : unread };
+  if (glance.some((g) => g.ready)) return { done: true, line: "已經有可以聊天的 AI 工具就緒了。" };
+  const held = glance.find((g) => g.state === "policy");
+  if (held) return { done: false, line: `這台電腦的 ${held.name} 有管理員設定，VBear 不能用它聊天。` };
+  if (glance.some((g) => g.state === "unverified")) return { done: false, line: "AI 工具已就緒，第一次聊天前要先做一次安全檢查（建立 CEO 後會帶你做）。" };
+  return { done: false, line: toolReady ? "AI 工具已就緒，但聊天現在還不能用，到「看 AI 工具」看原因。" : unread };
+}
+function homeFirstSteps(toolsRes, chatsRes) {
+  const rows = toolsRes && typeof toolsRes === "object" && Array.isArray(toolsRes.tools) ? toolsRes.tools : null;
+  const ready = !!rows && rows.some((t) => t && ["claude", "codex", "agy"].includes(t.id) && t.ready === true);
+  const toolStep = homeToolStep(ready, rows, chatSupportGlance(chatsRes));
+  const step = (n, cls, title, line, action) => el("li", { class: `home-step ${cls}`, "data-home-step": String(n) },
+    el("span", { class: "home-step-mark", "aria-hidden": "true" }, cls.includes("done") ? "✓" : String(n)),
+    el("div", { class: "home-step-body" }, el("strong", null, title), el("span", { class: "small muted" }, line)), action || null);
+  return el("section", { class: "section home-block", "data-home": "first-steps" },
+    el("h2", null, "歡迎！三步就能開始。"),
+    el("ol", { class: "home-steps" },
+      step(1, toolStep.done ? "done" : "", "準備 AI 工具", toolStep.line,
+        el("a", { class: "btn small", href: "#/setup" }, "看 AI 工具")),
+      step(2, "", "建立 CEO", "他會先問你幾個問題，再幫你整理計畫。", el("a", { class: "btn small primary", href: "#/ceo" }, "建立 CEO")),
+      step(3, "off", "說第一句話", "建立 CEO 之後就能說。", null)));
+}
+
+// ---- 員工 (#/employees) ----
+async function viewEmployees() {
+  const token = seq;
+  const [profilesRes, chatsRes, catalogRes] = await Promise.all([api.get("/api/agent-profiles").catch(() => null), api.get("/api/chats").catch(() => null),
+    api.get("/api/agent-builder/catalog").catch(() => null)]);
+  if (token !== seq) return;
+  const main = claim(token);
+  const profiles = profilesRes && Array.isArray(profilesRes.profiles) ? profilesRes.profiles.filter((p) => p && typeof p === "object" && typeof p.id === "string") : null;
+  const catalog = catalogRes && catalogRes.ok ? catalogRes : null;
+  const needCatalog = (fn) => () => { if (!catalog) { toast("現在還不能新增或設定員工，請稍後再試。"); return; } fn(); };
+  const chatCards = chatsRes && Array.isArray(chatsRes.cards) ? chatsRes.cards : null;
+  const newBtn = el("button", { type: "button", class: "btn primary", "data-employee-action": "new",
+    on: { click: needCatalog(() => openCardWizard({ catalog, profiles: profiles || [], existing: null, onSaved: () => route() })) } }, WORDS.newEmployee.use);
+  const person = (p) => {
+    const card = homeCardOf(chatsRes, p.id);
+    const off = !!card && card.can_chat === false;
+    const pos = cardPosition(p);
+    const tool = p.model && typeof p.model.tool === "string" ? CARD_TOOL_SHORT[p.model.tool] || p.model.tool : "";
+    return el("article", { class: `card home-employee${off ? " home-employee-off" : ""}`, "data-employee": p.id },
+      el("div", { class: "card-top" },
+        el("button", { type: "button", class: `home-avatar${off ? " home-avatar-off" : ""}`, "data-employee-action": "chat", "aria-label": `和 ${p.name || p.id} 聊天`,
+          on: { click: () => { openChatWith(p.id); } } }, el("span", { class: "home-avatar-art", "aria-hidden": "true" }, cardAvatar(p, 3))),
+        el("div", { style: "min-width:0" }, el("div", { class: "card-title" }, p.name || p.id),
+          el("div", { class: "card-sub" }, [pos ? CARD_POSITION_LABEL[pos] : "", tool].filter(Boolean).join("・")))),
+      p.enabled === false ? el("p", { class: "small muted" }, "這位員工目前停用。") : null,
+      off ? el("p", { class: "small muted", "data-employee-note": p.id }, plainWords(card.reason || "現在不能聊天").text) : null,
+      el("div", { class: "row" },
+        el("button", { type: "button", class: "btn small primary", "data-employee-action": "chat", disabled: off ? true : undefined, on: { click: () => { openChatWith(p.id); } } }, "聊天"), " ",
+        el("button", { type: "button", class: "btn small", "data-employee-action": "edit", on: { click: needCatalog(() => openCardWizard({ catalog, profiles, existing: p, onSaved: () => route() })) } }, "設定"), " ",
+        el("button", { type: "button", class: "btn small", "data-employee-action": "delete", on: { click: () => deleteCard(p, () => route()) } }, "刪除")));
+  };
+  const groupBtn = () => {
+    const cards = chatCards || [];
+    const usable = cards.filter((c) => c && c.can_chat === true).length;
+    return el("button", { type: "button", class: "btn small", "data-employee-action": "group", disabled: !chatCards || usable < GROUP_MIN ? true : undefined,
+      title: !chatCards ? "讀不到員工能不能聊天" : usable < GROUP_MIN ? `要有 ${GROUP_MIN} 位以上可以聊天的員工才能開群組` : undefined,
+      on: { click: () => openGroupDialog(cards, { onCreate: async (body) => {
+        const made = await api.post("/api/groups", body);
+        const notes = Array.isArray(made.notes) ? made.notes.filter((x) => typeof x === "string" && x) : [];
+        if (made.shared && made.shared.error && typeof made.shared.error.text === "string") notes.push("共用資料夾沒有全部打開：" + made.shared.error.text);
+        if (notes.length) toast(notes.join(" "));
+        location.hash = `#/chat/group/${encodeURIComponent(made.group.id)}`;
+        return made;
+      } }) } }, "開新群組");
+  };
+  const link = (href, label, line) => el("li", { class: "work-link" }, el("a", { href, class: "work-link-name" }, label), el("span", { class: "small muted" }, line));
+  setKids(main,
+    el("h1", null, "員工"),
+    el("p", { class: "lede" }, "你的 AI 員工都在這裡。點頭像或「聊天」就能和他說話。"),
+    runtimeNotice(),
+    el("section", { class: "section", "data-employees": "list" },
+      sectionHead(WORDS.employeeList.use, null, el("div", { class: "row" }, newBtn, " ", el("a", { class: "btn", href: "#/templates", "data-employee-action": "templates" }, "用團隊範本一次加好幾位"))),
+      profiles === null ? notice("warn", "讀不到員工的資料。重新整理看看。")
+        : profiles.length ? el("div", { class: "grid" }, profiles.map(person))
+          : emptyState("還沒有員工", "按「新增員工」，或用團隊範本一次加好幾位。")),
+    el("section", { class: "section", "data-employees": "shared" },
+      sectionHead("大家共用的", null),
+      el("ul", { class: "work-links" },
+        link("#/memory", "記憶", "可以讓員工帶著的幾句話：關於你、你的工作、你的決定。你可以選哪些員工帶著。"),
+        link("#/shared", "共用資料夾", "讓員工看同一個資料夾裡的檔案。"),
+        link("#/chat", "對話紀錄", "和員工聊過的對話，也能接著聊。"),
+        link("#/office", "辦公室", "像遊戲的樣子看大家。")),
+      el("div", { class: "row" }, groupBtn())));
+}
+
+// ---- 工作 (#/work) ----
+const WORK_LINKS = [
+  ["chat", "對話紀錄", "和員工聊過的對話，也能接著聊。"],
+  ["dispatch", "分配工作", "請 CEO 把一件事分成幾步交給員工；他提議、你確認才會做。"],
+  ["routines", "定時工作", "請員工在固定的時間做同一件事。"],
+  ["meetings", "會議", "各職位發言，CEO 做決定，重大的事交給你核准。"],
+  ["my-skills", "常用做法", "存下常用的做法，之後在對話裡一鍵放進輸入框。"],
+  ["actions", "AI 自己做了什麼", "CEO 和分配工作做過的每一件事，都列在這裡。"],
+];
+async function viewWork() {
+  setKids(claim(seq),
+    el("h1", null, "工作"),
+    el("p", { class: "lede" }, "請員工做事、安排時間、看做了什麼，都從這裡進去。"),
+    el("ul", { class: "work-links" }, WORK_LINKS.map(([route, name, line]) =>
+      el("li", { class: "work-link" }, el("a", { href: `#/${route}`, class: "work-link-name", "data-work": route }, name), el("span", { class: "small muted" }, line)))));
+}
+// ---------- end of plain pages ----------------------------------------------------------------------------------------------
 
 // ---------- the quest board (design lobby v1.2) ------------------------------------------------------------
 // The home page's first block. Every card is data VBear already has; nothing here invents progress. The grouping
@@ -2431,7 +3070,7 @@ function questCard(f, yourTurn) {
       el("div", { style: "min-width:0" },
         el("div", { class: "card-title" },
           el("a", { class: "quest-link", href: `#/flows/${encodeURIComponent(f.id)}` },
-            f.task_missing ? "（任務卡已刪除或無法讀取）" : f.task_title)),
+            f.task_missing ? "（專案已刪除或無法讀取）" : f.task_title)),
         hintLine(flowTitleHint(f)),
         el("div", { class: "card-sub" }, f.attention_reason || ph.reason || "")),
       el("span", { class: `badge ${flowPhaseClass(ph.key)} quest-type`, title: ph.reason || "" },
@@ -2466,12 +3105,12 @@ function boardSection(g, opts = {}) {
     return el("section", { class: "section", "data-board": "start" },
       sectionHead("任務告示板", "每 5 秒更新"),
       el("div", { class: "empty-state quest-start" },
-        el("strong", null, "大廳目前沒有任務。想開始第一個任務？"),
-        el("a", { class: firstGame ? "btn" : "btn primary", href: "#/workbench", "data-board": "workbench" }, "到終端工作台"),
-        el("span", null, "在那裡挑角色出發；想讓多個角色合作，先按下方「＋ 任務卡（導入專案）」挑一個專案資料夾，再把角色卡放上任務卡的隊伍位置。"),
+        el("strong", null, "目前沒有任務。想開始第一個任務？"),
+        el("a", { class: firstGame ? "btn" : "btn primary", href: "#/workbench", "data-board": "workbench" }, "到工作台"),
+        el("span", null, "在那裡挑員工開始工作；想讓多位員工合作，先按下方「＋ 加入一個資料夾」挑一個專案資料夾，再把員工放上專案的隊伍位置。"),
         g.meetingsError ? notice("warn", `讀不到會議：${g.meetingsError}`) : null,
         g.staffingError ? notice("warn", `讀不到組隊會議：${g.staffingError}`) : null,
-        g.dispatchError ? notice("warn", `讀不到派工：${g.dispatchError}`) : null,
+        g.dispatchError ? notice("warn", `讀不到分配工作：${g.dispatchError}`) : null,
         g.groupsError ? notice("warn", `讀不到群組：${g.groupsError}`) : null));
   }
   const nTurn = g.yourTurnFlows.length;
@@ -2483,7 +3122,7 @@ function boardSection(g, opts = {}) {
   const nGroupWait = (g.yourTurnGroups || []).filter((r) => r.waiting === true).length;
   const nGroupPaused = (g.yourTurnGroups || []).length - nGroupWait;
   const counts = [nTurn ? `${nTurn} 則流程等你` : "", nMeetings ? `${nMeetings} 場會議等你` : "", nStaffing ? `${nStaffing} 份組隊提案等你` : "",
-    nProposed ? `${nProposed} 份派工提議等你` : "", nPaused ? `${nPaused} 件派工暫停` : "",
+    nProposed ? `${nProposed} 份分配工作提議等你` : "", nPaused ? `${nPaused} 件分配工作暫停` : "",
     nGroupWait ? `${nGroupWait} 個群組等你按允許` : "", nGroupPaused ? `${nGroupPaused} 個群組暫停` : "",
     nAgents ? `${nAgents} 個終端在等你` : ""].filter(Boolean).join("・");
   const cards = [...g.yourTurnFlows.map((f) => questCard(f, true)), ...(g.yourTurnMeetings || []).map(meetingTurnCard),
@@ -2492,28 +3131,28 @@ function boardSection(g, opts = {}) {
   if (cards.length) turnBody = el("div", { class: "grid" }, cards);
   else if (g.error) {
     turnBody = g.runtimeAvailable
-      ? emptyState("目前沒有可判斷為在等你的終端", "只有 VBear 受管啟動、且版本已驗證的 Claude Code 能判斷「工作中／等你回覆」；其他終端會顯示「狀態未知」，請到角色卡池查看。")
-      : emptyState("VBear runtime 未連線，無法判斷有沒有終端在等你", null);
-  } else if (!g.runtimeAvailable) turnBody = emptyState("VBear runtime 未連線，無法判斷有沒有終端在等你", null);
+      ? emptyState("目前沒有可判斷為在等你的終端", "只有 VBear 受管啟動、且版本已驗證的 Claude Code 能判斷「工作中／等你回覆」；其他終端會顯示「狀態未知」，請到員工詳細資料查看。")
+      : emptyState("VBear 的背景程式未連線，無法判斷有沒有終端在等你", null);
+  } else if (!g.runtimeAvailable) turnBody = emptyState("VBear 的背景程式未連線，無法判斷有沒有終端在等你", null);
   else turnBody = emptyState("告示板上目前沒有輪到你的任務",
-    "只有 VBear 受管啟動、且版本已驗證的 Claude Code 能判斷「工作中／等你回覆」；其他終端會顯示「狀態未知」，請到角色卡池查看。");
+    "只有 VBear 受管啟動、且版本已驗證的 Claude Code 能判斷「工作中／等你回覆」；其他終端會顯示「狀態未知」，請到員工詳細資料查看。");
   const goingBody = g.inProgress.length
     ? [el("div", { class: "grid" }, g.inProgress.map((f) => questCard(f, false))),
       g.moreInProgress ? el("a", { class: "btn quest-more", href: "#/flows" }, `還有 ${g.moreInProgress} 則 →`) : null]
     : (g.error ? null : emptyState("目前沒有其他進行中的任務", null));
   const missingFold = (g.missingFlows || []).length ? el("details", { class: "fold quest-missing", "data-board": "missing" },
-    el("summary", null, `有 ${(g.missingFlows.length + (g.moreMissing || 0))} 個舊任務讀不到任務卡（已收起）`),
+    el("summary", null, `有 ${(g.missingFlows.length + (g.moreMissing || 0))} 個舊任務讀不到專案（已收起）`),
     el("div", { class: "fold-body" },
-      el("p", { class: "small muted" }, "這些流程的任務卡已經刪除，或檔案讀不出來，所以先收起來。需要時可以點開看，或到「流程」頁處理。"),
+      el("p", { class: "small muted" }, "這些流程的專案已經刪除，或檔案讀不出來，所以先收起來。需要時可以點開看，或到「流程」頁處理。"),
       el("div", { class: "grid" }, g.missingFlows.map((f) => questCard(f, false))),
       g.moreMissing ? el("a", { class: "btn quest-more", href: "#/flows" }, `還有 ${g.moreMissing} 則 →`) : null)) : null;
   return [
     el("section", { class: "section", "data-board": "turn" },
-      sectionHead("輪到你", `${counts ? counts + "・" : ""}資料來自流程記錄與即時狀態，每 5 秒更新；「狀態未知」的 Agent 請到角色卡池頁查看`),
+      sectionHead("輪到你", `${counts ? counts + "・" : ""}資料來自流程記錄與即時狀態，每 5 秒更新；「狀態未知」的 Agent 請到員工詳細資料查看`),
       flowsError(),
       g.meetingsError ? notice("warn", `讀不到會議：${g.meetingsError}`) : null,
       g.staffingError ? notice("warn", `讀不到組隊會議：${g.staffingError}`) : null,
-      g.dispatchError ? notice("warn", `讀不到派工：${g.dispatchError}`) : null,
+      g.dispatchError ? notice("warn", `讀不到分配工作：${g.dispatchError}`) : null,
       g.groupsError ? notice("warn", `讀不到群組：${g.groupsError}`) : null,
       turnBody),
     el("section", { class: "section", "data-board": "going" },
@@ -2531,9 +3170,9 @@ function boardSection(g, opts = {}) {
 // nothing instead of a guess.
 const ONBOARD_TITLE = "新手第一局";
 const ONBOARD_STEPS = [
-  { key: "cards", text: "拿角色卡", hint: "用起手牌組一次拿三張，或自己建" },
-  { key: "task", text: "導入專案，建立任務卡", hint: "挑一個你電腦上現有的專案資料夾" },
-  { key: "team", text: "把隊伍放上任務卡", hint: "規劃、執行、審查各放一張角色卡" },
+  { key: "cards", text: "新增員工", hint: "一次新增三位常用的員工，或自己建" },
+  { key: "task", text: "加入一個資料夾，建立專案", hint: "挑一個你電腦上現有的專案資料夾" },
+  { key: "team", text: "把隊伍放上專案", hint: "規劃、執行、審查各放一位員工" },
 ];
 
 // input: { profiles, catalog, tasks, flows, dismissed }; a list that is not an array, or a dismissed that is not a
@@ -2577,15 +3216,15 @@ function onboardingSection(state, opts = {}) {
   }
   const current = state.steps.find((st) => !st.done);
   const action = (st) => {
-    if (st.key === "cards") return el("a", { class: "btn small primary", href: "#/team", "data-onboard-go": "cards" }, "到角色卡池");
+    if (st.key === "cards") return el("a", { class: "btn small primary", href: "#/team", "data-onboard-go": "cards" }, "到員工詳細資料");
     if (st.key === "task") return el("button", { class: "btn small primary", type: "button", "data-onboard-go": "task",
-      on: { click: () => { if (typeof opts.onImport === "function") opts.onImport(); } } }, "導入專案");
+      on: { click: () => { if (typeof opts.onImport === "function") opts.onImport(); } } }, "加入一個資料夾");
     return state.firstTaskId
       ? el("a", { class: "btn small primary", href: `#/workbench?task=${encodeURIComponent(state.firstTaskId)}`, "data-onboard-go": "team" }, "去放隊伍")
       : null;
   };
   return el("section", { class: "section onboard", "data-onboarding": "steps", "aria-label": ONBOARD_TITLE },
-    sectionHead(ONBOARD_TITLE, "三步組好一支隊伍：拿卡、導入專案、把隊伍放上去。", dismiss),
+    sectionHead(ONBOARD_TITLE, "三步組好一支隊伍：新增員工、加入一個資料夾、把隊伍放上去。", dismiss),
     el("ol", { class: "onboard-steps" }, state.steps.map((st) => el("li", { class: `onboard-step${st.done ? " onboard-done-step" : ""}`,
       "data-step": st.key, "data-done": String(st.done), "aria-current": current && current.key === st.key ? "step" : null },
       onboardMark(st.done),
@@ -3915,7 +4554,7 @@ async function viewSkills(params) {
 
   const actOptions = [["active", "可使用"], ["", "全部"], ...Object.entries(ACT).filter(([k]) => k !== "active").map(([k, v]) => [k, v[0]])];
   setKids(main, 
-    el("div", { class: "row" }, el("h1", null, "技能庫"), el("a", { class: "btn small", href: "#/armory" }, "技能四態總覽")),
+    el("div", { class: "row" }, el("h1", null, "AI 工具的外掛清單"), el("a", { class: "btn small", href: "#/armory" }, "技能四態總覽")),
     el("p", { class: "lede" }, "這裡是掃描到的技能清單。預設只顯示目前可使用的副本；想看安裝、加入角色與使用證據，請開啟「技能四態總覽」。 ", helpTip("技能庫", "技能庫只盤點掃描到的檔案與載入位置；它不會安裝、啟動或修改任何 Skill。")),
     corruptNotice(),
     staleNotice(),
@@ -3948,7 +4587,7 @@ async function viewArmory() {
   setKids(main, el("p", { class: "loading" }, "載入技能四態總覽…"));
   let data;
   try { data = await api.get("/api/armory"); await refreshTranslations(); }
-  catch (e) { setKids(main, crumbs([["技能庫", "#/skills"], ["四態總覽"]]), notice("bad", e.message)); return; }
+  catch (e) { setKids(main, crumbs([["AI 工具的外掛清單", "#/skills"], ["四態總覽"]]), notice("bad", e.message)); return; }
   if (token !== seq) return;
   const state = (label, value, source, hint, cls) => el("div", { class: "armory-state" },
     el("div", { class: "armory-label" }, badge(label, cls), helpTip(label, hint)),
@@ -3956,8 +4595,8 @@ async function viewArmory() {
   const rows = data.skills || [];
   const libraryById = D.byId || new Map();   // filled when the library was opened; empty before that
   setKids(main,
-    crumbs([["技能庫", "#/skills"], ["四態總覽"]]),
-    el("div", { class: "row" }, el("h1", null, "技能四態總覽"), el("a", { class: "btn small", href: "#/skills" }, "回技能庫")),
+    crumbs([["AI 工具的外掛清單", "#/skills"], ["四態總覽"]]),
+    el("div", { class: "row" }, el("h1", null, "技能四態總覽"), el("a", { class: "btn small", href: "#/skills" }, "回 AI 工具的外掛清單")),
     el("p", { class: "lede" }, "四種狀態是唯讀觀察。已安裝、收藏在角色卡上與曾觀察到使用是不同事情；沒有證據就顯示未知。"),
     data.unresolved_equipped && data.unresolved_equipped.length
       ? notice("warn", `有 ${data.unresolved_equipped.length} 張角色卡引用的技能卡，目前索引找不到；不會自動刪除。`) : null,
@@ -3996,7 +4635,7 @@ async function viewSkillDetail(id) {
   setKids(main, el("p", { class: "loading" }, "載入中…"));
   let d;
   try { d = await api.get(`/api/skills/${encodeURIComponent(id)}`); }
-  catch (e) { setKids(main, crumbs([["技能庫", "#/skills"]]), notice("bad", e.message)); return; }
+  catch (e) { setKids(main, crumbs([["AI 工具的外掛清單", "#/skills"]]), notice("bad", e.message)); return; }
   if (token !== seq) return;
   const s = d.skill;
   const pkg = s.origin_package || {};
@@ -4013,7 +4652,7 @@ async function viewSkillDetail(id) {
     r.status === "present" ? badge("存在", "b-ok") : r.status === "missing" ? badge("缺失", "b-bad", "指向技能內的資料夾，但檔案不存在") : badge("非套件檔案", "b-mute", "不在技能目錄內，可能只是文件中的範例路徑")))) : el("p", { class: "muted small" }, "沒有偵測到引用檔。");
 
   setKids(main, 
-    crumbs([["技能庫", "#/skills"], [s.name]]),
+    crumbs([["AI 工具的外掛清單", "#/skills"], [s.name]]),
     el("div", { class: "row" }, el("h1", null, (d.annotation && (d.annotation.aliases || [])[0]) || s.name), actBadge(s.activation), toolTag(s.tool)),
     d.annotation && (d.annotation.aliases || [])[0] ? el("p", { class: "small muted" }, "原名：", el("span", { class: "mono" }, s.name)) : null,
     s.invoke_name !== s.name ? el("p", { class: "small muted" }, "在工具中的呼叫名稱：", el("span", { class: "mono" }, s.invoke_name)) : null,
@@ -4189,12 +4828,12 @@ const CARD_RETIRED_POSITIONS = {
 };
 const CARD_POSITIONS = CARD_POSITION_TABLE.map((r) => r.id);
 const CARD_POSITION_LABEL = Object.fromEntries(CARD_POSITION_TABLE.map((r) => [r.id, r.label]));
-const CARD_REVIEW_PLACE_TEXT = "審查位或第二位審查（要和執行位不同陣營）";
-const CARD_STAFF_PLACE_TEXT = "不佔任務卡的位置，通常單獨出發";
-const CARD_STAFF_PLANNER_TEXT = "通常不上任務卡；沒有 CEO 時可以放規劃位";
-const CARD_STAFF_PLACE_NOTE = "這是幕僚卡，不佔任務卡的位置，通常單獨出發";
-const CARD_STAFF_PLANNER_NOTE = "這是幕僚卡，通常不上任務卡；沒有 CEO 時可以放規劃位";
-const CARD_GATE_NOTE = "這是 VBear 的品質關卡，不是公司職位；給任務卡的審查位用。";
+const CARD_REVIEW_PLACE_TEXT = "審查位或第二位審查（要和執行位不同的 AI 工具）";
+const CARD_STAFF_PLACE_TEXT = "不佔專案的位置，通常單獨開始工作";
+const CARD_STAFF_PLANNER_TEXT = "通常不上專案；沒有 CEO 時可以放規劃位";
+const CARD_STAFF_PLACE_NOTE = "這是幕僚卡，不佔專案的位置，通常單獨開始工作";
+const CARD_STAFF_PLANNER_NOTE = "這是幕僚卡，通常不上專案；沒有 CEO 時可以放規劃位";
+const CARD_GATE_NOTE = "這是 VBear 的品質關卡，不是公司職位；給專案的審查位用。";
 const CARD_SLOT_WORD = { planner: "規劃", executor: "執行", reviewer: "審查" };
 // Where a person suggested a card for is a front-end preference (design 3.3): it is not a profile field.
 const CARD_POSITION_KEY = "card.position.";
@@ -4208,7 +4847,7 @@ const PROFESSION_GROUP_OTHER = "other";   // the profession picker's group for a
 const SKILL_TRANSLATED_NOTE = "說明是機器翻譯，可能不準；點「看完整說明」可以對照原文";
 // The safe launch does not start Antigravity: in safe mode an AGY card is a record for building teams. Which skills AGY reads is judged by the
 // server from AGY's own files (the skills folders and ~/.gemini/config/skills.json) and arrives as read_by on a skill.
-const AGY_NOT_LAUNCHED = "安全模式不會啟動 AGY，要出發請選完整模式";
+const AGY_NOT_LAUNCHED = "「每件事先問我」不會啟動 AGY，要開始工作請選「完全交給他（有風險）」";
 // In full mode VBear does start an AGY, Grok or MCODE card (as a terminal, with the person's own settings); the safe launch never does.
 // The tools the safe launch never starts (the same list as agent_launch.UNLAUNCHABLE_TOOLS; a test keeps them equal): a card of
 // these has no launch, so the wizard does not ask whether its permission combination could be launched.
@@ -4219,24 +4858,24 @@ const UNLAUNCHABLE_TOOLS = ["shared", "agy", "grok", "mcode"];
 const SAFE_MODE_FALLBACK = ["claude"];
 const FULL_LAUNCH_TOOLS = ["claude", "codex", "agy", "grok", "mcode"];
 // The sentence on a card whose tool the safe mode never starts (GLOSSARY: 安全模式, 完整模式).
-const FULL_ONLY_MARK = "這個 AI 工具目前只能用完整模式";
-const FULL_ONLY_SHORT = "只能用完整模式";
-const FULL_ONLY_HELP = "完整模式可以從 VBear 出發，用你自己的設定與網路，VBear 不限制；職位指示請在開了終端、接管之後按「貼上職位指示」";
+const FULL_ONLY_MARK = "這個 AI 工具目前只能用「完全交給他（有風險）」";
+const FULL_ONLY_SHORT = "只能用「完全交給他（有風險）」";
+const FULL_ONLY_HELP = "「完全交給他（有風險）」可以從 VBear 開始工作，用你自己的設定與網路，VBear 不限制；職位指示請在開了終端、接管之後按「貼上職位指示」";
 const NO_PROFESSIONS = (tool) => `VBear 沒有掃描 ${CARD_TOOL_SHORT[tool]} 的 Agent 角色，沒有可選的職業標籤。`;
-const SHARED_NOT_LAUNCHED = "共用卡不能出發，權限意圖只是分工記錄";
+const SHARED_NOT_LAUNCHED = "共用卡不能開始工作，權限意圖只是分工記錄";
 const AGY_UNREAD_MARK = "AGY 不會讀";
 const AGY_NOT_READ = "AGY 不會讀這張技能卡（依這台電腦的 AGY 設定）";
-const AGY_SKILLS_NOTE = "這裡只列 AGY 依你電腦上的設定會讀到的技能（安全模式不啟動 AGY，完整模式會）。AGY 的內建與外掛技能不在這裡。";
+const AGY_SKILLS_NOTE = "這裡只列 AGY 依你電腦上的設定會讀到的技能（「每件事先問我」不啟動 AGY，「完全交給他（有風險）」會）。AGY 的內建與外掛技能不在這裡。";
 // Always beside the intents (design R3): an intent is a team marker, not a limit VBear applies.
 const CARD_INTENT_TITLE = "權限意圖（分工記號）";
-const CARD_INTENT_NOTE = "權限意圖是隊伍分工的標記，不代表 VBear 已經限制這個程式的真實能力；真正的限制，看出發通行證上的盾牌。";
+const CARD_INTENT_NOTE = "權限意圖是隊伍分工的標記，不代表 VBear 已經限制這個程式的真實能力；真正的限制，看開始前的檢查上的盾牌。";
 // Beside the suggested intents, after CARD_INTENT_NOTE (design v1.2 R10): why the suggestions are all the same set.
-const CARD_INTENT_LAUNCH_NOTE = "目前 VBear 能啟動的只有這一組權限。想讓規劃者或審查者不改檔案，VBear 現在無法強制，請在任務卡的目標裡寫清楚。";
-const CARD_SPECIES_NOTE = "種族只換外觀，不影響能力。";
+const CARD_INTENT_LAUNCH_NOTE = "目前 VBear 能啟動的只有這一組權限。想讓規劃者或審查者不改檔案，VBear 現在無法強制，請在專案的目標裡寫清楚。";
+const CARD_SPECIES_NOTE = "外觀只換樣子，不影響能力。";
 // What step 3 is, in plain words (P24): what a skill card is, what inserting one does, that VBear loads none of them
 // when a role departs (loadout._will_load is False for every tool), and that the step can be skipped.
 const CARD_SKILLS_NOTE = "技能卡是寫給 AI 的一份工作說明，例如怎麼做簡報、怎麼處理 PDF。插在這個角色上，是替它記下擅長什麼，排隊伍時看得出分工。"
-  + "VBear 讓角色出發時目前不會自動載入這些技能，只是記錄；這一步可以略過。";
+  + "VBear 讓角色開始工作時目前不會自動載入這些技能，只是記錄；這一步可以略過。";
 // Why a skill card is not in the default list of step 3. The keys are the index's activation values.
 const SKILL_UNUSED_REASON = {
   superseded: "舊版本，現在用的是新版",
@@ -4288,6 +4927,9 @@ function setCardPosition(id, position) {
   store.set(CARD_POSITION_KEY + id, CARD_POSITIONS.includes(position) ? position : null);
 }
 // The table row of a position; null for none, or for a value this page does not know (it is shown as not specified).
+// The duty of a position is the back end's sentence (the table above mirrors it word for word, and a test holds the two together); the
+// page says the one word of it that changed in v0.21.0 (陣營 -> AI 工具) when it draws it.
+function cardDutyText(duty) { return typeof duty === "string" ? duty.replace("不同陣營的模型", "不同 AI 工具的模型") : ""; }
 function cardPositionRow(position) {
   return typeof position === "string" ? CARD_POSITION_TABLE.find((r) => r.id === position) || null : null;
 }
@@ -4301,7 +4943,7 @@ function cardPositionPlaceText(row) {
 function cardPositionTitle(position) {
   const row = cardPositionRow(position);
   if (!row) return "位置未指定";
-  if (row.tier === "staff") return `你建議的位置是「${row.label}」（幕僚卡，通常不上任務卡）`;
+  if (row.tier === "staff") return `你建議的位置是「${row.label}」（幕僚卡，通常不上專案）`;
   const word = CARD_SLOT_WORD[row.slot] || row.label;
   return `你建議放「${word}」位${word === row.label ? "" : `（${row.label}）`}`;
 }
@@ -4317,12 +4959,12 @@ function cardFitsSlot(card, slotKind) {
 // safe mode on a version it verified; the pass shows what a launch really applies.
 const BOUNDARY_WORDS = { enforced_if_launched: "擋得住", reminder: "只是提醒", not_possible: "做不到", not_applicable: "不適用" };
 const BOUNDARY_HELP = {
-  enforced_if_launched: "VBear 出發這張卡時實際套上，限已驗證的版本",
+  enforced_if_launched: "VBear 讓這位員工開始工作時實際套上，限已驗證的版本",
   reminder: "寫給 AI 的話，VBear 沒有檢查",
   not_possible: "VBear 做不到，也擋不住",
-  not_applicable: "VBear 不幫這張卡出發，這一條用不上",
+  not_applicable: "VBear 不幫這位員工開始工作，這一條用不上",
 };
-const BOUNDARY_LEGEND = "「擋得住」只在 VBear 出發這張卡、而且版本已驗證時成立，實際以出發通行證為準；「只是提醒」是寫給 AI 的話，VBear 沒有檢查。";
+const BOUNDARY_LEGEND = "「擋得住」只在 VBear 讓這位員工開始工作、而且版本已驗證時成立，實際以開始前的檢查為準；「只是提醒」是寫給 AI 的話，VBear 沒有檢查。";
 // A resolved boundary view ({ mode_note, items: [{ id, text, kind }] }) as a list, or null when there is nothing to show.
 // attr is the data attribute the rows carry ("data-cw" in the wizard and the pass, "data-rc" on the card's back).
 function boundaryList(view, attr = "data-cw") {
@@ -4441,7 +5083,7 @@ function cardLight(p) {
   const undecided = CARD_INTENT_KEYS.filter(([k]) => intents[k] !== "allow" && intents[k] !== "deny").map(([, zh]) => zh);
   return undecided.length
     ? { state: "yellow", undecided, text: "還差一步：權限意圖還沒決定" }
-    : { state: "green", undecided: [], text: "可以出發（權限意圖都已決定）" };
+    : { state: "green", undecided: [], text: "可以開始工作（權限意圖都已決定）" };
 }
 
 // Another card already carries this name: a hint only, never a block (design 3.1).
@@ -4479,7 +5121,7 @@ function skillCompatible(skill, tool) {
   return typeof source === "string" && source === tool;
 }
 function skillIncompatibleNote(tool) {
-  return tool === "shared" ? "共用角色卡只能插共用的技能卡"
+  return tool === "shared" ? "共用員工只能插共用的技能卡"
     : tool === "agy" ? AGY_NOT_READ : `${CARD_TOOL_SHORT[tool] || "這個工具"} 不會讀這張卡`;
 }
 
@@ -4703,16 +5345,16 @@ function openCardWizard(opts) {
   const body = el("div", { class: "cw-body" });
   const stepper = el("ol", { class: "cw-steps", "aria-label": "步驟" });
   const foot = el("div", { class: "modal-actions cw-foot" });
-  const heading = el("h2", { id: titleId }, isNew ? "新角色卡" : `編輯角色卡：${existing.name || existing.id}`);
+  const heading = el("h2", { id: titleId }, isNew ? "新增員工" : `編輯員工：${existing.name || existing.id}`);
   const draftNote = draft ? el("p", { class: "small cw-hint", "data-cw": "draft-note" },
-    "這張卡是照 CEO 的組隊提案先填好的：名字、職位、陣營、模型和技能都可以改，按「建立」才會存。",
+    "這位員工是照 CEO 的組隊提案先填好的：名字、職位、AI 工具、模型和技能都可以改，按「建立」才會存。",
     draftDropped ? `CEO 建議的技能有 ${draftDropped} 張這張卡讀不到或找不到，沒有預選。` : "") : null;
   const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
     el("div", { class: "modal-box cw-box" }, heading, draftNote, stepper, body, foot));
   document.body.append(modal);
   const closeModal = withModalA11y(modal, () => modal.remove());
 
-  const STEP_TITLES = ["名字與外觀", "陣營與位置", "技能卡"];
+  const STEP_TITLES = ["名字與外觀", "AI 工具與位置", "技能卡"];
 
   function drawStepper() {
     setKids(stepper, STEP_TITLES.map((t, i) => {
@@ -4750,8 +5392,8 @@ function openCardWizard(opts) {
     hint.id = "cw-name-hint"; err.id = "cw-name-error";
     const tool = st.tool;
     const camp = campOf({ tool }).key;
-    const choices = [["", "依陣營"], ...OFFICE_SPECIES.map((sp) => [sp, OFFICE_SPECIES_LABEL[sp]])];
-    const species = el("div", { class: "cw-species", role: "group", "aria-label": "種族（外觀）" },
+    const choices = [["", "依 AI 工具"], ...OFFICE_SPECIES.map((sp) => [sp, OFFICE_SPECIES_LABEL[sp]])];
+    const species = el("div", { class: "cw-species", role: "group", "aria-label": "外觀" },
       choices.map(([v, label]) => {
         const sp = v || speciesFor({ tool });
         return el("button", { type: "button", class: "cw-choice", "data-species": v || "auto",
@@ -4760,7 +5402,7 @@ function openCardWizard(opts) {
       }));
     return [
       el("label", { class: "cw-field", for: "cw-name" }, el("span", null, "名字"), input, err, hint),
-      el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "種族（外觀）"), species,
+      el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "外觀"), species,
         el("p", { class: "small muted" }, CARD_SPECIES_NOTE)),
     ];
   }
@@ -4786,7 +5428,7 @@ function openCardWizard(opts) {
     if (intentIsVerified()) { box.setAttribute("hidden", ""); setKids(box); return; }
     box.removeAttribute("hidden");
     if (!entry || entry.state === "loading") {
-      setKids(box, el("p", { class: "small muted" }, "檢查這個組合能不能出發…"));
+      setKids(box, el("p", { class: "small muted" }, "檢查這個組合能不能開始工作…"));
       if (!entry) {
         intentChecks.set(key, { state: "loading" });
         const q = CARD_INTENT_KEYS.map(([k]) => `${k}=${encodeURIComponent(st.intents[k])}`).join("&");
@@ -4798,13 +5440,13 @@ function openCardWizard(opts) {
       return;
     }
     if (entry.state === "error") {
-      setKids(box, el("p", { class: "small muted" }, "讀不到這個組合的檢查，實際能不能出發以出發通行證為準。"));
+      setKids(box, el("p", { class: "small muted" }, "讀不到這個組合的檢查，實際能不能開始工作以開始前的檢查為準。"));
       return;
     }
     const reasons = entry.blockers.map((b) => (b && typeof b.message === "string" ? b.message : "")).filter(Boolean);
     if (!entry.blockers.length) { box.setAttribute("hidden", ""); setKids(box); return; }
     setKids(box, el("div", { class: "notice warn", role: "status" }, el("span", { class: "ico", "aria-hidden": "true" }, "!"),
-      el("div", null, el("strong", null, "這個組合目前不能出發"),
+      el("div", null, el("strong", null, "這個組合目前不能開始工作"),
         el("ul", { class: "small" }, (reasons.length ? reasons : ["原因未提供"]).map((r) => el("li", null, r))))));
   }
 
@@ -4848,7 +5490,7 @@ function openCardWizard(opts) {
     if (!r) return "目前索引找不到這個範本，標籤先保留。";
     if (r.kind === "cli") return "這是工具本身（等於不用範本）。";
     if (noTemplates()) return `${CARD_TOOL_SHORT[st.tool]} 沒有可選的職業，這是之前存下的標籤。`;
-    if (!roleCampOk(r)) return `這是 ${CARD_TOOL_SHORT[r.tool] || r.tool || "別的陣營"} 的範本，這張卡的陣營是 ${CARD_TOOL_SHORT[st.tool] || st.tool}。`;
+    if (!roleCampOk(r)) return `這是 ${CARD_TOOL_SHORT[r.tool] || r.tool || "別的 AI 工具"} 的範本，這位員工用的是 ${CARD_TOOL_SHORT[st.tool] || st.tool}。`;
     if (r.unavailable && !pk.showUnused) return `${r.unavailable}，這個範本目前用不到。`;
     return null;
   }
@@ -4918,11 +5560,11 @@ function openCardWizard(opts) {
     if (declared.length) {
       const ok = professionSkills(r);
       const rest = declared.length - ok.length;
-      if (!ok.length) kids.push(el("p", { class: "small muted" }, `範本寫明會用 ${declared.length} 張技能卡，這個陣營都不會讀，或目前索引找不到。`));
+      if (!ok.length) kids.push(el("p", { class: "small muted" }, `範本寫明會用 ${declared.length} 張技能卡，這個 AI 工具都不會讀，或目前索引找不到。`));
       else {
         const all = ok.every((sid) => st.equipped.has(sid));
         kids.push(el("p", { class: "small", "data-cw": "profession-skills" }, `範本寫明會用的技能卡：${ok.length} 張`,
-          rest ? `（另有 ${rest} 張這個陣營不會讀或目前索引找不到，不會插上）` : ""),
+          rest ? `（另有 ${rest} 張這個 AI 工具不會讀或目前索引找不到，不會插上）` : ""),
           el("button", { type: "button", class: "btn small", "data-cw": "profession-equip", "aria-disabled": all ? "true" : null,
             on: { click: () => { if (!all) equipFromProfession(r); } } }, all ? "已插上" : "一起插上"));
       }
@@ -4941,7 +5583,7 @@ function openCardWizard(opts) {
     const orig = roleDescription(r);
     kids.push(el("details", { class: "cw-prof-original", "data-cw": "profession-original" },
       el("summary", { class: "small" }, "作者原文"), el("p", { class: "small" }, orig || "作者沒有寫說明。")),
-      el("p", { class: "small muted" }, "出發時不會把範本的指示交給工具；這只是標籤。"));
+      el("p", { class: "small muted" }, "開始工作時不會把範本的指示交給工具；這只是標籤。"));
     return el("div", { class: "cw-prof-brings", "data-cw": "profession-brings" }, kids);
   }
 
@@ -5011,7 +5653,7 @@ function openCardWizard(opts) {
             on: { click: () => { st.profession = ""; pk.note = ""; draw(); focusBy("data-cw", "profession-none"); } } },
             el("strong", null, "不用範本（就用工具本身）")),
           rows,
-          !mine.length ? el("p", { class: "small muted", "data-cw": "profession-empty" }, "這個陣營沒有掃描到角色範本。")
+          !mine.length ? el("p", { class: "small muted", "data-cw": "profession-empty" }, "這個 AI 工具沒有掃描到角色範本。")
             : !usable.length && q ? el("p", { class: "small muted", "data-cw": "profession-empty" }, "沒有符合的職業。") : null),
         more ? el("button", { type: "button", class: "btn small", "data-cw": "profession-more",
           on: { click: () => { pk.shown += CARD_PAGE_SIZE; paintLists(); } } }, `顯示更多（還有 ${more} 個）`) : null];
@@ -5043,7 +5685,7 @@ function openCardWizard(opts) {
           agy ? null : el("button", { type: "button", class: "btn small", "data-cw": "profession-open", "aria-expanded": String(pk.open),
             on: { click: () => { pk.open = !pk.open; pk.shown = CARD_PAGE_SIZE; draw(); focusBy("data-cw", "profession-open"); } } },
           pk.open ? "收起" : st.profession ? "更換" : "挑一個")),
-        el("small", null, agy ? NO_PROFESSIONS(st.tool) : "你電腦裡現成的角色範本，可以不選。出發時不會把範本的指示交給工具；這只是標籤，不會寫回來源。"),
+        el("small", null, agy ? NO_PROFESSIONS(st.tool) : "你電腦裡現成的角色範本，可以不選。開始工作時不會把範本的指示交給工具；這只是標籤，不會寫回來源。"),
         professionAutoActive() ? el("p", { class: "small cw-hint", "data-cw": "profession-auto-note" },
           `位置已依職業建議設成「${cardPositionRow(st.position) ? cardPositionRow(st.position).label : ""}」（只是推測，可改）。`) : null,
         reason ? el("div", { class: "cw-prof-bound", "data-cw": "profession-bound" }, el("span", { class: "small" }, reason),
@@ -5111,7 +5753,7 @@ function openCardWizard(opts) {
     const g = guideRow(st.position);
     return g && typeof g.suggested_folder === "string" && g.suggested_folder
       ? el("p", { class: "small muted", "data-cw": "suggested-folder" },
-        `建議資料夾：出發時選名為「${g.suggested_folder}」的資料夾（或它裡面）。只是建議，出發通行證會提醒，不會擋。`) : null;
+        `建議資料夾：開始工作時選名為「${g.suggested_folder}」的資料夾（或它裡面）。只是建議，開始前的檢查會提醒，不會擋。`) : null;
   }
   function setLaunchMode(m) {
     st.launchMode = m;
@@ -5125,16 +5767,16 @@ function openCardWizard(opts) {
     const cur = launchModes.find((m) => m.id === st.launchMode) || launchModes[0];
     const oldCard = Boolean(existing) && !st.launchModeTouched && existing.launch_mode !== "full" && existing.launch_mode !== "safe";
     return el("div", { class: "cw-field", "data-cw": "launch-mode" },
-      el("span", { class: "cw-label" }, "出發方式"),
-      el("div", { class: "cw-choices", role: "group", "aria-label": "出發方式" }, launchModes.map((m) => el("button", { type: "button",
+      el("span", { class: "cw-label" }, "開始工作的方式"),
+      el("div", { class: "cw-choices", role: "group", "aria-label": "開始工作的方式" }, launchModes.map((m) => el("button", { type: "button",
         class: "cw-choice", "data-launch-mode": m.id, "aria-pressed": String(st.launchMode === m.id), on: { click: () => setLaunchMode(m.id) } },
       el("span", null, m.label)))),
-      el("p", { class: "small muted", "data-cw": "launch-mode-note" }, typeof cur.help === "string" ? cur.help : "", oldCard ? "　舊卡沒有設定，一律當安全模式。" : ""),
+      el("p", { class: "small muted", "data-cw": "launch-mode-note" }, typeof cur.help === "string" ? cur.help : "", oldCard ? "　舊卡沒有設定，一律當「每件事先問我」。" : ""),
       toolFullOnly(catalog, st.tool) ? el("p", { class: "small cw-hint", "data-cw": "full-only-note" },
-        `${CARD_TOOL_LABEL[st.tool] || st.tool} 目前只能用完整模式，沒有安全模式的保護；出發時要先勾選「我了解」。`) : null,
+        `${CARD_TOOL_LABEL[st.tool] || st.tool} 目前只能用「完全交給他（有風險）」，沒有「每件事先問我」的保護；開始工作時要先勾選「我了解」。`) : null,
       st.launchMode === "full" && catalog.full_mode_launchable !== true
         ? el("p", { class: "small cw-hint", "data-cw": "launch-mode-pending" },
-          "完整模式的出發這個版本還沒開放：選了它，這張卡暫時不能出發；要現在出發請選安全模式。") : null);
+          "「完全交給他（有風險）」的開始工作這個版本還沒開放：選了它，這位員工暫時不能開始工作；要現在開始工作請選「每件事先問我」。") : null);
   }
   // The position's instructions: the default is shown in the box and can be changed; 回復預設 brings it back
   function instructionsField() {
@@ -5177,12 +5819,12 @@ function openCardWizard(opts) {
     const list = boundaryList(byTool && typeof byTool === "object" && cardHas(byTool, mode) ? byTool[mode] : null, "data-cw");
     if (!list) return null;
     return el("div", { class: "cw-field", "data-cw": "boundaries" },
-      el("span", { class: "cw-label" }, "邊界（依陣營與出發方式）"), list,
+      el("span", { class: "cw-label" }, "邊界（依 AI 工具與開始工作的方式）"), list,
       el("p", { class: "small muted", "data-cw": "boundary-legend" }, BOUNDARY_LEGEND));
   }
 
   function stepTwo() {
-    const toolGroup = el("div", { class: "cw-choices cw-tools", role: "group", "aria-label": "陣營（工具）" },
+    const toolGroup = el("div", { class: "cw-choices cw-tools", role: "group", "aria-label": "AI 工具" },
       tools.map((t) => el("button", { type: "button", class: "cw-choice", "data-tool": t,
         "aria-pressed": String(st.tool === t), on: { click: () => setTool(t) } },
         officeSprite(speciesFor({ tool: t }), campOf({ tool: t }).key, 2),
@@ -5218,23 +5860,23 @@ function openCardWizard(opts) {
     const gateBox = gateRow ? el("div", { class: "cw-pos-tier", "data-cw": "position-gate" },
       el("span", { class: "small muted cw-pos-title" }, "VBear 內建"),
       el("div", { class: "cw-choices", role: "group", "aria-label": "VBear 內建" },
-        posButton(gateRow.id, "VBear 內建：審查關卡（給任務卡的審查位）")),
+        posButton(gateRow.id, "VBear 內建：審查關卡（給專案的審查位）")),
       el("p", { class: "small muted" }, CARD_GATE_NOTE)) : null;
     const posGroup = el("div", { class: "cw-positions", role: "group", "aria-label": "建議位置" },
-      tierRow("任務卡上的位置", CARD_POSITION_TABLE.filter((r) => r.tier === "team")),
+      tierRow("專案上的位置", CARD_POSITION_TABLE.filter((r) => r.tier === "team")),
       tierRow("幕僚與支援", CARD_POSITION_TABLE.filter((r) => r.tier === "staff"), posButton("", "先不指定")),
       gateBox);
     const posRow = cardPositionRow(st.position);
     const legacy = !st.positionTouched && existing ? cardLegacyPosition(existing) : null;
     const legacyNote = legacy ? el("p", { class: "small cw-hint", "data-cw": "legacy-note" }, cardLegacyText(legacy) + "。按儲存才會改寫成新的位置。") : null;
-    const campWord = (row) => `建議陣營：${CARD_TOOL_LABEL[row.suggested_tool] || row.suggested_tool}`
+    const campWord = (row) => `建議的 AI 工具：${CARD_TOOL_LABEL[row.suggested_tool] || row.suggested_tool}`
       + (row.suggested_model_alias ? `（${row.suggested_model_alias}）` : "")
       + (toolNoSafe(catalog, row.suggested_tool)
         ? (toolNoSafeLaunch(catalog, row.suggested_tool) && st.launchMode === "full" && catalog.full_mode_launchable === true
-          ? `。${CARD_TOOL_SHORT[row.suggested_tool]} 只有完整模式才能從 VBear 出發` : "。VBear 不會幫這個陣營的卡出發，只做紀錄") : "");
+          ? `。${CARD_TOOL_SHORT[row.suggested_tool]} 只有「完全交給他（有風險）」才能從 VBear 開始工作` : "。VBear 不會幫這個 AI 工具的卡開始工作，只做紀錄") : "");
     const posBox = posRow ? el("div", { class: "cw-position-box", "data-cw": "position-box" },
-      el("p", null, el("strong", null, `已選「${posRow.label}」：`), posRow.duty),
-      el("p", { class: "small muted" }, (posRow.tier === "staff" ? "" : "任務卡上建議放：") + cardPositionPlaceText(posRow)),
+      el("p", null, el("strong", null, `已選「${posRow.label}」：`), cardDutyText(posRow.duty)),
+      el("p", { class: "small muted" }, (posRow.tier === "staff" ? "" : "專案上建議放：") + cardPositionPlaceText(posRow)),
       el("p", { class: "small muted" }, campWord(posRow)),
       el("p", { class: "small muted" }, `分工提醒：${posRow.reminder}`),
       suggestedFolderNote()) : null;
@@ -5265,10 +5907,10 @@ function openCardWizard(opts) {
       modelField());
 
     return [
-      el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "陣營"), el("div", { class: "cw-tools-wrap" }, toolGroup),
-        el("p", { class: "small muted" }, "陣營就是這張卡用哪個工具。"), codexNote, fullOnlyMark, agyNote, heldNote, sharedNote),
+      el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "AI 工具"), el("div", { class: "cw-tools-wrap" }, toolGroup),
+        el("p", { class: "small muted" }, "這位員工用哪個 AI 工具。"), codexNote, fullOnlyMark, agyNote, heldNote, sharedNote),
       el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "建議位置"), legacyNote, posGroup, posBox,
-        el("p", { class: "small muted" }, "位置只是建議，放上任務卡時仍可以改。")),
+        el("p", { class: "small muted" }, "位置只是建議，放上專案時仍可以改。")),
       professionField(),
       launchModeField(),
       instructionsField(),
@@ -5277,7 +5919,7 @@ function openCardWizard(opts) {
         el("span", { class: "cw-label" }, "權限意圖",
           st.suggested ? el("span", { class: "tag cw-tag", "data-cw": "suggested" }, "建議，可改") : null),
         summary,
-        undecided ? el("p", { class: "small cw-error" }, "有權限意圖還沒決定；出發前要先決定。") : null,
+        undecided ? el("p", { class: "small cw-error" }, "有權限意圖還沒決定；開始工作前要先決定。") : null,
         el("p", { class: "small muted", "data-cw": "intent-note" }, CARD_INTENT_NOTE),
         el("p", { class: "small muted", "data-cw": "launch-note" }, CARD_INTENT_LAUNCH_NOTE,
           posRow ? ` 「${posRow.label}」的分工提醒：${posRow.reminder}` : null),
@@ -5301,7 +5943,7 @@ function openCardWizard(opts) {
       return s && !skillCompatible(s, t);
     });
     for (const sid of gone) st.equipped.delete(sid);
-    removedNote = gone.length ? `換了陣營，已移除 ${gone.length} 張這個陣營不會讀的技能卡。` : "";
+    removedNote = gone.length ? `換了 AI 工具，已移除 ${gone.length} 張這個 AI 工具不會讀的技能卡。` : "";
     // a role of Claude Code or Codex is not a role of Antigravity: the label does not stay on an AGY card
     if (toolNoSafeLaunch(catalog, t)) st.profession = "";
     // a new card's start follows its tool until the person picks a mode; a card that exists keeps its own
@@ -5432,7 +6074,7 @@ function openCardWizard(opts) {
       const unusedHits = recFirst(plan.unused.filter((e) => match(e) && inCat(e) && recOk(e)));
       const narrowed = q || st.category;
       const catText = st.category ? `「${st.category === SKILL_CAT_OTHER ? "其他" : catLabel.get(st.category)}」` : "";
-      counter.textContent = `可插 ${plan.listed.length} 張（這個陣營用得到的）${narrowed ? `，${catText}${q ? (catText ? "裡" : "") + "符合搜尋" : ""}的有 ${listedHits.length} 張` : ""}`;
+      counter.textContent = `可插 ${plan.listed.length} 張（這個 AI 工具用得到的）${narrowed ? `，${catText}${q ? (catText ? "裡" : "") + "符合搜尋" : ""}的有 ${listedHits.length} 張` : ""}`;
       const rows = st.showUnused ? [...listedHits, ...unusedHits] : listedHits;
       if (!rows.length) {
         const hint = q && !st.showUnused && unusedHits.length
@@ -5440,8 +6082,8 @@ function openCardWizard(opts) {
             `在用不到的技能裡有 ${unusedHits.length} 張符合。 `,
             el("button", { type: "button", class: "btn small", on: { click: () => setShowUnused(true) } }, "顯示這些技能")) : null;
         const text = !skillCatalog.length ? "目前沒有可用的技能卡。"
-          : q ? (hint ? "這個陣營用得到的技能裡沒有符合的。" : "沒有符合的技能卡。")
-            : "目前沒有這個陣營用得到的技能卡。";
+          : q ? (hint ? "這個 AI 工具用得到的技能裡沒有符合的。" : "沒有符合的技能卡。")
+            : "目前沒有這個 AI 工具用得到的技能卡。";
         setKids(list, el("p", { class: "small muted" }, text), hint);
         return;
       }
@@ -5510,7 +6152,7 @@ function openCardWizard(opts) {
         } } }, "只看推薦的");
       recBox = el("div", { class: "cw-field", "data-cw": "skill-recommend" },
         el("p", { class: "small" }, `「${posLabel}」建議看這幾類：${names.join("、")}。推薦只是參考，不會自動插入；`
-          + "技能會不會被載入，要看出發方式：VBear 的安全模式出發不載入技能。"),
+          + "技能會不會被載入，要看開始工作的方式：VBear 的「每件事先問我」開始工作不載入技能。"),
         recOnlyBtn);
     }
     drawList();
@@ -5580,7 +6222,7 @@ function openCardWizard(opts) {
       const saved = res.profile;
       setCardPosition(saved.id, st.position);
       store.set(OFFICE_SPECIES_KEY + saved.id, st.species || null);
-      toast(existing ? "角色卡已儲存" : "角色卡已建立");
+      toast(existing ? "員工已儲存" : "員工已建立");
       closeModal();
       if (typeof opts.onSaved === "function") await opts.onSaved(saved);
     } catch (err) {
@@ -5613,8 +6255,8 @@ function openStarterDeck(opts) {
   const foot = el("div", { class: "modal-actions cw-foot" });
   const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
     el("div", { class: "modal-box cw-box" },
-      el("h2", { id: titleId }, "用起手牌組開始"),
-      el("p", null, "三張現成的角色卡：CEO、全端工程師、審查。名字可以改，建立後也能再編輯。"),
+      el("h2", { id: titleId }, "一次新增幾位常用的員工"),
+      el("p", null, "三位現成的員工：CEO、全端工程師、審查。名字可以改，建立後也能再編輯。"),
       el("div", { class: "cw-body" }, list, status), foot));
   document.body.append(modal);
   const closeModal = withModalA11y(modal, () => modal.remove());
@@ -5651,7 +6293,7 @@ function openStarterDeck(opts) {
               on: { input: (e) => { r.name = e.target.value; syncHint(); drawFoot(); } } })),
           hint,
           missing ? el("p", { class: "small cw-hint", "data-cw": "codex-missing" },
-            "這台電腦找不到 Codex。審查位需要和全端工程師不同陣營的卡，要用這張卡時再勾選。") : null,
+            "這台電腦找不到 Codex。審查位需要和全端工程師用不同 AI 工具的員工，要用這位員工時再勾選。") : null,
           el("details", { class: "cw-details" }, el("summary", null, "看權限建議"),
             el("div", { class: "rc-chips" }, CARD_INTENT_KEYS.map(([k, zh]) => intentChip(k, zh, c.permission_intents[k]))),
             el("p", { class: "small muted" }, CARD_INTENT_NOTE),
@@ -5664,8 +6306,8 @@ function openStarterDeck(opts) {
     setKids(foot,
       el("button", { class: "btn", type: "button", "data-cw": "cancel", disabled: busy, on: { click: () => closeModal() } }, "取消"),
       el("button", { class: "btn primary", type: "button", "data-cw": "deck-create", disabled: busy || !ok,
-        on: { click: create } }, `建立 ${n} 張角色卡`));
-    status.textContent = busy ? "" : (message || (hasReviewerPair() ? "" : "審查位需要和全端工程師不同陣營的卡，審查結果才算數；這兩張現在同一陣營。"));
+        on: { click: create } }, `建立 ${n} 位員工`));
+    status.textContent = busy ? "" : (message || (hasReviewerPair() ? "" : "審查位需要和全端工程師用不同 AI 工具的員工，審查結果才算數；這兩位現在用同一個 AI 工具。"));
   }
   async function create() {
     if (busy) return;
@@ -5691,7 +6333,7 @@ function openStarterDeck(opts) {
       if (made.length && typeof opts.onSaved === "function") opts.onSaved(made, { partial: true });
       return;
     }
-    toast(`已建立 ${made.length} 張角色卡`);
+    toast(`已建立 ${made.length} 位員工`);
     closeModal();
     if (typeof opts.onSaved === "function") await opts.onSaved(made, { partial: false });
   }
@@ -5714,10 +6356,10 @@ async function duplicateCard(p, onDone) {
   } catch (err) { toast("複製失敗：" + err.message); }
 }
 async function deleteCard(p, onDone) {
-  if (!(await confirmInPage("刪除角色卡", `確定要刪除角色卡「${p.name || p.id}」嗎？刪除後無法復原。`, "刪除"))) return;
+  if (!(await confirmInPage("刪除員工", `確定要刪除員工「${p.name || p.id}」嗎？刪除後無法復原。`, "刪除"))) return;
   api.post(`/api/agent-profiles/${encodeURIComponent(p.id)}/delete`, {})
     .then(async () => {
-      toast("角色卡已刪除");
+      toast("員工已刪除");
       store.set(CARD_POSITION_KEY + p.id, null);
       if (typeof onDone === "function") await onDone(p);
     })
@@ -5969,13 +6611,13 @@ function passMark(mark) {
 
 function passFront(pv) {
   const s = passSummary(pv);
-  return el("section", { class: "pass-front", "data-pass": "front", "aria-label": "這次出發的限制" },
+  return el("section", { class: "pass-front", "data-pass": "front", "aria-label": "這次開始工作的限制" },
     el("ul", { class: "pass-lines" }, s.lines.map((ln) => el("li", { class: `pass-line pass-${ln.kind}`, "data-pass-line": ln.id, "data-kind": ln.kind },
       passMark(ln.mark),
       el("span", { class: "pass-text" }, ln.text),
       el("span", { class: "pass-word" }, ln.word),
       ln.shield ? armorShield(ln.level) : null))),
-    s.scratch ? el("p", { class: "small muted pass-scratch" }, "另有這次出發的暫存區：", el("span", { class: "mono" }, s.scratch)) : null,
+    s.scratch ? el("p", { class: "small muted pass-scratch" }, "另有這次開始工作的暫存區：", el("span", { class: "mono" }, s.scratch)) : null,
     passLegend());
 }
 
@@ -5986,11 +6628,11 @@ function passFullFront(pv) {
   const ins = pv.instructions && typeof pv.instructions === "object" ? pv.instructions : null;
   const command = Array.isArray(pv.command) ? pv.command.filter((x) => typeof x === "string") : [];
   const notes = Array.isArray(pv.notes) ? pv.notes.filter((x) => typeof x === "string" && x) : [];
-  const how = !ins ? "" : ins.delivery === "argv" ? "出發時帶進去：用 --append-system-prompt 當成一個引數交給 Claude Code"
-    : ins.delivery === "paste" ? "出發時不帶：開了終端、接管之後按「貼上職位指示」，由你按 Enter" : "沒有職位指示，出發時不帶";
-  return el("section", { class: "pass-front pass-full", "data-pass": "front", "data-mode": "full", "aria-label": "這次出發沒有限制" },
+  const how = !ins ? "" : ins.delivery === "argv" ? "開始工作時帶進去：用 --append-system-prompt 當成一個引數交給 Claude Code"
+    : ins.delivery === "paste" ? "開始工作時不帶：開了終端、接管之後按「貼上職位指示」，由你按 Enter" : "沒有職位指示，開始工作時不帶";
+  return el("section", { class: "pass-front pass-full", "data-pass": "front", "data-mode": "full", "aria-label": "這次開始工作沒有限制" },
     el("p", { class: "pass-full-lead", "data-pass": "full-lead" }, el("strong", null, "VBear 沒有限制這張卡。"),
-      "　它用你自己的設定啟動，可以上網；讀寫檔案、commit、發布、付款，都和你自己在終端機執行一樣，只剩工具自己的權限詢問。"),
+      "　它用你自己的設定啟動，可以上網；讀寫檔案、commit、發布、付款，都和你自己在指令視窗執行一樣，只剩工具自己的權限詢問。"),
     el("dl", { class: "kv small" },
       el("dt", null, "會執行的指令"), el("dd", { class: "mono pass-command", "data-pass": "command" }, command.join(" ")),
       el("dt", null, "職位指示"), el("dd", { "data-pass": "instructions", "data-delivery": ins ? String(ins.delivery) : "" }, how,
@@ -6019,7 +6661,7 @@ const PASS_FIXES = {
   test_deny_unenforceable: { act: "intents", label: "調整權限意圖" },
   deploy_not_available: { act: "intents", label: "調整權限意圖" },
   intents_not_supported: { act: "intents", label: "調整權限意圖" },
-  tool_not_launchable: { act: "tool", label: "改選陣營" },
+  tool_not_launchable: { act: "tool", label: "改選 AI 工具" },
   commit_not_enforceable: { act: "commit", label: "回去勾選知悉" },
 };
 function passFix(code) { return typeof code === "string" && cardHas(PASS_FIXES, code) ? PASS_FIXES[code] : null; }
@@ -6032,10 +6674,10 @@ const CARD_SLOT_LABEL = { collected: "收藏中", active: "生效中" };
 const CARD_SLOT_NOTE = "這次的安全啟動不會載入";
 // What 「本次不生效」 really meant: not that the skill is broken, but that VBear's safe launch does not put this skill card into the
 // terminal this time (it is a card kept on a role card, "收藏中"). Said that way wherever the skill card shows it.
-const SKILL_NOT_LOADED = "出發時不會載入";
-const SKILL_NOT_LOADED_TIP = "VBear 的安全啟動不會把這張技能卡載入終端；它只是收藏在角色卡上的紀錄，不是壞了。";
+const SKILL_NOT_LOADED = "開始工作時不會載入";
+const SKILL_NOT_LOADED_TIP = "VBear 的安全啟動不會把這張技能卡載入終端；它只是收藏在員工身上的紀錄，不是壞了。";
 // On a skill's page: "收藏中" is how the skill sits on a card (the same word as on the card); 啟用／已停用 is about the card itself.
-const SKILL_EQUIPPED_NOTE = "「收藏中」是這張技能卡插在角色卡上的狀態，和卡面一樣：這次出發不會載入它。後面的「啟用中／已停用」只在說那張角色卡本身能不能出發。";
+const SKILL_EQUIPPED_NOTE = "「收藏中」是這張技能卡放在員工身上的狀態，和卡面一樣：這次開始工作不會載入它。後面的「啟用中／已停用」只在說那位員工本身能不能開始工作。";
 const CARD_SLOTS_SHOWN = 6;
 function cardSlotState(item) { return item && item.will_load === true ? "active" : "collected"; }
 
@@ -6080,22 +6722,22 @@ function cardPassLine(loadoutState) {
   const write = level("Write");
   const commit = level("Commit");
   if (write === null || commit === null) return null;
-  return `出發後可以改檔案${CARD_PASS_WRITE_REACH[passKind(write)]}；擋不住存下版本紀錄；詳情看出發通行證`;
+  return `開始工作後可以改檔案${CARD_PASS_WRITE_REACH[passKind(write)]}；擋不住存下版本紀錄；詳情看開始前的檢查`;
 }
 
-const CARD_AGY_NOTE = "AGY 的員工可以聊天（每個指令都問你）；要在終端機出發請選完整模式。";
-const CARD_CODEX_NOTE = "放在任務卡的審查位時，自動模式會派它在暫存副本裡審查；也可以手動記錄審查結果。";
+const CARD_AGY_NOTE = "AGY 的員工可以聊天（每個指令都問你）；要在指令視窗開始工作請選「完全交給他（有風險）」。";
+const CARD_CODEX_NOTE = "放在專案的審查位時，自動模式會派它在暫存副本裡審查；也可以手動記錄審查結果。";
 
 // What the light says. Yellow is the intents (as cardLight); once they are all decided, green is only for a loadout that
 // was read and lists no reason against a launch. Not read yet, not readable, or with reasons: not green.
 function cardDeparture(p, loadoutState) {
   // a card in full mode is started without the permission intents (VBear limits nothing), so undecided ones hold nothing back
   const base = p && p.launch_mode === "full"
-    ? { state: "green", undecided: [], text: "可以出發（完整模式不看權限意圖）" } : cardLight(p);
+    ? { state: "green", undecided: [], text: "可以開始工作（「完全交給他（有風險）」不看權限意圖）" } : cardLight(p);
   if (base.state === "yellow") return { ...base, reasons: [] };
-  if (!loadoutState || loadoutState.state === "loading") return { state: "checking", text: "確認出發條件中…", reasons: [] };
+  if (!loadoutState || loadoutState.state === "loading") return { state: "checking", text: "確認開始工作條件中…", reasons: [] };
   const blockers = loadoutState.state === "ok" && loadoutState.data ? loadoutState.data.blockers : null;
-  if (!Array.isArray(blockers)) return { state: "unknown", text: "讀不到出發條件，實際能不能出發以出發通行證為準", reasons: [] };
+  if (!Array.isArray(blockers)) return { state: "unknown", text: "讀不到開始工作條件，實際能不能開始工作以開始前的檢查為準", reasons: [] };
   const reasons = blockers.map((b) => (b && typeof b.message === "string" ? b.message : "")).filter(Boolean);
   const shown = reasons.length ? reasons : ["原因未提供"];
   // Codex cannot open a terminal from VBear today, but a Codex card on a review place is used by the flow (the automatic
@@ -6104,7 +6746,7 @@ function cardDeparture(p, loadoutState) {
   if (blockers.length && blockers.every((b) => b && typeof b.code === "string" && b.code.startsWith("codex_"))) {
     return { state: "codex", text: "不能直接開終端", note: CARD_CODEX_NOTE, reasons: shown };
   }
-  if (blockers.length) return { state: "blocked", text: "目前不能出發", reasons: shown };
+  if (blockers.length) return { state: "blocked", text: "目前不能開始工作", reasons: shown };
   return { ...base, reasons: [] };
 }
 
@@ -6465,7 +7107,7 @@ async function viewTeam(params = {}) {
     [["card", "卡片"], ["list", "表格"]].map(([v, t]) => el("button", { type: "button", "aria-pressed": String(tview === v), on: { click: () => { store.set("teamView", v); viewTeam(); } } }, t)));
 
   setKids(main,
-    el("h1", null, "角色卡池"),
+    el("h1", null, "員工詳細資料"),
     el("p", { class: "lede" }, "這裡收集你的角色卡。每張卡是一份可以重複使用的角色設定；開啟中的終端在下方，兩者不同：一張卡可以同時有多個終端。"),
     runtimeNotice(),
     el("section", { class: "section" },
@@ -6508,7 +7150,7 @@ async function viewRole(id) {
   await Promise.all([loadStatic(), loadLive(), ensureRoleTranslations()]);
   const r = D.roles.find((x) => x.role_id === id);
   const main = claim(token);
-  if (!r) { setKids(main, crumbs([["角色卡池", "#/team"]]), notice("bad", "找不到這個角色（索引可能已更新）")); return; }
+  if (!r) { setKids(main, crumbs([["員工詳細資料", "#/team"]]), notice("bad", "找不到這個角色（索引可能已更新）")); return; }
   const sessions = r.kind === "cli" ? D.live.sessions.filter((s) => s.agent === r.tool) : [];
   const field = (title, src) => src && (src.value || src.origin !== "missing")
     ? el("div", { class: "field" }, el("h3", null, title, prov(src)), src.value ? el("div", { class: "body" }, String(src.value)) : el("div", { class: "empty" }, src.detail)) : null;
@@ -6560,7 +7202,7 @@ async function viewRole(id) {
   q.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) search.now(); });
 
   setKids(main, 
-    crumbs([["角色卡池", "#/team"], [roleLabel(r.role_id, r.name)]]),
+    crumbs([["員工詳細資料", "#/team"], [roleLabel(r.role_id, r.name)]]),
     el("div", { class: "row" }, el("div", { class: "avatar", "aria-hidden": "true" }, r.emoji || initialOf(r.name)), el("h1", null, roleLabel(r.role_id, r.name)), toolTag(r.tool)),
     el("p", { class: "lede" }, r.kind === "cli" ? "主代理：直接在終端機執行的工具。" : "角色設定：可以被主代理委派工作的子代理。"),
     (r.warnings || []).map((w) => notice("warn", w)),
@@ -6594,14 +7236,14 @@ async function viewProjects(id) {
   const projects = L.projects || [];
   if (id) {
     const p = projects.find((x) => x.project_id === id);
-    if (!p) { setKids(main, crumbs([["專案", "#/projects"]]), notice("bad", "找不到這個專案")); return; }
-    setKids(main, crumbs([["專案", "#/projects"], [p.name]]), projectDetail(p));
+    if (!p) { setKids(main, crumbs([["專案資料夾", "#/projects"]]), notice("bad", "找不到這個專案")); return; }
+    setKids(main, crumbs([["專案資料夾", "#/projects"], [p.name]]), projectDetail(p));
     return;
   }
   const active = projects.filter((p) => p.live_session_ids.length);
   const rest = projects.filter((p) => !p.live_session_ids.length);
   setKids(main, 
-    el("h1", null, "專案"),
+    el("h1", null, "專案資料夾"),
     el("p", { class: "lede" }, "依工作目錄的 git 儲存庫歸類。專案是目標與資料歸屬；開啟中的終端依工作目錄對應到專案。"),
     runtimeNotice(),
     el("section", { class: "section" },
@@ -6674,18 +7316,25 @@ function autonomyDialogBody(item, limits, never) {
   const l = limits || {};
   return el("div", null,
     el("p", null, item.effect),
-    el("p", null, `最多花多少：幕僚長每次最多 ${usdText(l.chief_call_usd)}；派工的每一步是員工的一個聊天回合，每回合最多 ${usdText(l.per_turn_usd)}。` +
-      `全部和聊天、會議共用每天上限（${usdText(l.daily_usd)}），到了就暫停，由你按「繼續」。`),
-    item.key === "routines" ? el("p", null, "例行工作每天最多花多少，另外在「例行工作」頁設定，預設是每天上限的一半，不會超過每天上限。") : null,
-    item.key === "auto_continue" ? el("p", null, "它只接續派工，群組和例行工作不會。每份派工最多自己接續 3 次，全部加起來每天最多 5 次；接續後 10 分鐘內又因同一個原因暫停，這份派工就不再自己接續，由你按「繼續」。恢復時間過了 12 小時以上（VBear 關著或 Mac 睡著），也只列出來等你決定。") : null,
+    el("p", null, `最多花多少：幕僚長每次最多 ${usdText(l.chief_call_usd)}；分配工作的每一步是員工的一個聊天回合，每回合最多 ${usdText(l.per_turn_usd)}。` +
+      `全部和聊天、會議共用花費上限（${usdText(l.daily_usd)}），到了就暫停，由你按「繼續」。`),
+    item.key === "routines" ? el("p", null, "定時工作每天最多花多少，另外在「定時工作」頁設定，預設是花費上限的一半，不會超過花費上限。") : null,
+    item.key === "auto_continue" ? el("p", null, "它只接續分配工作，群組和定時工作不會。每份分配工作最多自己接續 3 次，全部加起來每天最多 5 次；接續後 10 分鐘內又因同一個原因暫停，這份分配工作就不再自己接續，由你按「繼續」。恢復時間過了 12 小時以上（VBear 關著或 Mac 睡著），也只列出來等你決定。") : null,
     el("p", null, "每一件它做的事都會列在「AI 自己做了什麼」，可以停止或撤回；也可以回到這裡關掉。"),
     el("p", { class: "small muted" }, "就算全部勾了，下面三件事還是不會做："),
     el("ul", { class: "small" }, never.map((t) => el("li", null, t))));
 }
 
+// The items that cannot be turned on yet are not listed above, so the line about them does not count them ("item 4"): the server's own sentence
+// (data.later_note) counted the items of its table, not the ones in the page, and read as if one of four listed items was missing.
+const AUTONOMY_LATER_TEXT = "還有一項（讓員工不必每次問）之後的版本才會加入；現在每個指令、每個檔案修改都照舊先問你。";
+function autonomyLaterNote(data) {
+  if (typeof data.later_note !== "string" || !data.items.some((item) => item && item.active !== true)) return null;
+  return el("p", { class: "small muted", "data-autonomy": "later" }, AUTONOMY_LATER_TEXT);
+}
 function autonomySettings(data) {
   const box = el("section", { class: "panel pad", "data-settings": "autonomy" }, el("h2", { style: "margin-bottom:6px" }, "自己動手"));
-  const actionsLink = () => el("p", { class: "small" }, el("a", { href: "#/actions", "data-autonomy": "actions-link" }, "看「AI 自己做了什麼」"), "：幕僚長和派工做過的每一件事，誰決定的，都列在那裡。");
+  const actionsLink = () => el("p", { class: "small" }, el("a", { href: "#/actions", "data-autonomy": "actions-link" }, "看「AI 自己做了什麼」"), "：幕僚長和分配工作做過的每一件事，誰決定的，都列在那裡。");
   if (!data || !data.autonomy || !Array.isArray(data.items)) {
     append(box, el("p", { class: "small muted", "data-autonomy": "unknown" }, AUTONOMY_UNKNOWN), actionsLink());
     return box;
@@ -6719,7 +7368,7 @@ function autonomySettings(data) {
   append(box, el("p", { class: "small muted" }, AUTONOMY_NOTE),
     data.items.filter((item) => item.active === true && typeof item.key === "string").map(row),
     el("p", { class: "small", "data-autonomy": "never" }, "就算全部勾了，也永遠不會做：", never.join("")),
-    typeof data.later_note === "string" ? el("p", { class: "small muted", "data-autonomy": "later" }, data.later_note) : null,
+    autonomyLaterNote(data),
     actionsLink());
   return box;
 }
@@ -6730,12 +7379,12 @@ function autonomySettings(data) {
 function onboardingSettings(conf, saveConf) {
   const dismissed = conf.onboarding_dismissed === true;
   const btn = el("button", { class: "btn small", type: "button", "data-onboard": dismissed ? "show" : "hide", on: { click: async () => {
-    const r = await saveConf({ onboarding_dismissed: !dismissed }, dismissed ? "大廳會再顯示新手第一局" : "大廳不再顯示新手第一局");
+    const r = await saveConf({ onboarding_dismissed: !dismissed }, dismissed ? "首頁會再顯示新手第一局" : "首頁不再顯示新手第一局");
     if (r) viewSettings();
-  } } }, dismissed ? "重新顯示大廳的新手第一局" : "不要再顯示新手第一局");
+  } } }, dismissed ? "重新顯示首頁的新手第一局" : "不要再顯示新手第一局");
   return el("section", { class: "panel pad onboard-settings", "data-settings": "onboarding" },
     el("h2", null, ONBOARD_TITLE),
-    el("p", { class: "small muted" }, dismissed ? "目前已收起。" : "大廳最上方的三步進度：拿角色卡、導入專案、把隊伍放上任務卡。三步都完成後會收成一行。"),
+    el("p", { class: "small muted" }, dismissed ? "目前已收起。" : "首頁最上方的三步進度：新增員工、加入一個資料夾、把隊伍放上專案。三步都完成後會收成一行。"),
     btn);
 }
 
@@ -6754,13 +7403,70 @@ function sourceRow(s, advanced, saveConf) {
       issues.map((x) => el("div", { class: "small cw-error", "data-src": "issue" }, x))));
 }
 
-async function viewSettings() {
+// Shared by settings and start-up: selecting edits a draft; only Save writes it.
+function dailyLimitEditor({ current, onSaved }) {
+  let saved = typeof current === "number" && isFinite(current) ? current : null;
+  let selected = SETUP_DAILY_CHOICES.some((c) => c.usd === saved) ? String(saved) : "custom";
+  let busy = false;
+  const input = el("input", { type: "number", min: "0.01", max: "50", step: "0.01", "data-limit-input": "", "aria-label": "自己填花費上限（美元）" });
+  input.value = saved === null ? "" : String(saved);
+  const result = el("div", { "data-limit-result": "", "aria-live": "polite" });
+  const status = el("p", { class: "small muted", "data-limit-current": "" });
+  const choices = [];
+  const sync = () => {
+    status.setAttribute("data-setup", saved === null ? "daily-unknown" : SETUP_DAILY_CHOICES.some((c) => c.usd === saved) ? "daily-current" : "daily-custom");
+    status.textContent = saved === null ? "讀不到目前的花費上限，目前的值：未知。" : `目前每天最多 ${setupUsd(saved)}。`;
+    for (const [key, row, button] of choices) {
+      button.setAttribute("aria-pressed", selected === key ? "true" : "false");
+      row.setAttribute("data-selected", saved !== null && String(saved) === key ? "true" : "false");
+    }
+    input.disabled = selected !== "custom" || busy;
+  };
+  const pick = (key, label, note) => {
+    const button = el("button", { class: "btn small", type: "button", "data-limit-choice": key, "data-daily-pick": key }, label);
+    const row = el("li", { class: "setup-daily-choice", "data-daily-choice": key }, button,
+      note ? el("span", { class: "small muted setup-text", "data-daily-note": "yes" }, note) : null);
+    button.addEventListener("click", () => { if (!busy) { selected = key; sync(); if (key === "custom") input.focus(); } });
+    choices.push([key, row, button]);
+    return row;
+  };
+  const list = SETUP_DAILY_CHOICES.map((c) => pick(String(c.usd), setupUsd(c.usd) + (c.usd === SETUP_DAILY_DEFAULT ? "（預設）" : ""), c.note));
+  list.push(pick("custom", "自己填", "0.01–50 美元，最多兩位小數。"));
+  const save = el("button", { class: "btn primary", type: "button", "data-limit-save": "" }, "儲存");
+  save.addEventListener("click", async () => {
+    if (busy) return;
+    const raw = selected === "custom" ? input.value.trim() : selected;
+    const value = Number(raw);
+    if (!/^\d+(?:\.\d{1,2})?$/.test(raw) || !isFinite(value) || value < 0.01 || value > 50) {
+      setKids(result, notice("warn", "請填 0.01–50 美元，最多兩位小數；還沒有儲存。"));
+      return;
+    }
+    busy = true; save.disabled = true; sync();
+    try {
+      const res = await api.post("/api/setup/daily-limit", { daily_usd: value });
+      if (typeof res.daily_usd !== "number" || !isFinite(res.daily_usd)) throw new Error("讀不到儲存後的花費上限，請重新打開確認。");
+      saved = res.daily_usd;
+      setKids(result, el("p", { "data-setup": "daily-result" }, setupDailyResultWords(res)));
+      if (onSaved) onSaved(res);
+    } catch (e) { setKids(result, el("div", { "data-setup": "daily-error" }, plainNotice("bad", "沒有存進去：" + e.message))); }
+    finally { busy = false; save.disabled = false; sync(); }
+  });
+  sync();
+  return el("div", null, status, el("ul", { class: "setup-daily-list" }, list),
+    el("label", { class: "cw-field" }, "自己填（美元）", input), save, result,
+    el("p", { class: "small muted" }, "所有 AI 花費（聊天、會議、分配工作、定時工作）加起來每天的上限，每天 0 點重新算。到了就暫停。AI 不能自己調高它。"),
+    el("p", { class: "small muted" }, "方案用量上限是 AI 工具自己的限制；調高這裡的花費上限，不會改變方案的用量限制。"));
+}
+
+async function viewSettings(params) {   // params: the address's ?key=value (P47-3 reads ?open=limits)
   const token = seq;
   await loadStatic();
   await refreshTranslations();
   await refreshRoleTranslations();
   const main = claim(token);
   const c = await api.get("/api/config");
+  const daily = await api.get("/api/setup/daily-limit").catch(() => null);
+  const ledger = await api.get("/api/meetings/ledger").catch(() => null);
   const autonomyData = await api.get("/api/settings/autonomy").catch(() => null);
   if (token !== seq) return;
   const conf = c.config;
@@ -6778,65 +7484,76 @@ async function viewSettings() {
 
   const srcRow = (s) => sourceRow(s, advanced, saveConf);
 
-  setKids(main, 
+  const day = daily && typeof daily.daily_usd === "number" ? daily.daily_usd : null;
+  let dayNow = day;
+  const spent = ledger && (typeof ledger.spent_usd === "number" || typeof ledger.spent_usd === "string" && /^\d+(?:\.\d+)?$/.test(ledger.spent_usd)) && isFinite(Number(ledger.spent_usd)) ? Number(ledger.spent_usd) : null;
+  const summary = el("summary");
+  const summaryText = () => {
+    const state = spent === null ? "今天的用量：未知"
+      : dayNow === null ? "狀態：未知" : spent >= dayNow ? "今天已到上限" : "今天還可以用";
+    summary.textContent = `用量與上限：每天最多 ${dayNow === null ? "未知" : setupUsd(dayNow)}（${state}）`;
+  };
+  summaryText();
+  const limits = el("details", { class: "panel pad", "data-settings": "limits", open: !!params && params.open === "limits" }, summary,
+    spent !== null ? el("p", { class: "small" }, `今天已花 ${usdText(spent)}。聊天、會議、分配工作、定時工作都算；Codex 和 AGY 是 VBear 的估計，不是帳單；用的是你的方案。`)
+      : el("p", { class: "small muted" }, "讀不到今天的用量"),
+    dailyLimitEditor({ current: day, onSaved: (res) => { dayNow = res.daily_usd; summaryText(); } }));
+  setKids(main,
     el("h1", null, "設定"),
-    el("p", { class: "lede" }, "選擇要盤點的來源。主控台只讀取你選的位置，不會修改任何技能或角色檔案。"),
     c.corrupt ? corruptNotice() || notice("bad", "設定檔（config.json）無法讀取，設定暫時無法儲存。") : null,
-    translationSettings(conf, saveConf),
-    setupSettings(),
-    autonomySettings(autonomyData),
-    onboardingSettings(conf, saveConf),
-    el("div", { class: "grid-2" },
-      el("div", { class: "panel pad" },
-        el("h2", { style: "margin-bottom:6px" }, "掃描來源"),
-        el("div", null, sources.filter((s) => !s.discovered).map(srcRow)),
-        sources.some((s) => s.discovered) ? [el("h3", { style: "margin:14px 0 4px" }, "自動發現的位置（專案技能、AGY 設定）"), sources.filter((s) => s.discovered).map(srcRow)] : null,
-        el("div", { class: "row", style: "margin-top:12px" }, el("button", { class: "btn primary", on: { click: rescan } }, "重新掃描"))),
-      el("div", { style: "display:grid;gap:16px;align-content:start" },
-        el("div", { class: "panel pad" },
-          el("h2", { style: "margin-bottom:6px" }, "使用紀錄"),
-          el("label", { class: "switch" },
-            el("input", { type: "checkbox", checked: conf.usage_enabled !== false, on: { change: (e) => saveConf({ usage_enabled: e.target.checked }).then(() => loadLive(true)) } }),
-            el("div", null, el("div", { class: "t" }, "讀取對話紀錄中的技能與模型"),
-              el("div", { class: "small muted" }, "只擷取技能名稱、模型名稱、工作階段 ID、工作目錄與時間。對話內容、工具輸出與檔案內容不會被讀出或保存。"))),
-          el("label", { class: "switch" },
-            el("span", { style: "width:17px" }),
-            el("div", null, el("div", { class: "t" }, "紀錄範圍"),
-              el("select", { on: { change: (e) => saveConf({ usage_days: Number(e.target.value) }).then(() => loadLive(true)) } },
-                [7, 14, 30, 60, 90].map((n) => el("option", { value: n, selected: Number(conf.usage_days || 30) === n }, `最近 ${n} 天`)))))),
+    setupSettings(), autonomySettings(autonomyData),
         el("div", { class: "panel pad" },
           el("h2", { style: "margin-bottom:6px" }, "顯示"),
           el("label", { class: "switch" },
-            el("input", { type: "checkbox", checked: advanced, on: { change: (e) => saveConf({ advanced_mode: e.target.checked }).then(viewSettings) } }),
-            el("div", null, el("div", { class: "t" }, "進階模式"), el("div", { class: "small muted" }, "顯示檔案路徑與診斷資訊。機密值在任何模式下都不會顯示。"))),
+            el("input", { type: "checkbox", checked: advanced, on: { change: (e) => saveConf({ advanced_mode: e.target.checked }).then((r) => { if (r) syncAdvancedNav(e.target.checked); return viewSettings(); }) } }),
+            el("div", null, el("div", { class: "t" }, "進階模式"), el("div", { class: "small muted" }, "打開後，選單多出工程用的頁面，並顯示檔案路徑與診斷資訊。不會改變任何權限：員工要跑指令、改檔案，照樣每次問你。機密值在任何模式下都不會顯示。"))),
           el("label", { class: "switch" },
             el("input", { type: "checkbox", checked: conf.show_mcode === true, "data-setting": "show-mcode",
               on: { change: (e) => saveConf({ show_mcode: e.target.checked }) } }),
             el("div", null, el("div", { class: "t" }, "顯示 MCODE"),
-              el("div", { class: "small muted" }, "打開後，建角色卡時才能選 MCODE（MiniMax 的 AI 工具，" + FULL_ONLY_MARK.replace("這個 AI 工具", "") + "）。關掉不會刪除已有的 MCODE 角色卡，只是先不能選、不能用它出發。"))),
+              el("div", { class: "small muted" }, "打開後，新增員工時才能選 MCODE（MiniMax 的 AI 工具，" + FULL_ONLY_MARK.replace("這個 AI 工具", "") + "）。關掉不會刪除已有的 MCODE 員工，只是先不能選、不能讓它開始工作。"))),
           el("label", { class: "switch" },
             el("span", { style: "width:17px" }),
             el("div", null, el("div", { class: "t" }, "外觀"),
               el("select", { on: { change: (e) => setTheme(e.target.value) } },
                 [["auto", "跟隨系統"], ["light", "淺色"], ["dark", "深色"]].map(([v, t]) => el("option", { value: v, selected: store.get("theme", "auto") === v }, t)))))),
         el("div", { class: "panel pad" },
+          el("h2", { style: "margin-bottom:6px" }, "使用紀錄"),
+          el("label", { class: "switch" },
+            el("input", { type: "checkbox", checked: conf.usage_enabled !== false, on: { change: (e) => saveConf({ usage_enabled: e.target.checked }).then(() => loadLive(true)) } }),
+            el("div", null, el("div", { class: "t" }, "讀取對話紀錄中的技能與模型"),
+              el("div", { class: "small muted" }, "只擷取技能名稱、模型名稱、對話紀錄的識別碼、工作目錄與時間。對話內容、工具輸出與檔案內容不會被讀出或保存。"))),
+          el("label", { class: "switch" },
+            el("span", { style: "width:17px" }),
+            el("div", null, el("div", { class: "t" }, "紀錄範圍"),
+              el("select", { on: { change: (e) => saveConf({ usage_days: Number(e.target.value) }).then(() => loadLive(true)) } },
+                [7, 14, 30, 60, 90].map((n) => el("option", { value: n, selected: Number(conf.usage_days || 30) === n }, `最近 ${n} 天`)))))),
+        el("div", { class: "panel pad" },
           el("h2", { style: "margin-bottom:8px" }, "資料流向"),
           el("ul", { class: "small", style: "margin:0;padding-left:18px;color:var(--ink-2)" },
             el("li", null, "所有掃描都在這台電腦上完成；技能翻譯若啟用，會經你電腦上已登入的工具，將作者說明送到模型服務。"),
             el("li", null, "網頁伺服器只接受本機（127.0.0.1）連線。"),
             el("li", null, "技能內的腳本不會被執行；原始內容以純文字顯示。"),
-            el("li", null, "主控台只寫入自己的狀態目錄", advanced ? [": ", el("span", { class: "mono" }, home(c.state_dir))] : "", "。"),
-            el("li", null, "角色由主控台內建的 VBear runtime 啟動與管理；開啟終端預設只觀看，接管後才會送出輸入。"))),
-        advanced ? el("div", { class: "panel pad" },
+            el("li", null, "VBear 只寫入自己的狀態目錄", advanced ? [": ", el("span", { class: "mono" }, home(c.state_dir))] : "", "。"),
+            el("li", null, "員工由 VBear 的背景程式啟動與管理；開啟指令視窗預設只觀看，接管後才會送出輸入。"))),
+    limits,
+    advanced ? el("section", { "data-settings-advanced": "" },
+      translationSettings(conf, saveConf), onboardingSettings(conf, saveConf),
+      el("div", { class: "panel pad" },
+        el("h2", { style: "margin-bottom:6px" }, "掃描來源"),
+        el("div", null, sources.filter((s) => !s.discovered).map(srcRow)),
+        sources.some((s) => s.discovered) ? [el("h3", { style: "margin:14px 0 4px" }, "自動發現的位置（專案技能、AGY 設定）"), sources.filter((s) => s.discovered).map(srcRow)] : null,
+        el("div", { class: "row", style: "margin-top:12px" }, el("button", { class: "btn primary", on: { click: rescan } }, "重新掃描"))),
+        el("div", { class: "panel pad" },
           el("h2", { style: "margin-bottom:8px" }, "診斷"),
           el("dl", { class: "kv small" },
-            el("dt", null, "VBear runtime"), el("dd", { class: "mono" }, (D.live && D.live.runtime && D.live.runtime.version) || "未連線", " ", home(c.runtime_socket || "")),
+            el("dt", null, "VBear 的背景程式"), el("dd", { class: "mono" }, (D.live && D.live.runtime && D.live.runtime.version) || "未連線", " ", home(c.runtime_socket || "")),
             el("dt", null, "Claude 外掛"), el("dd", null, (D.overview.facts.claude_installed_plugins || []).join("、") || "—"),
             el("dt", null, "外掛啟用"), el("dd", { class: "mono" }, JSON.stringify(D.overview.facts.claude_enabled_plugins || {})),
             el("dt", null, "Codex 預設模型"), el("dd", null, D.overview.facts.codex_default_model || "—", D.overview.facts.codex_default_effort ? `（${D.overview.facts.codex_default_effort}）` : ""),
             el("dt", null, "上次掃描"), el("dd", null, `${fmtTime(D.overview.generated_at)}，耗時 ${D.overview.scan_seconds} 秒`),
-            el("dt", null, "掃描問題"), el("dd", null, (D.overview.problems || []).join("；") || "無"))) : null)),
-  );
+            el("dt", null, "掃描問題"), el("dd", null, (D.overview.problems || []).join("；") || "無")))) : null);
+  if (params && params.open === "limits" && limits.scrollIntoView) limits.scrollIntoView({ block: "start" });
 }
 
 function setTheme(v) {
@@ -8130,7 +8847,7 @@ async function openShellTerminal(dir) {
 function newTerminalForm() {
   const input = el("input", { type: "text", class: "input mono", value: store.get("terminal.lastDir", "~"),
     "aria-label": "資料夾", placeholder: "~/projects/app", spellcheck: "false", autocomplete: "off" });
-  const btn = el("button", { class: "btn primary", type: "submit" }, "開啟終端機");
+  const btn = el("button", { class: "btn primary", type: "submit" }, "開啟指令視窗");
   const form = el("form", { class: "row new-term-form", on: { submit: async (ev) => {
     ev.preventDefault();
     btn.disabled = true;
@@ -8147,7 +8864,7 @@ async function viewTerminals() {
   if (token !== seq) return;
   const panes = shellPanes();
   setKids(main,
-    el("h1", null, "終端機"),
+    el("h1", null, "指令視窗"),
     el("p", { class: "lede" }, "在指定資料夾開啟你的登入 shell，直接打字使用。關掉這個頁面或主控台，終端機會繼續執行，回來就能接著用。"),
     runtimeNotice(),
     notice("info", SHELL_NOTE),
@@ -8167,8 +8884,8 @@ async function viewTerminals() {
 
 // The standalone terminal page's way back: a role terminal goes to the role-card pool (the page's current name), a
 // built-in one to the list of terminals; one tracked on a task card also gets a button to that card.
-const TERM_BACK_ROLE_LABEL = "回角色卡池";
-const TERM_BACK_SHELL_LABEL = "所有終端機";
+const TERM_BACK_ROLE_LABEL = "回員工詳細資料";
+const TERM_BACK_SHELL_LABEL = "所有指令視窗";
 const TERM_BACK_TASK_LABEL = "回任務卡";
 
 async function viewTerminal(paneId) {
@@ -8275,7 +8992,7 @@ async function viewTerminal(paneId) {
     }
     if (connState === "closed") {
       notices.push(terminalClosedNotice(closedReason, sessionGone,
-        isShell ? "需要新的終端機時，請到「終端機」頁開啟。" : "需要新的終端時，請從角色卡的「出發通行證」開啟。"));
+        isShell ? "需要新的終端機時，請到「指令視窗」頁開啟。" : "需要新的終端時，請從角色卡的「出發通行證」開啟。"));
     } else if (connState === "disconnected") {
       const attempts = reconnectPolicy.getRetryCount();
       const waitText = reconnectPolicy.canAutoRetry()
@@ -8535,8 +9252,8 @@ async function viewTerminal(paneId) {
     : null;
 
   setKids(main,
-    isShell ? crumbs([["終端機", "#/terminals"], [shellLabel(pane)]])
-      : crumbs([["角色卡池", "#/team"], [`終端機 (${paneId})`]]),
+    isShell ? crumbs([["指令視窗", "#/terminals"], [shellLabel(pane)]])
+      : crumbs([["員工詳細資料", "#/team"], [`指令視窗 (${paneId})`]]),
     shellTabs,
     el("div", { class: "term-head" },
       el("div", { class: "term-meta" },
@@ -10181,7 +10898,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         // P34-2: how the card is started, and a suggestion when the folder is not the one the position suggests (words only)
         if (typeof pv.launch_mode === "string" && typeof pv.mode_note === "string" && pv.mode_note) {
           kids.push(el("div", { class: "notice info", "data-pass": "mode" }, el("span", { class: "ico", "aria-hidden": "true" }, "i"),
-            el("div", { class: "small" }, el("strong", null, `出發方式：${pv.launch_mode === "full" ? "完整模式" : "安全模式"}`),
+            el("div", { class: "small" }, el("strong", null, `開始工作的方式：${pv.launch_mode === "full" ? "完全交給他（有風險）" : "每件事先問我"}`),
               el("p", { style: "margin:4px 0" }, pv.mode_note))));
         }
         if (typeof pv.folder_warning === "string" && pv.folder_warning) {
@@ -10252,7 +10969,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       return el("section", { class: "rc-block", "data-launch": "chosen-skills" },
         el("h4", null, isFull ? "技能卡清單（收藏中），VBear 不會替它挑技能" : "技能卡清單（收藏中），本次不會載入"),
         el("p", { class: "rc-note" }, isFull
-          ? "這是你替這張角色卡收藏的清單，只是紀錄。完整模式下，工具會照你自己的設定載入它的技能、CLAUDE.md、MCP 與外掛，不是這份清單。"
+          ? "這是你替這位員工收藏的清單，只是紀錄。「完全交給他（有風險）」下，工具會照你自己的設定載入它的技能、CLAUDE.md、MCP 與外掛，不是這份清單。"
           : "這是你替這張角色卡收藏的清單，只是紀錄；這次出發不會把這些技能帶上。"),
         ids.length ? el("ul", null, ids.map((sid) => {
           const rec = catalog.find((x) => x.skill_id === sid);
@@ -10352,7 +11069,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         el("span", { class: "ico", "aria-hidden": "true" }, "!"),
         el("div", { class: "small" },
           el("strong", null, "這個員工可以動你電腦上的任何檔案"),
-          el("p", { style: "margin:4px 0" }, "完整模式沒有任何保護：它能讀、改、刪你電腦上的檔案，也能上網。看懂之後再勾選才能出發。"),
+          el("p", { style: "margin:4px 0" }, "「完全交給他（有風險）」沒有任何保護：它能讀、改、刪你電腦上的檔案，也能上網。看懂之後再勾選才能開始工作。"),
           el("label", { class: "row", for: "agent-launch-full-ack", style: "gap:8px; align-items:flex-start" },
             fullAckBox, el("span", null, "我了解"))));
     }
@@ -10847,7 +11564,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
   }
 
   setKids(main,
-    crumbs([["角色卡池", "#/team"], ["終端工作台"]]),
+    crumbs([["員工詳細資料", "#/team"], ["工作台"]]),
     toolbar,
     shell
   );
@@ -12261,7 +12978,7 @@ function taskCardsSection(tasksList, opts = {}) {
 }
 
 // ---------- routines (v0.18, P44-2) ----------
-// 例行工作: the person asks an employee to do one thing at set times. At the time VBear reminds the person (the line over every
+// 定時工作: the person asks an employee to do one thing at set times. At the time VBear reminds the person (the line over every
 // page and the reminders here), or, when 「自己動手」 item 3 is ticked in the settings, starts it. Every write goes through
 // /api/routines*; the page never sends a message itself. Names and texts are set with textContent only (el() children).
 const ROUTINE_DAYS = ["一", "二", "三", "四", "五", "六", "日"];
@@ -12271,9 +12988,9 @@ const ROUTINE_STATE = {
   uncertain: ["不確定有沒有送出", "b-warn"],
 };
 const ROUTINE_REASON = {
-  daily_limit: "今天的額度用完了", routine_limit: "例行工作今天的額度用完了", spend_unknown: "讀不到今天的花費，所以沒有開始",
+  daily_limit: "今天的用量到上限了", routine_limit: "定時工作今天的用量到上限了", spend_unknown: "讀不到今天的花費，所以沒有開始",
   busy: "員工一直在忙，等了 12 分鐘", you: "你選擇跳過", unanswered: "沒有人處理，時間過了", late: "時間到的時候 VBear 沒有開著",
-  deleted: "這件例行工作已刪除", disabled: "這件例行工作已關掉", not_found: "訊息沒有送出去，VBear 不會自己再送一次",
+  deleted: "這件定時工作已刪除", disabled: "這件定時工作已關掉", not_found: "訊息沒有送出去，VBear 不會自己再送一次",
   is_error: "這回合出了錯", runner_error: "VBear 這邊出了問題", damaged: "聊天紀錄有問題",
   older: "VBear 沒在看的時候錯過，只補最近一次", superseded: "VBear 沒在看的時候錯過，之後的時間已經到了",
 };
@@ -12303,15 +13020,16 @@ function waitingBarText(rows) {
   const list = all.filter((r) => r.kind === "routine_due");
   const missed = all.filter((r) => r.kind === "routine_missed");       // P44-3: what a sleeping Mac or a closed VBear missed
   if (!list.length && !missed.length) return null;
-  const lost = missed.length ? `VBear 剛才沒在看，錯過了 ${missed.length} 件例行工作` : "";
+  const lost = missed.length ? `VBear 剛才沒在看，錯過了 ${missed.length} 件定時工作` : "";
   if (!list.length) return `等你決定：${lost}`;
   const first = list[0];
   const time = typeof first.slot === "string" ? first.slot.slice(11, 16) : "";
-  return `等你決定：例行工作「${first.name}」${time}到時間了` + (list.length > 1 ? `，另外還有 ${list.length - 1} 件` : "") + (lost ? `；${lost}` : "");
+  return `等你決定：定時工作「${first.name}」${time}到時間了` + (list.length > 1 ? `，另外還有 ${list.length - 1} 件` : "") + (lost ? `；${lost}` : "");
 }
 async function refreshWaitingBar() {
   const bar = document.getElementById("waiting-bar");
   if (!bar) return;
+  if (navTop === "home") { bar.hidden = true; setKids(bar); return; }   // P47-2: the home page lists the same things itself, under 等你決定
   let rows = [];
   try { const r = await api.get("/api/waiting"); rows = r && Array.isArray(r.waiting) ? r.waiting : []; } catch (_) { rows = []; }
   const text = waitingBarText(rows);
@@ -12328,16 +13046,21 @@ async function viewRoutines() {
   const token = seq;
   let data;
   try { data = await api.get("/api/routines"); }
-  catch (e) { setKids(claim(token), el("h1", null, "例行工作"), notice("bad", "讀不到例行工作：" + e.message)); return; }
+  catch (e) { setKids(claim(token), el("h1", null, "定時工作"), notice("bad", "讀不到定時工作：" + e.message)); return; }
   const main = claim(token);
   const box = el("div", { "data-routines": "box" });
   const formBox = el("div", { "data-routines": "form-box" });
+  const feedback = el("div", { "data-routines": "feedback", "aria-live": "polite" });
   let cur = data;
   let formOpen = false;
   const closeForm = () => { formOpen = false; setKids(formBox); };
   const reload = async () => { try { draw(await api.get("/api/routines")); } catch (e) { toast(e.message); } refreshWaitingBar(); };
   const act = async (fn, done) => {
-    try { await fn(); if (done) toast(done); } catch (e) { toast(e.message); }
+    setKids(feedback);
+    try { await fn(); if (done) toast(done); } catch (e) {
+      if (["daily_limit", "routine_limit", "red", "budget"].includes(e.code)) setKids(feedback, limitReachedNotice(e.message, { text: "今天的用量到你設的上限了，所以這次定時工作沒有開始。明天 0 點會重新算；要現在繼續，可以到設定調高上限。" }));
+      else setKids(feedback, plainNotice("bad", e.message));
+    }
     await reload();
   };
   const usd = (v) => (v == null ? "未知" : `US$${v}`);
@@ -12354,11 +13077,12 @@ async function viewRoutines() {
     name.value = routine ? routine.name : "";
     text.value = routine ? routine.text : "";
     who.value = routine ? routine.profile_id : (cards[0] ? cards[0].id : "");
-    days.forEach(([i, cb]) => { cb.checked = routine ? routine.days.includes(i) : i < 5; });
+    days.forEach(([i, cb]) => { cb.checked = routine ? routine.days.includes(i) : true; });
     times.forEach((t, i) => { t.value = routine && routine.times[i] ? routine.times[i] : (i === 0 ? "08:00" : ""); });
-    enabled.checked = routine ? routine.enabled === true : false;
+    enabled.checked = routine ? routine.enabled === true : true;
     const body = () => ({ name: name.value.trim(), profile_id: who.value, text: text.value, days: days.filter(([, cb]) => cb.checked).map(([i]) => i),
       times: times.map((t) => t.value).filter(Boolean), enabled: enabled.checked });
+    let saving = false;
     const send = async (confirmed) => {
       const b = body();
       if (confirmed) b.confirm_warning = true;
@@ -12375,19 +13099,29 @@ async function viewRoutines() {
       }
     };
     const dlg = el("section", { class: "panel pad", "data-routines": "form" },
-      el("h2", null, isNew ? "新增例行工作" : "編輯例行工作"),
+      el("h2", null, isNew ? "新增定時工作" : "編輯定時工作"),
       el("label", { class: "cw-field" }, el("span", null, "名稱"), name),
+      el("label", { class: "switch" }, enabled, el("div", null, el("div", { class: "t" }, "開著"),
+        el("div", { class: "small muted" }, "開著：到時間提醒你（打開『自己動手』第 3 項才會自己開始）。關著的不會提醒也不會開始。",
+          cur.autonomy.routines === true ? "目前第 3 項開著，到時間會自己開始。" : "目前只會到時間提醒你，由你按「現在開始」。"))),
       el("label", { class: "cw-field" }, el("span", null, "請哪位員工"), who),
       el("label", { class: "cw-field" }, el("span", null, "請他做什麼（每次都送這段話）"), text),
       el("div", { class: "cw-field" },
-        el("button", { class: "btn small", type: "button", "data-routine-action": "from-skill", on: { click: () => openSkillPicker(text, { title: "從技能帶入", pickLabel: "帶入", replace: true,
-          note: "選一個技能，它現在的內容會複製到「請他做什麼」的欄位。之後改技能，不會改這個例行工作。帶入之後你還可以再改；這裡不會儲存任何東西。" }) } }, "從技能帶入"),
-        el("span", { class: "small muted", "data-routine": "from-skill-note" }, " 複製當下的文字；之後改技能不會改這個例行工作。")),
+        el("button", { class: "btn small", type: "button", "data-routine-action": "from-skill", on: { click: () => openSkillPicker(text, { title: "從常用做法帶入", pickLabel: "帶入", replace: true,
+          note: "選一個常用做法，它現在的內容會複製到「請他做什麼」的欄位。之後改常用做法，不會改這個定時工作。帶入之後你還可以再改；這裡不會儲存任何東西。" }) } }, "從常用做法帶入"),
+        el("span", { class: "small muted", "data-routine": "from-skill-note" }, " 複製當下的文字；之後改常用做法不會改這個定時工作。")),
       el("div", { class: "cw-field" }, el("span", null, "星期"), el("div", null, days.map((d) => d[2]))),
       el("div", { class: "cw-field" }, el("span", null, "時間（最多三個，兩個時間至少差 1 小時）"), el("div", null, times)),
-      el("label", { class: "switch" }, enabled, el("div", null, el("div", { class: "t" }, "開啟"), el("div", { class: "small muted" }, "關著的不會提醒也不會開始。"))),
+
       el("div", { class: "row" },
-        el("button", { class: "btn primary", type: "button", "data-routine-action": "save", on: { click: () => send(false) } }, "儲存"), " ",
+        el("button", { class: "btn primary", type: "button", "data-routine-action": "save", on: { click: async () => {
+          if (saving) return;
+          saving = true;
+          try {
+            if (enabled.checked && cur.autonomy.routines === true && !(await confirmInPage(`開啟「${name.value.trim()}」`, `「自己動手」第 3 項是打開的：到時間 VBear 會自己開始，每次最多花 ${usd(routine ? routine.per_run_usd : cur.limits.per_turn_usd)}。`, "我了解，開啟"))) return;
+            await send(false);
+          } finally { saving = false; }
+        } } }, "儲存"), " ",
         el("button", { class: "btn", type: "button", "data-routine-action": "cancel", on: { click: closeForm } }, "取消")));
     formOpen = true;
     setKids(formBox, dlg);
@@ -12397,8 +13131,9 @@ async function viewRoutines() {
   const missedRow = (w) => el("div", { class: "mt-row", "data-routine-missed": w.routine_id },
     el("strong", null, w.name),
     el("span", { class: "small muted", "data-routine-missed-line": "text" },
-      `錯過 ${w.count} 次（最近一次 ${routineMissedWhen(w)}）。VBear 剛才沒在看（Mac 睡著或 VBear 關著）。補做只做最近一次，最多花 ${usd(cur.limits.per_turn_usd)}。` +
+      `錯過 ${w.count} 次（最近一次 ${routineMissedWhen(w)}）。VBear 剛才沒在看（Mac 睡著或 VBear 關著）。補做只做最近一次。` +
       (w.too_old ? "已經超過 12 小時，不會自己補做，由你決定。" : (cur.autonomy.routines === true ? "" : "沒有打開「自己動手」第 3 項，所以不會自己補做。"))),
+    el("details", { class: "small muted" }, el("summary", null, "詳細資訊"), `補做最多花 ${usd(cur.limits.per_turn_usd)}。`),
     el("button", { class: "btn small primary", type: "button", "data-routine-action": "missed-run", on: { click: () => act(() => api.post(`/api/routines/missed/${encodeURIComponent(w.routine_id)}`, { action: "run" }), "已開始補做") } }, "補做"),
     el("button", { class: "btn small", type: "button", "data-routine-action": "missed-dismiss", on: { click: () => act(() => api.post(`/api/routines/missed/${encodeURIComponent(w.routine_id)}`, { action: "dismiss" }), "不補做了") } }, "不用了"));
 
@@ -12413,12 +13148,12 @@ async function viewRoutines() {
   const moneyPanel = (d) => {
     const input = el("input", { type: "number", step: "0.05", min: "0.05", "data-routine-field": "daily" });
     input.value = d.settings.daily_usd == null ? "" : d.settings.daily_usd;
-    return el("section", { class: "panel pad", "data-routines": "money" },
-      el("h2", null, "花費"),
+    return el("details", { class: "panel pad", "data-routines": "money" },
+      el("summary", null, "用量與上限（定時工作）"),
       el("p", { class: "small", "data-routines": "money-line" },
-        `今天例行工作花了 ${usd(d.today.routine_spent_usd)}，上限 ${usd(d.today.routine_limit_usd)}（預設是每天上限 ${usd(d.today.day_usd)} 的一半；不會超過每天上限）。` +
-        `每一次最多 ${usd(d.limits.per_turn_usd)}。例行工作和聊天、會議共用每天上限，到了就不再開始。`),
-      el("div", { class: "row" }, el("label", { class: "small" }, "例行工作每天上限（美元）　", input), " ",
+        `今天定時工作花了 ${usd(d.today.routine_spent_usd)}，上限 ${usd(d.today.routine_limit_usd)}（預設是花費上限 ${usd(d.today.day_usd)} 的一半；不會超過花費上限）。` +
+        `每一次最多 ${usd(d.limits.per_turn_usd)}。定時工作和聊天、會議共用花費上限，到了就不再開始。`),
+      el("div", { class: "row" }, el("label", { class: "small" }, "定時工作花費上限（美元）　", input), " ",
         el("button", { class: "btn small", type: "button", "data-routine-action": "limit-save", on: { click: () => act(() => api.post("/api/routines/settings", { daily_usd: Number(input.value) }), "已儲存") } }, "儲存"), " ",
         el("button", { class: "btn small", type: "button", "data-routine-action": "limit-default", on: { click: () => act(() => api.post("/api/routines/settings", { daily_usd: null }), "改回預設") } }, "改回預設")),
       el("p", { class: "small muted", "data-routines": "auto-line" },
@@ -12436,15 +13171,16 @@ async function viewRoutines() {
       el("label", { class: "switch" }, box, el("div", null,
         el("div", { class: "t" }, "有工作在跑時不讓 Mac 睡著"),
         el("div", { class: "small muted", "data-routines": "awake-note" },
-          "只在員工做事時（例行工作或派工在進行）不讓 Mac 因為閒置而睡著；闔上筆電蓋子還是會睡，也不會為了到時間把 Mac 叫醒。預設是關的。"))));
+          "只在員工做事時（定時工作或分配工作在進行）不讓 Mac 因為閒置而睡著；闔上筆電蓋子還是會睡，也不會為了到時間把 Mac 叫醒。預設是關的。"))));
   };
 
   const routineCard = (r) => el("article", { class: "card", "data-routine": "card", "data-routine-id": r.id },
     el("div", { class: "row" }, el("strong", { class: "card-title" }, r.name), " ",
-      r.enabled ? badge("開啟", "b-ok") : badge("關著", "b-info"), " ",
+      r.enabled ? badge("開著", "b-ok") : badge("關著", "b-info"), " ",
       r.can_chat ? null : badge("這位員工現在不能聊天", "b-bad")),
     el("p", { class: "small", "data-routine": "who" }, `${r.profile_name || "（找不到這位員工）"}　${routineScheduleText(r)}`),
-    el("p", { class: "small muted", "data-routine": "next" }, r.next ? `下一次：${fmtTime(r.next.at)}　每次最多 ${usd(r.per_run_usd)}` : "沒有下一次（關著）"),
+    el("p", { class: "small muted", "data-routine": "next" }, r.next ? `下一次：${fmtTime(r.next.at)}` : "沒有下一次（關著）"),
+    el("details", { class: "small muted", "data-routine": "details" }, el("summary", null, "詳細資訊"), el("p", null, `每次最多 ${usd(r.per_run_usd)}。`)),
     el("p", { class: "small", "data-routine": "text" }, r.text),
     el("div", { class: "row" },
       el("button", { class: "btn small", type: "button", "data-routine-action": "toggle", on: { click: async () => {
@@ -12462,21 +13198,23 @@ async function viewRoutines() {
     r.runs.length ? el("ul", { class: "small", "data-routine": "runs" }, r.runs.map((run) => {
       const st = ROUTINE_STATE[run.state] || [String(run.state), "b-info"];
       return el("li", { "data-routine-run": run.state },
-        `${run.slot.replace("T", " ")}　`, badge(st[0], st[1]), ` ${run.reason ? routineReasonText(run.reason) : ""}`,
-        run.by_text ? `　${run.by_text}` : "", run.cost_usd != null ? `　US$${run.cost_usd}` : "", "　",
+        `${run.slot.replace("T", " ")}　`, badge(st[0], st[1]), run.reason === "daily_limit" || run.reason === "routine_limit"
+          ? limitReachedNotice(routineReasonText(run.reason), { text: "今天的用量到你設的上限了，所以這次定時工作沒有開始。明天 0 點會重新算；要現在繼續，可以到設定調高上限。" })
+          : ` ${run.reason ? routineReasonText(run.reason) : ""}`,
+        run.by_text ? `　${run.by_text}` : "", run.cost_usd != null ? el("details", { class: "small muted" }, el("summary", null, "詳細資訊"), `這次花了 US$${run.cost_usd}。Codex 和 AGY 是 VBear 的估計，不是帳單；用的是你的方案。`) : "", "　",
         run.chat_id ? el("a", { href: `#/chat/${encodeURIComponent(run.chat_id)}` }, "看這個聊天") : null);
     })) : el("p", { class: "small muted" }, "還沒有做過。"));
 
   const draw = (d) => {
     cur = d;
     setKids(box,
-      d.readable === false ? notice("warn", `例行工作的檔案讀不出來，先不會做事（檔案還在，沒有被刪掉）。${d.problem || ""}`) : null,
+      d.readable === false ? notice("warn", `定時工作的檔案讀不出來，先不會做事（檔案還在，沒有被刪掉）。${d.problem || ""}`) : null,
       waitingPanel(d.waiting || []),
       moneyPanel(d),
       awakePanel(d),
-      el("p", null, el("button", { class: "btn primary", type: "button", "data-routine-action": "new", on: { click: () => form(null) } }, "新增例行工作"), " ",
+      el("p", null, el("button", { class: "btn primary", type: "button", "data-routine-action": "new", on: { click: () => form(null) } }, "新增定時工作"), " ",
         el("span", { class: "small muted" }, ROUTINE_POLL_NOTE)),
-      d.routines.length ? d.routines.map(routineCard) : emptyState("還沒有例行工作", "按「新增例行工作」，挑一位員工、寫下要他做的事、選時間。"));
+      d.routines.length ? d.routines.map(routineCard) : emptyState("還沒有定時工作", "按「新增定時工作」，挑一位員工、寫下要他做的事、選時間。"));
   };
   draw(data);
   routinesTick = async () => {
@@ -12484,20 +13222,39 @@ async function viewRoutines() {
     try { draw(await api.get("/api/routines")); } catch (_) { /* the next tick tries again */ }
   };
   activeViewCleanup = () => { routinesTick = null; };
-  setKids(main, el("h1", null, "例行工作"),
+  setKids(main, el("h1", null, "定時工作"),
     el("p", { class: "lede" }, "請員工在固定的時間做同一件事。到時間時，VBear 提醒你，由你決定要不要開始；要讓它自己開始，到設定打開「自己動手」第 3 項。員工要跑指令、改檔案時，照舊每次問你。"),
-    el("p", { class: "small muted", "data-routines": "awake-line" }, "VBear 的視窗要開著、Mac 要醒著，例行工作才會做。Mac 睡著或 VBear 關著時錯過的，醒來後會列在「等你決定」，每件只補最近的一次。"),
-    formBox, box);
+    el("p", { class: "small muted", "data-routines": "awake-line" }, "VBear 的視窗要開著、Mac 要醒著，定時工作才會做。Mac 睡著或 VBear 關著時錯過的，醒來後會列在「等你決定」，每件只補最近的一次。"),
+    feedback, formBox, box);
 }
 // ---------- end of routines ----------
 
 // ---------- router ---------------------------------------------------------
 
-// The phone menu (design card-play 3.9, #11): at 720px and narrower the nav folds behind one button that names the page
-// you are on, instead of a row that scrolls sideways. The button only toggles a class; the CSS does the folding, so a
-// wide window never sees it.
+// The menu is four items (首頁、員工、工作、設定); every other page belongs to one of them, and the engineering pages to the advanced part
+// that shows only when the advanced mode (a switch in the settings) is on (ADR 0013). NAV_PARENT says which `data-nav` item a page
+// (the first part of its address) lights. A page that is not in it lights nothing. All the old addresses still open.
+const NAV_PARENT = {
+  home: "home",
+  employees: "employees", chat: "employees", ceo: "employees", memory: "employees", shared: "employees", templates: "employees", office: "employees",
+  work: "work", dispatch: "work", routines: "work", meetings: "work", actions: "work", "my-skills": "work",
+  settings: "settings", setup: "settings", welcome: "settings",
+  terminals: "terminals", term: "terminals", workbench: "workbench", flows: "flows", projects: "projects", skills: "skills", armory: "skills",
+  team: "team", staffing: "team",
+};
+// the pages of the advanced part (their menu items are the ones with `data-advanced`)
+const ADVANCED_NAV = new Set(["terminals", "workbench", "flows", "projects", "skills", "team"]);
+function navOf(top) { return Object.prototype.hasOwnProperty.call(NAV_PARENT, top) ? NAV_PARENT[top] : null; }
+// The advanced mode only decides what is shown: the advanced part of the menu, the scan status and the one line on an advanced page.
+// It is read once from the console's config (and when the switch in the settings is turned); nothing else in the page asks for it or sends it.
+let navAdvanced = false;
+let navAdvancedKnown = false;
+let navTop = "";
+// The phone: the four items are one row at the top; with the advanced mode on, one more button (進階) opens the advanced list. The
+// button only toggles a class; the CSS does the rest, so a wide window never sees it.
 function navPageName(top) {
-  const link = Array.from(document.querySelectorAll("[data-nav]")).find((a) => a.dataset && a.dataset.nav === top);
+  const want = navOf(top) || top;
+  const link = Array.from(document.querySelectorAll("[data-nav]")).find((a) => a.dataset && a.dataset.nav === want);
   if (!link) return "";
   const kids = link.childNodes ? Array.from(link.childNodes) : [];
   const own = kids.filter((n) => n.nodeType === 3).map((n) => n.textContent).join("").trim();
@@ -12511,9 +13268,45 @@ function setNavMenu(open) {
 }
 function syncNavMenu(top) {
   const label = document.getElementById("nav-toggle-label");
-  const name = navPageName(top);
-  if (label) label.textContent = name ? `選單：${name}` : "選單";
+  const name = ADVANCED_NAV.has(navOf(top)) ? navPageName(top) : "";
+  if (label) label.textContent = name ? `進階：${name}` : "進階";
   setNavMenu(false);   // going to a page puts the menu away
+}
+function showHidden(node, hidden) {
+  if (!node) return;
+  if (hidden) node.setAttribute("hidden", ""); else node.removeAttribute("hidden");
+}
+// The line at the top of an advanced page that was opened by its address while the advanced mode is off (it is not blocked).
+function syncAdvancedNote(top) {
+  const box = document.getElementById("advanced-note");
+  if (!box) return;
+  const show = navAdvancedKnown && !navAdvanced && ADVANCED_NAV.has(navOf(top));
+  if (show && !box.childNodes.length) {
+    setKids(box, "這是進階頁面。要在選單看到它，到設定打開進階模式。", " ", el("a", { href: "#/settings" }, "到設定"));
+  }
+  showHidden(box, !show);
+}
+// on: whether the advanced mode is on. Shows or hides the advanced part of the menu; makes no request.
+function syncAdvancedNav(on) {
+  navAdvanced = !!on;
+  navAdvancedKnown = true;
+  document.querySelectorAll("[data-advanced]").forEach((li) => showHidden(li, !navAdvanced));
+  const side = document.querySelector("nav.side");
+  if (side && side.classList) side.classList.toggle("adv-on", navAdvanced);
+  showHidden(document.getElementById("scan-status"), !navAdvanced);
+  if (!navAdvanced) setNavMenu(false);
+  syncAdvancedNote(navTop);
+}
+let advancedNavLoading = null;
+function loadAdvancedNav() {
+  if (navAdvancedKnown) return Promise.resolve(navAdvanced);
+  if (!advancedNavLoading) {
+    advancedNavLoading = api.get("/api/config").then((c) => {
+      const conf = c && typeof c === "object" ? c.config : null;
+      syncAdvancedNav(!!(conf && conf.advanced_mode));
+    }).catch(() => { /* not read: the menu stays at the four, no line is shown */ }).finally(() => { advancedNavLoading = null; });
+  }
+  return advancedNavLoading.then(() => navAdvanced);
 }
 function wireNavMenu() {
   const btn = document.getElementById("nav-toggle");
@@ -12542,14 +13335,20 @@ async function route() {
   routedHash = location.hash;
   const { parts, params } = parseHash();
   const top = parts[0] || "home";
+  const lit = navOf(top);
   document.querySelectorAll("[data-nav]").forEach((a) => {
-    if (a.dataset.nav === top) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+    if (a.dataset.nav === lit) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   });
+  navTop = top;
   syncNavMenu(top);
+  syncAdvancedNote(top);
+  loadAdvancedNav();   // the first page reads the advanced mode once; it only decides what the menu shows
   setupTick = null;
   clearInterval(liveTimer);
   try {
     if (top === "home") await viewHome();
+    else if (top === "employees") await viewEmployees();
+    else if (top === "work") await viewWork();
     else if (top === "workbench") await viewWorkbench(parts[1] ? decodeURIComponent(parts[1]) : null, params.task, params.profile, params.launch === "1", params.step, params.meeting);
     else if (top === "ceo") await viewCeo();
     else if (top === "chat" && parts[1] === "group") await viewGroup(parts[2] ? decodeURIComponent(parts[2]) : null);
@@ -12569,7 +13368,7 @@ async function route() {
     else if (top === "team" && parts[1] === "role") await viewRole(parts[2]);
     else if (top === "team") await viewTeam(params);
     else if (top === "projects") await viewProjects(parts[1]);
-    else if (top === "settings") await viewSettings();
+    else if (top === "settings") await viewSettings(params);
     else if (top === "setup") await viewSetup();
     else if (top === "welcome") await viewWelcome();
     else if (top === "term" && parts[1]) await viewTerminal(decodeURIComponent(parts[1]));
@@ -12587,23 +13386,7 @@ async function route() {
   // is focused inside main, so typing and scrolling are never interrupted.
   // Home refreshes only its attention block, so the search box keeps focus.
   liveTick = null;
-  if (top === "home") {
-    liveTick = async () => {
-      await loadLive();
-      await loadFlows();
-      await loadMeetings();
-      await loadStaffingList();
-      await loadDispatchList();
-      await loadGroupList();
-      const box = document.getElementById("h-board");
-      if (!box) return;
-      const g = boardGroups(D.live, D.flows, D.meetings, D.staffing, D.dispatch, D.groups);
-      const key = boardKey(g, boardKeyContext());
-      if (key === boardShownKey) return;
-      boardShownKey = key;
-      setKids(box, boardSection(g));
-    };
-  }
+  if (top === "home") liveTick = homeTick;
   if (top === "team" || top === "projects") {
     liveTick = async () => {
       const before = JSON.stringify(D.live && D.live.sessions.map((s) => [s.terminal_id, s.status, s.skills_used.length]));
@@ -12820,14 +13603,14 @@ function setupTryView(row, st) {
   const s = st && typeof st === "object" ? st : {};
   if (s.phase === "confirm") {
     return { show: true, buttons: [{ key: "try-confirm", label: "確認，試一下", kind: "primary" }, { key: "try-cancel", label: "取消", kind: "" }], result: null,
-      note: `再按一次「確認，試一下」才會送出：會送一句很短的話給 ${name}，${SETUP_TRY_ESTIMATE}，並計入每天上限。` };
+      note: `再按一次「確認，試一下」才會送出：會送一句很短的話給 ${name}，${SETUP_TRY_ESTIMATE}，並計入花費上限。` };
   }
   if (s.phase === "running") {
     return { show: true, buttons: [], result: null, note: `正在試 ${name}……最多等一分鐘，請不要關掉這一頁。` };
   }
   const result = s.phase === "done" ? { text: String(s.message || ""), ok: s.success === true } : null;
   return { show: true, buttons: [{ key: "try", label: s.phase === "done" ? "再試一次" : "試一下", kind: "" }], result,
-    note: `試一下會送一句很短的話給 ${name}，確認它真的會回應，${SETUP_TRY_ESTIMATE}，並計入每天上限。` };
+    note: `試一下會送一句很短的話給 ${name}，確認它真的會回應，${SETUP_TRY_ESTIMATE}，並計入花費上限。` };
 }
 
 // What one row of /api/setup/tools shows. -> { state, label, cls, version, note, buttons: [{ key, label, kind, region? }] }
@@ -12889,15 +13672,15 @@ function setupTerminalWords(setup) {
   const what = SETUP_ACTION_WORD[s.action] || "";
   const lines = [];
   if (s.action === "install") {
-    lines.push(`VBear 已經替你在這個終端機送出 ${name} 的官方安裝指令（就是上面那一行），你不用打任何字。`);
+    lines.push(`VBear 已經替你在這個指令視窗送出 ${name} 的官方安裝指令（就是上面那一行），你不用打任何字。`);
     lines.push("畫面會跑一陣子字，跑完停下來、出現新的一行提示，就是裝好了。");
     lines.push("裝好後回到「開始設定」，按「重新檢查」。如果還是顯示還沒安裝，可能要重新打開 VBear。");
   } else if (s.action === "chat_login") {
-    lines.push(`VBear 已經替你在這個終端機送出聊天用的 ${name} 的登入指令（就是上面那一行），你不用打任何字。`);
+    lines.push(`VBear 已經替你在這個指令視窗送出聊天用的 ${name} 的登入指令（就是上面那一行），你不用打任何字。`);
     lines.push("這是 VBear 專用的登入，和你自己的 Codex 分開；接下來瀏覽器會跳出登入頁，在那裡登入你自己的 ChatGPT 帳號。登入的過程不會經過 VBear。");
     lines.push("登入完回到「開始設定」按「重新檢查」，這一列會顯示聊天用的 Codex 已登入。");
   } else if (s.action === "login") {
-    lines.push(`VBear 已經替你在這個終端機送出 ${name} 的登入指令（就是上面那一行），你不用打任何字。`);
+    lines.push(`VBear 已經替你在這個指令視窗送出 ${name} 的登入指令（就是上面那一行），你不用打任何字。`);
     lines.push("接下來瀏覽器會跳出登入頁，在那裡登入你自己的帳號。登入的過程不會經過 VBear。");
     lines.push("登入完回到「開始設定」。沒辦法自動查登入的 AI 工具，要在那裡按「我登入好了」。");
   }
@@ -12945,9 +13728,9 @@ function setupUpgradeNotice() {
 // The settings page's way back to the start-up page.
 function setupSettings() {
   return el("section", { class: "panel pad", "data-settings": "setup" },
-    el("h2", { style: "margin-bottom:6px" }, SETUP_TITLE),
+    el("h2", { style: "margin-bottom:6px" }, "AI 工具"),
     el("p", { class: "small muted" }, "看每個 AI 工具裝好了沒、登入了沒，也能在那裡補裝其他的。"),
-    el("a", { class: "btn", href: "#/setup", "data-setup": "open" }, "回到開始設定"));
+    el("a", { class: "btn", href: "#/setup", "data-setup": "open" }, "看 AI 工具"));
 }
 
 function setupToolKey(rows) {
@@ -12975,8 +13758,6 @@ async function viewSetup() {
   let dailyNow = null;             // the daily limit in force (a number), or null when it could not be read
   try { const d = await api.get("/api/setup/daily-limit"); dailyNow = typeof d.daily_usd === "number" ? d.daily_usd : null; }
   catch (e) { dailyNow = null; }
-  let dailyResult = "";            // what the last choice did, in words
-  let dailyError = "";
   const main = claim(token);
   if (token !== seq) return;
   let shown = data;
@@ -13054,37 +13835,15 @@ async function viewSetup() {
     await refresh(true, true);
     draw();
   };
-  const choose = async (usd) => {
-    try {
-      const res = await api.post("/api/setup/daily-limit", { daily_usd: usd });
-      dailyNow = typeof res.daily_usd === "number" ? res.daily_usd : usd;
-      dailyResult = setupDailyResultWords(res);
-      dailyError = "";
-    } catch (e) {
-      dailyError = "沒有存進去：" + e.message;
-      dailyResult = "";
-    }
-    draw();
-  };
-  const dailySection = () => {
-    const picks = SETUP_DAILY_CHOICES.map((c) => {
-      const on = dailyNow === c.usd;
-      const btn = el("button", { class: `btn small${on ? " primary" : ""}`, type: "button", "data-daily-pick": String(c.usd),
-        "aria-pressed": on ? "true" : "false" }, c.usd === SETUP_DAILY_DEFAULT ? `${setupUsd(c.usd)}（預設）` : setupUsd(c.usd));
-      btn.addEventListener("click", () => run(btn, () => choose(c.usd)));
-      return el("li", { class: "setup-daily-choice", "data-daily-choice": String(c.usd), "data-selected": on ? "true" : "false" },
-        btn, el("span", { class: "small muted setup-text", "data-daily-note": "yes" }, c.note));
-    });
-    const custom = dailyNow !== null && !SETUP_DAILY_CHOICES.some((c) => c.usd === dailyNow);
-    return el("section", { class: "section setup-daily", "data-setup-slot": "daily-limit" },
-      el("h2", null, "每天最多花多少"),
-      el("p", { class: "small muted" }, "這是 VBear 所有 AI 花費（聊天、開會、組隊會議）加起來每天的上限，每天 0 點重新計算。選一個就好，之後可以在設定裡改。"),
-      el("ul", { class: "setup-daily-list" }, picks),
-      dailyNow === null ? el("p", { class: "small muted", "data-setup": "daily-unknown" }, "讀不到目前的每天上限，所以沒有標出選了哪一個。")
-        : custom ? el("p", { class: "small muted", "data-setup": "daily-custom" }, `目前的每天上限是 ${setupUsd(dailyNow)}，不是這三個之一。選一個會換成它。`) : null,
-      dailyResult ? el("p", { class: "setup-text", "data-setup": "daily-result" }, dailyResult) : null,
-      dailyError ? el("p", { class: "setup-text", "data-setup": "daily-error" }, dailyError) : null);
-  };
+  const dailySummary = el("summary");
+  const updateDailySummary = () => { dailySummary.textContent = dailyNow === null
+    ? "每天最多花多少（目前的值：未知；預設 US$3）"
+    : `每天最多花 ${setupUsd(dailyNow)}${dailyNow === SETUP_DAILY_DEFAULT ? "（預設，可以不用動）" : ""}`; };
+  updateDailySummary();
+  const dailyBox = el("details", { class: "section setup-daily", "data-setup-slot": "daily-limit" }, dailySummary,
+    el("p", { class: "small muted" }, "之後可以在『設定』的『用量與上限』改。"),
+    dailyLimitEditor({ current: dailyNow, onSaved: (res) => { dailyNow = res.daily_usd; updateDailySummary(); } }));
+  const dailySection = () => dailyBox;
   const draw = () => {
     const rows = Array.isArray(shown.tools) ? shown.tools : [];
     const anyReady = rows.some((r) => r && r.ready === true);
@@ -13102,7 +13861,7 @@ async function viewSetup() {
       dailySection(),
       el("section", { class: "section setup-foot" },
         el("div", { class: "row" }, leave, recheck),
-        canLeave ? el("p", { class: "small muted" }, "之後隨時可以從左邊的「開始設定」回到這一頁，加其他 AI 工具。")
+        canLeave ? el("p", { class: "small muted" }, "之後隨時可以從「設定」的「AI 工具」回到這一頁，加其他 AI 工具。")
           : el("p", { class: "small muted", "data-setup": "leave-note" }, SETUP_LEAVE_BLOCKED)));
   };
   setKids(main, el("h1", null, SETUP_TITLE), el("p", { class: "lede" }, SETUP_LEDE), host);
@@ -13118,20 +13877,26 @@ async function viewSetup() {
 // send button is the only thing that sends it, so nothing here spends money. The lobby has two doors, one to make the CEO
 // (while there is none) and one, shown once, to chat with the CEO that was made (config first_ceo_id).
 const CEO_TITLE = "建立你的 CEO";
-const CEO_LEDE = "你的 AI 工具已經準備好了。接下來先請一位 CEO：你把想做的事告訴他，他會先問你幾個簡單的問題，再幫你把想法整理成一份計畫。";
-const CEO_LIMITS = "CEO 現在能做的是和你聊天、幫你整理想法。把工作分派給其他員工的功能還沒有；之後有了，也會先問你才做。";
-const CEO_COST = "建立角色卡不花錢，也不會讓 CEO 開始做任何事。你按「送出」送出第一句話之後，才會用到你的 AI 方案。";
+const CEO_LEDE = "先請一位 CEO：你把想做的事告訴他，他會先問你幾個簡單的問題，再幫你把想法整理成一份計畫。";
+const CEO_LIMITS = "CEO 可以和你聊天、幫你整理想法。要把工作分配給其他員工時，在對話右上角的「⋯」選「請幕僚長安排」：幕僚長會先提議，你確認了才會做。";
+const CEO_COST = "建立員工不花錢，也不會讓 CEO 開始做任何事。你按「送出」送出第一句話之後，才會用到你的 AI 方案。";
 const CEO_AGY_NOTE = "這位 CEO 會用 AGY：和它的對話內容會送到 Google，它會用到你自己裝的 AGY 技能。AGY 的聊天要先通過驗證，才能開始聊。";
-const CEO_MODE = "安全模式：CEO 只能在自己的工作資料夾裡動手，要執行指令或改檔案前，都會先問你，你按允許才做。";
+const CEO_MODE = "每件事先問我：CEO 只能在自己的工作資料夾裡動手，要執行指令或改檔案前，都會先問你，你按允許才做。";
 const CEO_OPENING_NOTE = "上面這句開場是 VBear 先幫你填好的，可以改成你自己想說的話。按「送出」才會真的送出，也才會開始用你的 AI 方案。";
 const CEO_NAME_MAX = 200;
 const CEO_INSTRUCTIONS_MAX = 2000;
-const ceoDrafts = new Map();          // chat id -> the opening sentence put in its box; taken (and gone) when that chat is opened
+const ceoDrafts = new Map();          // chat id -> the opening sentence put in its box; taken (and gone) when that chat is opened.
+                                      // P47-4: before the chat exists (the AI tool cannot chat yet) the key is the employee's id; it moves to the chat's id when one is opened
 
 function ceoTakeDraft(chatId) {
   const t = ceoDrafts.get(chatId);
   ceoDrafts.delete(chatId);
   return typeof t === "string" ? t : "";
+}
+function ceoMoveDraft(profileId, chatId) {
+  const t = ceoDrafts.get(profileId);
+  ceoDrafts.delete(profileId);
+  if (typeof t === "string" && t) ceoDrafts.set(chatId, t);
 }
 async function ceoPlan() {
   try {
@@ -13144,25 +13909,36 @@ async function ceoPlan() {
 function ceoStepWanted(plan) {
   return !!plan && plan.needed === true && plan.can_create === true && typeof plan.tool === "string" && plan.tool !== "";
 }
-function ceoForget(configRes) {
-  if (configRes && configRes.config) configRes.config.first_ceo_id = "";
-  return api.post("/api/config", { first_ceo_id: "" }).catch(() => {});
-}
 
 // Opens the chat with a card the person has: an empty one that is already there, or a new one (opening a chat costs nothing).
 // The sentence goes into the box of that chat. A chat that cannot open yet (not verified, not logged in) leads to the chat
 // page with the card chosen, which says why.
 async function ceoOpenChat(profileId, opening, reuseId) {
   let chatId = reuseId || "";
+  // The AI tool must be able to chat before the conversation is opened: when it is not (not checked for chat yet, held back by an administrator's policy,
+  // not logged in), the person goes to the page that says why and has one action, and the opening waits under the employee's id.
+  // Only a state that was read and says "start" opens it: a read that fails, a card that is not in the list and a missing chat support are not a go
+  // either (R2 Q1); the page for this employee then says the state could not be read, and has a button to read it again.
+  let prep = null;
+  try {
+    const data = await api.get("/api/chats");
+    prep = chatPrepState(homeCardOf(data, profileId), data);
+  } catch (_) { prep = null; }
+  if (!prep || prep.kind !== "start") {
+    if (opening) ceoDrafts.set(profileId, opening);
+    location.hash = `#/chat?profile=${encodeURIComponent(profileId)}`;
+    return false;
+  }
   if (!chatId) {
     try {
       const r = await api.post("/api/chats", { profile_id: profileId });
       chatId = r && r.chat && typeof r.chat.id === "string" ? r.chat.id : "";
     } catch (e) {
-      toast("CEO 的角色卡建好了，但現在還不能開聊天：" + e.message);
+      toast("員工建好了，但現在還不能開始聊：" + e.message);
     }
   }
-  if (!chatId) { location.hash = `#/chat?profile=${encodeURIComponent(profileId)}`; return false; }
+  // P47-4: a chat that cannot open yet leads to the one page that says why (#/chat?profile=), not to the list; the opening waits for the employee's id
+  if (!chatId) { if (opening) ceoDrafts.set(profileId, opening); location.hash = `#/chat?profile=${encodeURIComponent(profileId)}`; return false; }
   if (opening) ceoDrafts.set(chatId, opening);
   location.hash = `#/chat/${encodeURIComponent(chatId)}`;
   return true;
@@ -13171,6 +13947,7 @@ async function ceoOpenChat(profileId, opening, reuseId) {
 async function viewCeo() {
   const token = seq;
   const plan = await ceoPlan();
+  const chatsRes = plan && plan.needed === true ? await api.get("/api/chats").catch(() => null) : null;       // only to say whether a chat can start with the tool
   const main = claim(token);
   if (token !== seq) return;
   const head = el("h1", null, CEO_TITLE);
@@ -13185,7 +13962,7 @@ async function viewCeo() {
   const name = el("input", { type: "text", maxlength: String(CEO_NAME_MAX), value: typeof plan.name === "string" ? plan.name : "CEO",
     "data-ceo": "name", "aria-label": "CEO 的名字", autocomplete: "off" });
   name.value = typeof plan.name === "string" ? plan.name : "CEO";
-  const about = el("textarea", { rows: "7", maxlength: String(CEO_INSTRUCTIONS_MAX), "data-ceo": "instructions", "aria-label": "CEO 的角色說明" });
+  const about = el("textarea", { rows: "7", maxlength: String(CEO_INSTRUCTIONS_MAX), "data-ceo": "instructions", "aria-label": "CEO 的說明" });
   about.value = typeof plan.instructions === "string" ? plan.instructions : "";
   const errorBox = el("div", { "data-ceo": "error", role: "alert" });
   const go = el("button", { type: "button", class: "btn primary", "data-ceo": "create" }, "建立 CEO，開始聊");
@@ -13199,7 +13976,7 @@ async function viewCeo() {
       const r = await api.post("/api/agent-profiles", { name: nm, position: plan.position, instructions: about.value, launch_mode: "safe",
         model: { tool: plan.tool, model_id: "" } });
       const id = r && r.profile && typeof r.profile.id === "string" ? r.profile.id : "";
-      if (!id) throw new Error("建立了，但讀不到角色卡的編號");
+      if (!id) throw new Error("建立了，但讀不到員工的編號");
       await api.post("/api/config", { first_ceo_id: id }).catch(() => {});      // the lobby offers the chat once, if this one is left
       await ceoOpenChat(id, typeof plan.opening === "string" ? plan.opening : "", "");
     } catch (e) {
@@ -13207,11 +13984,15 @@ async function viewCeo() {
       busy = false; go.disabled = false;
     }
   });
-  const toolLine = el("p", { "data-ceo": "tool" }, el("strong", null, "用哪個 AI 工具："), `${plan.tool_name || plan.tool}（已就緒）`);
+  const glance = chatSupportGlance(chatsRes);
+  const mine = glance ? glance.find((g) => g.id === plan.tool) : null;
+  const toolState = !mine ? "（聊天的狀態讀不到）" : mine.ready ? "（已就緒）" : mine.state === "policy" ? "（這台電腦有管理員設定，VBear 不能用它聊天）"
+    : mine.state === "unverified" ? "（第一次聊天前要先做一次安全檢查，建立後會帶你做）" : "（聊天現在還不能用，建立後會告訴你原因）";
+  const toolLine = el("p", { "data-ceo": "tool" }, el("strong", null, "用哪個 AI 工具："), `${plan.tool_name || plan.tool}${toolState}`);
   setKids(main, head, el("p", { class: "lede" }, CEO_LEDE),
     el("section", { class: "panel pad ceo-form", "data-ceo": "form" },
       el("label", { class: "ceo-field" }, el("span", null, "名字"), name),
-      el("label", { class: "ceo-field" }, el("span", null, "角色說明（可以改，也可以先不動）"), about),
+      el("label", { class: "ceo-field" }, el("span", null, "CEO 的說明（可以改，也可以先不動）"), about),
       toolLine,
       el("p", { class: "small", "data-ceo": "mode" }, CEO_MODE),
       plan.tool === "agy" ? el("p", { class: "small", "data-ceo": "agy-note" }, CEO_AGY_NOTE) : null,
@@ -13219,53 +14000,7 @@ async function viewCeo() {
       el("p", { class: "small muted", "data-ceo": "limits" }, CEO_LIMITS),
       el("p", { class: "small muted", "data-ceo": "cost" }, CEO_COST),
       errorBox,
-      el("div", { class: "row" }, go, el("a", { class: "btn", href: "#/", "data-ceo": "later" }, "先不要，回大廳"))));
-}
-
-// The lobby's two doors. -> a node, or null. plan: GET /api/first-ceo (null when it could not be read); configRes: GET
-// /api/config; profilesRes: GET /api/agent-profiles. Showing a door asks nothing that costs and opens nothing.
-async function ceoLobbyDoor(plan, configRes, profilesRes) {
-  if (ceoStepWanted(plan)) {
-    return el("section", { class: "panel pad ceo-door", "data-ceo": "create-invite" },
-      el("h2", null, "還不知道要做什麼？先請一位 CEO"),
-      el("p", { class: "small" }, "你還沒有可以聊天的角色卡。先建立一位 CEO，他會問你幾個簡單的問題，再幫你把想法整理成計畫。"),
-      el("a", { class: "btn primary", href: "#/ceo" }, "建立你的 CEO"));
-  }
-  const conf = configRes && configRes.config && typeof configRes.config === "object" ? configRes.config : null;
-  const id = conf && typeof conf.first_ceo_id === "string" ? conf.first_ceo_id : "";
-  if (!id) return null;
-  const cards = profilesRes && Array.isArray(profilesRes.profiles) ? profilesRes.profiles : null;
-  if (!cards) return null;
-  const card = cards.find((c) => c && c.id === id);
-  if (!card) { ceoForget(configRes); return null; }                     // the card is gone: nothing to offer, now or later
-  const tool = card.model && card.model.tool;
-  if (card.enabled === false || (tool !== "claude" && tool !== "codex" && tool !== "agy")) return null;
-  let chats = [];
-  try { const r = await api.get("/api/chats"); chats = Array.isArray(r.chats) ? r.chats : []; } catch (_) { chats = []; }
-  const mine = chats.filter((c) => c && c.profile_id === id);
-  if (mine.some((c) => c.turns > 0)) { ceoForget(configRes); return null; }     // they already talked: the door has done its job
-  const empty = mine.find((c) => c.turns === 0 && !c.problem && typeof c.id === "string");
-  const opening = plan && typeof plan.opening === "string" ? plan.opening : "";
-  let busy = false;
-  const talk = el("button", { type: "button", class: "btn primary", "data-ceo": "chat-go" }, "聊聊看");
-  const later = el("button", { type: "button", class: "btn", "data-ceo": "chat-dismiss" }, "知道了");
-  const box = el("section", { class: "panel pad ceo-door", "data-ceo": "chat-invite" },
-    el("h2", null, "跟你的 CEO 聊聊"),
-    el("p", { class: "small" }, `${card.name || "CEO"} 已經準備好了。打開聊天，開場的話會先幫你填好，你可以改，按「送出」才會開始。`),
-    el("div", { class: "row" }, talk, later));
-  talk.addEventListener("click", async () => {
-    if (busy) return;
-    busy = true; talk.disabled = true; later.disabled = true;
-    await ceoForget(configRes);
-    await ceoOpenChat(id, opening, empty ? empty.id : "");
-  });
-  later.addEventListener("click", async () => {
-    if (busy) return;
-    busy = true;
-    await ceoForget(configRes);
-    box.remove();
-  });
-  return box;
+      el("div", { class: "row" }, go, el("a", { class: "btn", href: "#/", "data-ceo": "later" }, "先不要，回首頁"))));
 }
 // ---------- end of the first CEO ----------------------------------------------------------------------------------------------
 
@@ -13277,13 +14012,15 @@ async function ceoLobbyDoor(plan, configRes, profilesRes) {
 // a message is sent by the send button, and a tool that asks is run only after the person presses 「允許這一次」 or 「改內容再允許」
 // on its card. A card can be answered once, within 5 minutes; the server checks the one-use token and judges the call again.
 
+// The codes with which the server refuses a send because the AI tool cannot chat (the chat page then says why and leads to the page that prepares it).
+const CHAT_NOT_READY_CODES = ["unverified", "admin_policy", "not_logged_in", "claude_version", "codex_version", "agy_version", "unsupported_version", "invalid_binary"];
 const CHAT_PAGE_MAX = 12;           // pages of 200 records read when a chat is opened (a chat longer than that shows its end)
 const CHAT_POLL_MS = 1500;          // polling, when the live stream cannot be used
 const CHAT_INTRO_KEY = "vbear-chat-intro-seen";
 const CHAT_TURN_END = {
   result: "", stopped: "你按了停止，這回合停下來，按上限計費", timeout: "超過 10 分鐘沒結束，已停止，按上限計費",
   process_exit: "員工的程序自己結束了，這回合按上限計費", violation: "員工用的 AI 工具做了不符 VBear 設定的事，VBear 已停止這個程序",
-  daemon_restart: "VBear 的背景程序重新啟動，這回合中斷，按上限計費", error: "出了問題，這回合停止，按上限計費",
+  daemon_restart: "VBear 的背景程式重新啟動，這回合中斷，按上限計費", error: "出了問題，這回合停止，按上限計費",
   not_sent: "這則訊息沒有送出，沒有花錢",
   limit: "用量到了這回合的上限，已請員工停下來，按估算的用量計費",
 };
@@ -13305,7 +14042,8 @@ const CHAT_SUPPORT_WORD = {
   verified: ["已通過聊天驗證", "b-ok"], unverified: ["還沒通過聊天驗證", "b-warn"], unsupported: ["VBear 還不認得這個版本", "b-bad"],
   policy: ["被管理員政策擋住", "b-bad"], unknown: ["讀不到 Claude Code 的版本", "b-warn"],
 };
-const CHAT_TOOL_TEXT = { Bash: "執行指令（Bash）", Edit: "修改檔案（Edit）", Write: "寫入檔案（Write）", Read: "讀檔（Read）", Grep: "搜尋內容（Grep）", Glob: "找檔名（Glob）",
+// P47-4: what a tool is called to the person (the words of WORDS.toolBash and the others). The English name is only in the card's 「技術細節」.
+const CHAT_TOOL_TEXT = { Bash: "執行指令", Edit: "修改檔案", Write: "建立或覆蓋檔案", Read: "讀取檔案", Grep: "搜尋檔案內容", Glob: "找檔名",
   command: "執行指令", file_change: "修改檔案",       // the first two are a Codex chat's (an AGY chat has them too)
   read: "讀取檔案", other: "做其他的事" };            // the last two are an AGY chat's (P46-5): a read outside the work folder, and anything else it asks
 const CHAT_TOOL_NAME = { claude: "Claude Code", codex: "Codex", agy: "AGY", "claude-chat": "Claude Code", "codex-chat": "Codex", "agy-chat": "AGY" };
@@ -13313,31 +14051,31 @@ const CHAT_CODEX_WORD = {
   ready: ["可以聊天", "b-ok"], not_installed: ["還沒安裝 Codex", "b-warn"], unverified: ["還沒通過聊天驗證", "b-warn"], policy: ["被管理員政策擋住", "b-bad"],
   folder: ["聊天用的 Codex 資料夾不能用", "b-bad"], version_unreadable: ["讀不到 Codex 的版本", "b-warn"], not_logged_in: ["聊天用的 Codex 還沒登入", "b-warn"],
 };
-const CHAT_CODEX_NOTE = "員工只能寫自己的工作資料夾；每個指令都會先問你（連只讀檔的也問），每次改檔也問，沒有「以後都允許」。Codex 的沙盒只擋「寫」，不擋「讀」："
+const CHAT_CODEX_NOTE = "員工只能寫自己的工作資料夾；每個指令都會先問你（連只讀檔的也問），每次改檔也問，沒有「以後都允許」。Codex 的保護範圍（沙盒）只擋「寫」，不擋「讀」："
   + "指令可以讀到你電腦上工作資料夾以外的檔案，所以每個指令你都要看清楚才按允許。Codex 不回報金額，每則回覆的花費是 VBear 依 token 數的估計，不是帳單，Codex 用的是你的 ChatGPT 方案。";
-const CHAT_AGY_NOTE = "員工只能寫自己的工作資料夾；每個指令都會先問你，每次改檔也問，沒有「以後都允許」。指令在 AGY 的沙盒裡執行，不能連網；要讀工作資料夾以外的檔案時也會問你，讀到的內容會送到 Google。"
+const CHAT_AGY_NOTE = "員工只能寫自己的工作資料夾；每個指令都會先問你，每次改檔也問，沒有「以後都允許」。指令在 AGY 的保護範圍（沙盒）裡執行，不能連網；要讀工作資料夾以外的檔案時也會問你，讀到的內容會送到 Google。"
   + "AGY 員工會用到你自己裝的 AGY 技能。AGY 不回報金額，而且到一回合結束才回報用量，所以每則回覆的花費是 VBear 依 token 數的估計，不是帳單；一回合有可能超過花費上限，VBear 會在那之後停下來。AGY 用的是你的 Google 方案。";
-const CHAT_AGY_DELETE_NOTE = "　AGY 自己會在 VBear 狀態資料夾裡的 agy-chat-home 留一份對話副本，刪除這個聊天不會刪掉它；要清掉它，要自己到那個資料夾處理。";
-const CHAT_CODEX_DELETE_NOTE = "　Codex 自己會在 VBear 狀態資料夾裡的 codex-chat-home（sessions）留一份對話副本，刪除這個聊天不會刪掉它；要清掉它，要自己到那個資料夾處理。";
+const CHAT_AGY_DELETE_NOTE = "　AGY 自己會在 VBear 狀態資料夾裡的 agy-chat-home 留一份對話副本，刪除這個對話不會刪掉它；要清掉它，要自己到那個資料夾處理。";
+const CHAT_CODEX_DELETE_NOTE = "　Codex 自己會在 VBear 狀態資料夾裡的 codex-chat-home（sessions）留一份對話副本，刪除這個對話不會刪掉它；要清掉它，要自己到那個資料夾處理。";
 // AGY (P46-5): what the card of a chat with an AGY employee says that the Codex one does not.
-const CHAT_AGY_SANDBOX_WARNING = "允許後，這個指令在 AGY 的沙盒裡執行：不能連網，只能寫工作資料夾（和暫存資料夾）。只允許你看得懂、確定沒問題的指令。";
+const CHAT_AGY_SANDBOX_WARNING = "允許後，這個指令在 AGY 的保護範圍（沙盒）裡執行：不能連網，只能寫工作資料夾（和暫存資料夾）。只允許你看得懂、確定沒問題的指令。";
 const CHAT_AGY_ASK_AGAIN = "VBear 會先拒絕原本的；這一回合結束後，把你改的內容當成下一則訊息送出，AGY 會再問你一次，你要再看過、再按一次允許，才會執行。";
 const CHAT_AGY_DECISION_MODIFY = "你拒絕了原本的；這一回合結束後，會把你改的內容當成下一則訊息送出";
 const CHAT_AGY_READ_WARNING = "員工想讀工作資料夾以外的檔案，讀到的內容會送到 Google（AGY 是 Google 做的）。只允許你確定可以給它看的檔案。";
 const CHAT_AGY_READ_NOTE = "這張卡沒有可以改的內容，只能允許或拒絕。";
 const CHAT_CODEX_ACTION = { listFiles: "列出檔案", read: "讀檔", search: "搜尋", unknown: "其他" };
 const CHAT_CHANGE_KIND = { add: "新增", update: "修改", delete: "刪除" };
-const CHAT_FIELD_TEXT = { command: "指令", file_path: "檔案", content: "要寫的內容", old_string: "原本的字串", new_string: "改成", path: "路徑", pattern: "搜尋", description: "說明" };
+const CHAT_FIELD_TEXT = { command: "指令", file_path: "檔案", content: "要寫入的內容", old_string: "原本的內容", new_string: "改成", path: "位置", pattern: "要找的字", description: "員工的說明" };
 const CHAT_INTRO = [
-  ["這是什麼", "和一張角色卡（員工）聊天。目前工具是 Claude Code 或 Codex、而且已啟用的角色卡可以聊天（AGY 的員工也可以，看下面「用 AGY 聊天」）；用哪個 AI 工具聊，開聊天時就決定了，之後不會換。每位員工有自己的工作資料夾，員工能寫的地方只有那裡和暫存區。"],
-  ["會花錢", "Claude Code 員工用你自己的 Claude 登入，會用掉你的 Claude 額度。金額是 Claude Code 回報的估值；沒有回報時，這一回合按上限（最壞情況）計。每回合有上限，今天的總花費和會議、組隊會議共用同一個每日上限，用完就不能再送。Codex 員工看下面「用 Codex 聊天」，AGY 員工看「用 AGY 聊天」。"],
+  ["這是什麼", "和一位員工聊天。目前工具是 Claude Code 或 Codex、而且已啟用的員工可以聊天（AGY 的員工也可以，看下面「用 AGY 聊天」）；用哪個 AI 工具聊，開聊天時就決定了，之後不會換。每位員工有自己的工作資料夾，員工能寫的地方只有那裡和暫存區。"],
+  ["會花錢", "Claude Code 員工用你自己的 Claude 登入，會用掉你的 Claude 額度。金額是 Claude Code 回報的估值；沒有回報時，這一回合按上限（最壞情況）計。每回合有上限，今天的總花費和會議、組隊會議共用同一個花費上限，用完就不能再送。Codex 員工看下面「用 Codex 聊天」，AGY 員工看「用 AGY 聊天」。"],
   ["不會自己動手", "員工想執行指令、改檔或寫檔時，會出現一張卡片問你。你按「允許這一次」才會做；也可以拒絕，或改了內容再允許。每次都問，沒有「以後都允許」。卡片 5 分鐘沒回覆就過期，視為拒絕。"],
-  ["員工的指示", "只有你自己寫在這張角色卡上的指示會帶進聊天；VBear 替職位預設的文字不會帶。續接的對話會沿用第一次送出時的指示，之後再改卡片，已經開始的對話不一定會跟著變（這一點還沒有在真機上確認）。"],
-  ["用 Codex 聊天", "Codex 員工用的是你的 ChatGPT 方案，不另外收費。Codex 不回報金額，VBear 依 token 數估算（每 100 萬 token 計 US$1，至少 US$0.01）後算進每天上限；這是 VBear 的記帳規則，不是帳單。"
+  ["員工的指示", "只有你自己寫在這位員工設定上的指示會帶進聊天；VBear 替職位預設的文字不會帶。續接的對話會沿用第一次送出時的指示，之後再改卡片，已經開始的對話不一定會跟著變（這一點還沒有在真機上確認）。"],
+  ["用 Codex 聊天", "Codex 員工用的是你的 ChatGPT 方案，不另外收費。Codex 不回報金額，VBear 依 token 數估算（每 100 萬 token 計 US$1，至少 US$0.01）後算進花費上限；這是 VBear 的記帳規則，不是帳單。"
     + "聊天用的 Codex 要在「開始設定」另外登入一次（和你自己的 Codex 分開，VBear 看不到你自己的 Codex 設定）。每個指令和每次改檔都會先問你，連只讀檔的指令也問；"
-    + "Codex 的沙盒只擋「寫」，不擋「讀」，指令讀得到工作資料夾以外的檔案，所以指令要看清楚才按允許。「改內容再問」會先拒絕原本的，再請 Codex 照你改的重新問你一次，你要再按一次允許。"],
-  ["用 AGY 聊天", "AGY 員工用的是你的 Google 方案，不另外收費；聊天的內容會送到 Google。AGY 不回報金額，而且到一回合結束才回報用量，VBear 依 token 數估算（每 100 萬 token 計 US$1，至少 US$0.01）後算進每天上限；這是 VBear 的記帳規則，不是帳單，一回合有可能超過花費上限。"
-    + "AGY 要先通過聊天驗證（在這一頁的 AGY 區塊按「驗證聊天」）。AGY 員工會用到你自己裝的 AGY 技能。每個指令和每次改檔都會先問你；指令在 AGY 的沙盒裡執行，不能連網。"
+    + "Codex 的保護範圍（沙盒）只擋「寫」，不擋「讀」，指令讀得到工作資料夾以外的檔案，所以指令要看清楚才按允許。「改內容再問」會先拒絕原本的，再請 Codex 照你改的重新問你一次，你要再按一次允許。"],
+  ["用 AGY 聊天", "AGY 員工用的是你的 Google 方案，不另外收費；聊天的內容會送到 Google。AGY 不回報金額，而且到一回合結束才回報用量，VBear 依 token 數估算（每 100 萬 token 計 US$1，至少 US$0.01）後算進花費上限；這是 VBear 的記帳規則，不是帳單，一回合有可能超過花費上限。"
+    + "AGY 要先通過聊天驗證（在這一頁的 AGY 區塊按「驗證聊天」）。AGY 員工會用到你自己裝的 AGY 技能。每個指令和每次改檔都會先問你；指令在 AGY 的保護範圍（沙盒）裡執行，不能連網。"
     + "要讀工作資料夾以外的檔案，會出現「讀取檔案」的卡片，只能允許或拒絕，沒有可以改的內容。「改內容再問」會先拒絕原本的，等這一回合結束，再把你改的內容當成下一則訊息送出，你要再按一次允許。"],
 ];
 
@@ -13350,14 +14088,14 @@ function chatTurnCost(rec, engine) {
   if (engine === "agy-chat") {          // AGY says its use only when a turn ends: an estimate by VBear's rule, or the turn's limit when it said nothing
     if (rec.estimate === true) {
       const tokens = Number.isInteger(rec.tokens) && rec.tokens >= 0 ? `約 ${rec.tokens.toLocaleString("en-US")} 個 token；` : "";
-      return `這回合估計 ${money}（${tokens}AGY 不回報金額，這是 VBear 依 token 數估算、算進每天上限的數字，不是帳單；用的是你的 Google 方案）。`;
+      return `這回合估計 ${money}（${tokens}AGY 不回報金額，這是 VBear 依 token 數估算、算進花費上限的數字，不是帳單；用的是你的 Google 方案）。`;
     }
     return `這回合按上限 ${money} 計（AGY 沒有回報用量）。`;
   }
   // a Codex chat's turn end carries `estimate`: money from the token count by VBear's own rule, or the turn's limit when there was no count
   if (rec.estimate === true) {
     const tokens = Number.isInteger(rec.tokens) && rec.tokens >= 0 ? `約 ${rec.tokens.toLocaleString("en-US")} 個 token；` : "";
-    return `這回合估計 ${money}（${tokens}Codex 不回報金額，這是 VBear 依 token 數估算、算進每天上限的數字，不是帳單）。`;
+    return `這回合估計 ${money}（${tokens}Codex 不回報金額，這是 VBear 依 token 數估算、算進花費上限的數字，不是帳單）。`;
   }
   if (rec.estimate === false) return `這回合按上限 ${money} 計（Codex 沒有回報用量）。`;
   return rec.reported === true ? `這回合花了 ${money}（Claude Code 回報的估值）。` : `這回合按上限 ${money} 計（Claude Code 沒有回報）。`;
@@ -13409,21 +14147,22 @@ function chatLine(rec, opts) {
   const codex = !!opts && opts.engine === "codex-chat";
   const agy = !!opts && opts.engine === "agy-chat";
   const remember = opts && typeof opts.remember === "function" ? opts.remember : null;       // P42-3: 「記住」 beside a spoken line
-  const saveSkill = opts && typeof opts.saveSkill === "function" ? opts.saveSkill : null;   // P44-1: 「存成技能」 beside it
+  const saveSkill = opts && typeof opts.saveSkill === "function" ? opts.saveSkill : null;   // P44-1: 「存成常用做法」 beside it
+  const who = opts && typeof opts.who === "string" && opts.who ? opts.who : "員工";          // P47-4: the employee's own name over what it says
   const text = (x) => (typeof x === "string" ? x : "");
   switch (rec.kind) {
     case "user_message": {
       const origin = chatOriginOf(rec);          // a message VBear sent for a dispatch (P40): said over it, it is not the person's own words
       const note = origin ? chatOriginNote(origin) : null;
-      const line = el("li", { class: "chat-msg chat-me", "data-chat": "user", "data-seq": String(rec.seq) },
-        el("div", { class: "chat-who small muted" }, `${origin ? "VBear 依派工送出" : "你"}・${fmtTime(rec.at)}`), note, el("div", { class: "chat-text" }, text(rec.text)),
+      const line = el("li", { class: "chat-msg chat-me", "data-chat": "user", "data-seq": String(rec.seq), tabindex: "0" },
+        el("div", { class: "chat-who small muted" }, `${origin ? "VBear 依分配工作送出" : "你"}・${fmtTime(rec.at)}`), note, el("div", { class: "chat-text" }, text(rec.text)),
         !origin && remember && Number.isInteger(rec.turn) && text(rec.text) ? memoryRememberRow(() => remember(rec, "you"), saveSkill ? () => saveSkill(rec, "you") : null) : null);
       if (note) { line.originNote = note; line.origin = origin; }
       return line;
     }
     case "reply":
-      return el("li", { class: "chat-msg chat-them", "data-chat": "reply", "data-seq": String(rec.seq) },
-        el("div", { class: "chat-who small muted" }, `員工・${fmtTime(rec.at)}`), el("div", { class: "chat-text" }, text(rec.text)),
+      return el("li", { class: "chat-msg chat-them", "data-chat": "reply", "data-seq": String(rec.seq), tabindex: "0" },
+        el("div", { class: "chat-who small muted" }, `${who}・${fmtTime(rec.at)}`), el("div", { class: "chat-text" }, text(rec.text)),
         rec.truncated === true ? el("div", { class: "small muted" }, "（這則回覆太長，後面的部分沒有保存）") : null,
         remember && Number.isInteger(rec.turn) && text(rec.text) ? memoryRememberRow(() => remember(rec, "employee"), saveSkill ? () => saveSkill(rec, "employee") : null) : null);
     case "tool_call":
@@ -13435,26 +14174,30 @@ function chatLine(rec, opts) {
         el("code", null, text(rec.text)), rec.truncated === true ? el("span", { class: "small muted" }, "（只保存前面一段）") : null);
     case "auto_allowed":
       return el("li", { class: "chat-note small muted", "data-chat": "auto", "data-seq": String(rec.seq) },
-        `VBear 自己允許了 ${agy && cardHas(CHAT_TOOL_TEXT, rec.tool) ? CHAT_TOOL_TEXT[rec.tool] : text(rec.tool)}：${text(rec.reason)}`);
+        `VBear 自己允許了 ${cardHas(CHAT_TOOL_TEXT, rec.tool) ? CHAT_TOOL_TEXT[rec.tool] : text(rec.tool)}：${text(rec.reason)}`);
     case "denied":
       return el("li", { class: "chat-note", "data-chat": "denied", "data-seq": String(rec.seq) },
         badge("已拒絕", "b-bad"), " ", `${cardHas(CHAT_TOOL_TEXT, rec.tool) ? CHAT_TOOL_TEXT[rec.tool] : text(rec.tool)}：${text(rec.reason)}`,
         rec.summary ? el("code", null, ` ${text(rec.summary)}`) : null);
     case "card":
       return el("li", { class: "chat-note", "data-chat": "card", "data-seq": String(rec.seq), "data-card-id": text(rec.card_id) },
-        badge("問你", "b-warn"), " ", `員工想${cardHas(CHAT_TOOL_TEXT, rec.tool) ? CHAT_TOOL_TEXT[rec.tool] : "用 " + text(rec.tool)}`);
+        badge("問你", "b-warn"), " ", `${who}想${cardHas(CHAT_TOOL_TEXT, rec.tool) ? CHAT_TOOL_TEXT[rec.tool] : "用 " + text(rec.tool)}`);
     case "card_decision":
       return el("li", { class: "chat-note", "data-chat": "decision", "data-seq": String(rec.seq), "data-card-id": text(rec.card_id) },
         agy && rec.decision === "modify" ? CHAT_AGY_DECISION_MODIFY : codex && rec.decision === "modify" ? CHAT_DECISION_CODEX_MODIFY : cardHas(CHAT_DECISION, rec.decision) ? CHAT_DECISION[rec.decision] : "這張卡片的結果不明",
         rec.decision === "modify" && typeof rec.value === "string" ? el("code", null, ` ${rec.value}`) : null);
     case "turn_ended": {
       const why = cardHas(CHAT_TURN_END, rec.reason) ? CHAT_TURN_END[rec.reason] : "這回合因不明原因結束";
+      // P47-4: a turn that ended as it should says nothing in words; why it ended is written only when it was stopped, went wrong or hit a limit.
+      // What it cost, and that it is an estimate and not a bill, is behind 「詳細資訊」 (it is in the page; it is only folded).
       return el("li", { class: "chat-cost small muted", "data-chat": "cost", "data-seq": String(rec.seq) },
-        [why, chatTurnCost(rec, opts && opts.engine)].filter(Boolean).join("　"));
+        why ? el("span", { class: "chat-cost-why" }, why) : null,
+        el("details", { class: "fold chat-money", "data-chat": "cost-detail" }, el("summary", null, "詳細資訊"), el("p", { class: "small" }, chatTurnCost(rec, opts && opts.engine))));
     }
     case "process_started":
       return el("li", { class: "chat-sys small muted", "data-chat": "process", "data-seq": String(rec.seq) },
-        `${rec.mode === "resume" ? "員工接續上次的對話上線" : "員工上線"}（這次最多可花 ${chatMoney(rec.budget_usd)}）${rec.instructions === true ? "，帶著角色卡自己寫的指示" : "，沒有帶指示（角色卡上沒有自己寫的）"}`);
+        `${rec.mode === "resume" ? "員工接續上次的對話上線" : "員工上線"}${rec.instructions === true ? "，帶著員工自己寫的指示" : "，沒有帶指示（員工設定上沒有自己寫的）"}`,
+        el("details", { class: "fold chat-money", "data-chat": "process-detail" }, el("summary", null, "詳細資訊"), el("p", { class: "small" }, `這次最多可花 ${chatMoney(rec.budget_usd)}。`)));
     case "process_ended":
       return el("li", { class: "chat-sys small muted", "data-chat": "process-end", "data-seq": String(rec.seq) },
         `員工的程序結束了：${cardHas(CHAT_PROCESS_END, rec.reason) ? CHAT_PROCESS_END[rec.reason] : text(rec.reason)}`);
@@ -13478,7 +14221,7 @@ const CHAT_CODEX_EDIT_FILE = "寫下你要它改成什麼（要寫清楚是哪�
 // Under `untrusted` Codex 0.163.0 runs an allowed command again without the sandbox when the sandbox stopped it, and the card
 // cannot tell which it will be (docs/adr/0005, decision 6). Said on every command card; not on a file card (VBear refuses
 // the files outside the work folder itself) and not on a Claude card.
-const CHAT_CODEX_SANDBOX_WARNING = "允許後，這個指令可能在沙盒外執行：能改到工作資料夾以外的檔案，也能連網。只允許你看得懂、確定沒問題的指令。";
+const CHAT_CODEX_SANDBOX_WARNING = "允許後，這個指令可能在保護範圍（沙盒）外執行：能改到工作資料夾以外的檔案，也能連網。只允許你看得懂、確定沒問題的指令。";
 
 // The rows of a card: [label, text] pairs, and for a file change a diff per file.
 function chatCodexRows(card) {
@@ -13551,7 +14294,9 @@ function chatCardNode(card, opts) {
         : [el("button", { type: "button", class: "btn primary small", "data-chat": "allow", disabled: busy, on: { click: () => answer("allow", null) } }, "允許這一次"),
            editable ? el("button", { type: "button", class: "btn small", "data-chat": "modify", disabled: busy,
               on: { click: () => { o.edit.open = true; if (o.redraw) o.redraw(); } } }, codex ? "改內容再問" : "改內容再允許") : null],
-      el("button", { type: "button", class: "btn small", "data-chat": "deny", disabled: busy, on: { click: () => answer("deny", null) } }, "拒絕")));
+      el("button", { type: "button", class: "btn small", "data-chat": "deny", disabled: busy, on: { click: () => answer("deny", null) } }, "拒絕")),
+    // P47-4: the tool's own (English) name is not on the card; it is here for the person who wants it.
+    el("details", { class: "small term-tech", "data-chat": "card-tech" }, el("summary", null, "技術細節"), el("p", { class: "small" }, `工具：${card.tool}`)));
 }
 
 // ---- the support notice: may this Claude Code chat, and the button that checks it ----
@@ -13567,8 +14312,7 @@ function chatSupportNode(support, verifyUi) {
   if (s.state !== "verified" && typeof s.message === "string" && s.message) lines.push(el("p", { class: "small", "data-chat": "support-message" }, s.message));
   if (s.state === "unverified") {
     lines.push(el("p", { class: "small muted", "data-chat": "verify-cost" },
-      "驗證會用這個 Claude Code 真的跑一段對話：約 6 次小呼叫（Haiku），用你自己的登入，會用掉一點點額度（預期不到 US$0.05，實際金額以 Claude Code 回報為準），"
-      + "要幾分鐘。它會試：員工回話、每個指令都先問你、你拒絕或改內容、接續舊對話、沙盒擋住資料夾外的寫入。全部通過，才會記下這個版本。"));
+CHAT_VERIFY_COST_CLAUDE));
     if (running) lines.push(el("p", { class: "small", "data-chat": "verifying", role: "status" }, "驗證進行中，通常要幾分鐘…"));
     else if (v.confirm === true) lines.push(el("div", { class: "row" },
       el("button", { type: "button", class: "btn primary small", "data-chat": "verify-go", on: { click: () => v.go && v.go() } }, "確認驗證（會花一點額度）"),
@@ -13597,9 +14341,7 @@ function chatCodexSupportNode(codex, verifyUi) {
   if (c.state === "ready" && typeof c.money === "string" && c.money) lines.push(el("p", { class: "small muted", "data-chat": "money" }, c.money));
   if (c.state === "not_installed" || c.state === "not_logged_in" || c.state === "folder") lines.push(el("div", { class: "row" }, toSetup));
   if (c.state === "unverified") {
-    lines.push(el("p", { class: "small muted", "data-chat": "verify-cost" },
-      "驗證會用聊天用的 Codex 真的跑一段對話：約 14 次很短的呼叫，用你自己的 ChatGPT 方案，不另外收費，要幾分鐘。驗證前要先到「開始設定」按「讓聊天用的 Codex 登入」。"
-      + "它會試：員工回話、連只讀檔的指令也先問你、你拒絕或改內容再問、改檔要看 diff、資料夾外的寫入被擋住、停止、接續舊對話。全部通過，才會記下這個版本。"));
+    lines.push(el("p", { class: "small muted", "data-chat": "verify-cost" }, CHAT_VERIFY_COST_CODEX));
     if (running) lines.push(el("p", { class: "small", "data-chat": "verifying", role: "status" }, "驗證進行中，通常要幾分鐘…"));
     else if (v.confirm === true) lines.push(el("div", { class: "row" },
       el("button", { type: "button", class: "btn primary small", "data-chat": "verify-go", on: { click: () => v.go && v.go() } }, "確認驗證（會用掉一點 ChatGPT 方案的用量）"),
@@ -13623,6 +14365,10 @@ const CHAT_AGY_WORD = {
 };
 const CHAT_AGY_HOOKS_NOTE = "你自己的 AGY 設了會在聊天時自動執行的 hooks，VBear 不能保證每個指令都先問你，所以聊天先不開。VBear 不會幫你改它；要用 AGY 聊天，請先自己把那些 hooks 拿掉。";
 const CHAT_AGY_SKILLS_NOTE = "AGY 員工會用到你自己裝的 AGY 技能。";
+const CHAT_VERIFY_COST_CLAUDE = "驗證會用這個 Claude Code 真的跑一段對話：約 6 次小呼叫（Haiku），用你自己的登入，會用掉一點點額度（預期不到 US$0.05，實際金額以 Claude Code 回報為準），"
+  + "要幾分鐘。它會試：員工回話、每個指令都先問你、你拒絕或改內容、接續舊對話、保護範圍（沙盒）擋住資料夾外的寫入。全部通過，才會記下這個版本。";
+const CHAT_VERIFY_COST_CODEX = "驗證會用聊天用的 Codex 真的跑一段對話：約 14 次很短的呼叫，用你自己的 ChatGPT 方案，不另外收費，要幾分鐘。驗證前要先到「開始設定」按「讓聊天用的 Codex 登入」。"
+  + "它會試：員工回話、連只讀檔的指令也先問你、你拒絕或改內容再問、改檔要看 diff、資料夾外的寫入被擋住、停止、接續舊對話。全部通過，才會記下這個版本。";
 const CHAT_AGY_VERIFY_COST = "驗證會用 AGY 真的跑一段對話：約 14 次很短的呼叫，用你自己的 Google 方案，不另外收費，要幾分鐘，對話內容會送到 Google。"
   + "它會試：員工回話、每個指令都先問你、你拒絕或改內容再問、改檔要看 diff、資料夾外的讀寫被擋住、停止、接續舊對話。全部通過，才會記下這個版本。";
 function chatAgySupportNode(agy, verifyUi) {
@@ -13658,8 +14404,69 @@ function chatAgySupportNode(agy, verifyUi) {
 
 function chatLimitsText(limits, ledger) {
   const l = limits && typeof limits === "object" ? limits : null;
-  const spent = ledger && typeof ledger === "object" && /^[0-9.]+$/.test(String(ledger.spent_usd)) ? `今天已花 US$${ledger.spent_usd}（聊天、會議和組隊會議合計），每日上限 US$${ledger.daily_usd}。` : "讀不到今天的花費。";
-  return `${l ? `每回合最多 ${chatMoney(l.per_turn_usd)}。` : ""}${spent}${ledger && ledger.lamp === "red" ? "額度用完了（亮紅燈），今天不能再送訊息。" : ""}`;
+  const spent = ledger && typeof ledger === "object" && /^[0-9.]+$/.test(String(ledger.spent_usd)) ? `今天已花 US$${ledger.spent_usd}（聊天、會議和組隊會議合計），花費上限 US$${ledger.daily_usd}。` : "讀不到今天的花費。";
+  return `${l ? `每回合最多 ${chatMoney(l.per_turn_usd)}。` : ""}${spent}${ledger && ledger.lamp === "red" ? "今天的用量到你設的上限了，今天不能再送訊息。" : ""}`;
+}
+
+// P47-4: what the page of one employee whose chat has to be prepared says and offers (pure). `card`: one of GET /api/chats' cards; `data`:
+// the whole answer (support, ledger...). -> { kind: "start" | "verify" | "link", reason, label, href?, verify?: { engine, version, title, cost } }.
+function chatPrepState(card, data) {
+  if (!card || typeof card !== "object") return null;
+  const name = card.name || "這位員工";
+  const sup = data && data.support && typeof data.support === "object" ? data.support : {};
+  const linkSetup = (label, reason) => ({ kind: "link", reason, label, href: "#/setup" });
+  if (card.can_chat !== true) {
+    return { kind: "link", label: "到員工頁看看", href: "#/employees", reason: typeof card.reason === "string" && card.reason ? card.reason : `${name}現在不能聊天。` };
+  }
+  // No chat support in the answer at all: the state of the tool was not read, so nothing is said of it and nothing is started (R2 Q1)
+  if (!(data && data.support && typeof data.support === "object")) return { kind: "retry", label: "再讀一次", reason: `${HOME_UNREAD_TEXT}` };
+  const engine = card.engine;
+  const part = engine === "codex-chat" ? sup.codex : engine === "agy-chat" ? sup.agy : sup;
+  const tool = engine === "codex-chat" ? "Codex" : engine === "agy-chat" ? "AGY" : "Claude Code";
+  const state = part && typeof part === "object" ? part.state : "";
+  const words = engine === "codex-chat" ? CHAT_CODEX_WORD : engine === "agy-chat" ? CHAT_AGY_WORD : CHAT_SUPPORT_WORD;
+  const word = cardHas(words, state) ? words[state][0] : "狀態不明";
+  const version = part && typeof part.version === "string" && part.version ? part.version : part && typeof part.detected === "string" && part.detected ? part.detected : "";
+  if (state === (engine === "claude-chat" || !engine ? "verified" : "ready")) return { kind: "start", label: "開始聊天", reason: `${name}準備好了，可以開始聊天。` };
+  if (state === "policy") {            // not something to verify: the administrator's settings on this computer hold the tool back
+    return linkSetup("到 AI 工具看看", `這台電腦的 ${tool} 有管理員設定，VBear 不能用它聊天。可以到「AI 工具」看看有沒有別的工具能用。`);
+  }
+  const why = `${tool} ${word}，先處理這一步才能和 ${name} 聊天。`;
+  if (state === "unverified") {
+    if (engine === "agy-chat") return { kind: "verify", label: "驗證聊天", reason: why, verify: { engine: "agy", version, title: "驗證 AGY 的聊天", cost: CHAT_AGY_VERIFY_COST } };
+    if (engine === "codex-chat") return { kind: "verify", label: "先做一次安全檢查", reason: why, verify: { engine: "codex", version, title: "做一次安全檢查", cost: CHAT_VERIFY_COST_CODEX } };
+    return { kind: "verify", label: "先做一次安全檢查", reason: why, verify: { engine: "", version, title: "做一次安全檢查", cost: CHAT_VERIFY_COST_CLAUDE } };
+  }
+  if (engine === "codex-chat" && state === "not_logged_in") return linkSetup("到 AI 工具登入聊天用的 Codex", why);
+  return linkSetup("到 AI 工具看看", why);
+}
+
+// The page of an employee whose chat state could not be read (the read failed, or the employee is not in the list): nothing was opened or sent, the words
+// that wait under the employee's id are still kept, and one button reads the state again (R2 Q1).
+function chatUnreadPage(profileId, name) {
+  const kept = typeof ceoDrafts.get(profileId) === "string" && ceoDrafts.get(profileId) !== "";
+  return [el("h1", null, name ? `準備和 ${name} 聊天` : "準備聊天"),
+    el("div", { class: "chat-prep", "data-chat": "prep" },
+      el("p", { class: "lede", "data-chat": "prep-reason" }, HOME_UNREAD_TEXT + (kept ? "你打的字還留著。" : "")),
+      el("button", { type: "button", class: "btn primary", "data-chat": "prep-action", on: { click: () => route() } }, "再讀一次"),
+      el("p", { class: "small" }, el("a", { href: "#/chat" }, "看所有對話紀錄")))];
+}
+
+// The notice for a send the server refused because the AI tool of this employee cannot chat (not checked for chat, an administrator's policy, not logged
+// in...), on the chat page and on the home page. `st`: chatPrepState of the state read again just now (null when it could not be read): its reason is the
+// real one (the server's sentence may name only the first thing it found); without it the table's plain words say it. The server's sentence is kept whole
+// behind 「技術細節」. The link goes to the page that prepares the chat, and keeps the words of the box (opts.keep()) under the employee's id when it is followed
+// (R2 Q3), so they are there when the chat is started and are never sent by themselves.
+function chatNotReadyNotice(e, profileId, st, opts) {
+  const reason = plainWords(e);
+  const text = st && st.kind !== "start" ? st.reason : reason.text + reason.next;
+  const raw = typeof e.message === "string" ? e.message.trim() : "";
+  const keep = () => { const t = typeof opts.keep === "function" ? opts.keep() : ""; if (profileId && typeof t === "string" && t.trim()) ceoDrafts.set(profileId, t); };
+  const node = noticeBox("warn", [text,
+    profileId ? el("p", { style: "margin:8px 0 0" }, el("a", { class: "btn small", href: `#/chat?profile=${encodeURIComponent(profileId)}`, [`data-${opts.scope}`]: opts.go, on: { click: keep } }, opts.scope === "chat" ? "到準備頁" : "先把聊天準備好")) : null,
+    raw ? plainTechFold(raw) : null]);
+  node.setAttribute(`data-${opts.scope}`, "not-ready");
+  return node;
 }
 
 // ---- the list ----
@@ -13674,7 +14481,7 @@ function chatRow(c) {
     el("span", { class: "tag", "data-chat": "tool" }, chatToolName(c.engine)),
     c.waiting ? badge("等你回覆卡片", "b-warn") : c.open ? badge("回覆中", "b-info") : null,
     c.problem ? badge("紀錄有問題", "b-bad", c.problem) : null,
-    el("span", { class: "small muted" }, `${fmtTime(c.last_at)}・${c.turns} 回合・US$${c.spent_usd}（估值）`),
+    el("span", { class: "small muted" }, `${fmtTime(c.last_at)}・${c.turns} 回合`),
     c.last_text ? el("span", { class: "small chat-excerpt" }, `${c.last_kind === "user" ? "你：" : "員工："}${c.last_text}`) : null);
 }
 
@@ -13683,7 +14490,11 @@ async function viewChat(id, params) {
   if (id) return viewChatDetail(token, id);
   let data;
   try { data = await api.get("/api/chats"); }
-  catch (e) { setKids(claim(token), el("h1", null, "跟員工聊天"), notice("bad", "讀不到聊天：" + e.message)); return; }
+  catch (e) {
+    const want = typeof (params && params.profile) === "string" ? params.profile : "";
+    if (want) { setKids(claim(token), chatUnreadPage(want, "")); return; }       // sent here to prepare a chat: say that the state could not be read, and offer to read it again
+    setKids(claim(token), el("h1", null, "對話紀錄"), notice("bad", "讀不到對話紀錄：" + e.message)); return;
+  }
   const readGroups = async () => {
     try { const r = await api.get("/api/groups"); return Array.isArray(r.groups) ? r.groups : []; } catch (_) { return []; }
   };
@@ -13701,6 +14512,7 @@ async function viewChat(id, params) {
   const pick = typeof (params && params.profile) === "string" ? params.profile : "";
   let chosen = pick;
   const chosenCard = () => (Array.isArray(cur.cards) ? cur.cards.find((c) => c && c.id === chosen) : null) || null;
+  if (pick && !chosenCard()) { setKids(main, chatUnreadPage(pick, "")); return; }           // an employee that is not in the list: nothing to prepare, nothing is opened
   // The notice for the chosen card's AI tool; with no card chosen, Claude Code's (unless it is not there and Codex is) and
   // Codex's once Codex is installed.
   const drawSupport = () => {
@@ -13726,8 +14538,8 @@ async function viewChat(id, params) {
   };
   const redrawForm = () => {
     const cards = Array.isArray(cur.cards) ? cur.cards.filter((c) => c && typeof c.id === "string") : [];
-    const sel = el("select", { "data-chat": "card", "aria-label": "要聊天的角色卡", on: { change: (e) => { chosen = e.target.value; drawSupport(); redrawForm(); } } },
-      el("option", { value: "" }, cards.length ? "選一張角色卡…" : "還沒有角色卡"),
+    const sel = el("select", { "data-chat": "card", "aria-label": "要聊天的員工", on: { change: (e) => { chosen = e.target.value; drawSupport(); redrawForm(); } } },
+      el("option", { value: "" }, cards.length ? "選一位員工…" : "還沒有員工"),
       cards.map((c) => el("option", { value: c.id, disabled: c.can_chat !== true },
         c.can_chat === true ? `${c.name || c.id}（${chatToolName(c.tool)}）` : `${c.name || c.id}（${c.tool ? chatToolName(c.tool) + "・" : ""}不能聊天）`)));
     sel.value = cards.some((c) => c.id === chosen) ? chosen : "";
@@ -13754,15 +14566,15 @@ async function viewChat(id, params) {
         location.hash = `#/chat/group/${encodeURIComponent(made.group.id)}`;
         return made;
       } }) } }, "開新群組");
-    setKids(formBox, el("section", { class: "section" }, sectionHead("開新聊天", "開聊天本身不花錢，送出訊息才花。"),
+    setKids(formBox, el("section", { class: "section" }, sectionHead("開新對話", "開對話本身不花錢，送出訊息才花。"),
       el("div", { class: "row" }, sel, go, groupBtn),
-      card && card.can_chat !== true ? notice("warn", card.reason || "這張角色卡不能聊天。") : null,
+      card && card.can_chat !== true ? notice("warn", card.reason || "這位員工不能聊天。") : null,
       !ok ? el("p", { class: "small muted" }, agyCard ? "AGY 準備好之前（原因在上面），不能開始聊天。" : codexCard ? "聊天用的 Codex 準備好之前（原因在上面），不能開始聊天。" : "這個 Claude Code 版本通過聊天驗證之前，不能開始聊天。") : null,
-      lamp ? el("p", { class: "small muted" }, "今天的額度用完了，不能開始聊天。") : null,
-      card && card.can_chat === true && card.instructions === true ? el("p", { class: "small muted" }, "這張卡有你自己寫的指示，會帶進聊天。") :
-        card && card.can_chat === true ? el("p", { class: "small muted" }, "這張卡沒有你自己寫的指示，聊天不會帶任何指示。") : null));
+      lamp ? limitReachedNotice(null, { text: "今天的用量到你設的上限了，所以現在不能開始聊天（沒有花錢）。明天 0 點會重新算；要現在繼續，可以調高上限。" }) : null,
+      card && card.can_chat === true && card.instructions === true ? el("p", { class: "small muted" }, "這位員工有你自己寫的指示，會帶進聊天。") :
+        card && card.can_chat === true ? el("p", { class: "small muted" }, "這位員工沒有你自己寫的指示，聊天不會帶任何指示。") : null));
   };
-  const draw = () => {
+  let draw = () => {
     drawSupport();
     setKids(ledgerBox, chatLimitsText(cur.limits, cur.ledger) + (cur.ledger_error ? `（${cur.ledger_error}）` : ""));
     redrawForm();
@@ -13773,8 +14585,8 @@ async function viewChat(id, params) {
     const lines = [...rows.map((c) => ({ at: c.last_at || c.created_at || 0, node: () => chatRow(c) })),
       ...groupRows.filter((g) => g && typeof g.id === "string").map((g) => ({ at: g.last_at || 0, node: () => groupRow(g) }))];
     lines.sort((a, b) => b.at - a.at);
-    setKids(listBox, lines.length ? el("ul", { class: "mt-list" }, lines.map((l) => l.node())) : emptyState("還沒有聊過天", "選一張角色卡，按「開始聊天」。"),
-      cur.more ? el("p", { class: "small muted" }, `還有 ${cur.more} 個較舊的聊天沒有列出。`) : null,
+    setKids(listBox, lines.length ? el("ul", { class: "mt-list" }, lines.map((l) => l.node())) : emptyState("還沒有聊過天", "選一位員工，按「開始聊天」。"),
+      cur.more ? el("p", { class: "small muted" }, `還有 ${cur.more} 個較舊的對話沒有列出。`) : null,
       Array.isArray(cur.problems) && cur.problems.length ? notice("warn", cur.problems.join("；")) : null);
   };
   verifyUi.ask = () => { verifyUi.confirm = true; draw(); };
@@ -13809,33 +14621,100 @@ async function viewChat(id, params) {
     if (cur.support && cur.support.verify && cur.support.verify.running !== true) verifyUi.pending = false;
     if (cur.support && cur.support.codex && cur.support.codex.verify && cur.support.codex.verify.running !== true) codexUi.pending = false;
     if (cur.support && cur.support.agy && cur.support.agy.verify && cur.support.agy.verify.running !== true) agyUi.pending = false;
-    if (token === seq) draw();
+    if (token === seq) { draw(); if (prepMode) prepMaybeOpen(); }
   };
+  // P47-4: the page of one employee whose chat cannot start yet (#/chat?profile=<id>): one reason in a line, one action, the rest behind 「了解更多」.
+  // Opening a conversation is free and sends nothing; the safety check asks first (what it uses, what it costs, how long) and is the person's own press.
+  const prepMode = !!pick && !!chosenCard();
+  const prepBox = el("div", { class: "chat-prep", "data-chat": "prep" });
+  let prepStarting = false, prepAuto = false;
+  const prepUi = () => {
+    const c = chosenCard();
+    return !c ? verifyUi : c.engine === "codex-chat" ? codexUi : c.engine === "agy-chat" ? agyUi : verifyUi;
+  };
+  async function prepStart() {
+    if (prepStarting || !chosen) return;
+    prepStarting = true; draw();
+    try {
+      const res = await api.post("/api/chats", { profile_id: chosen });
+      ceoMoveDraft(chosen, res.chat.id);
+      location.hash = `#/chat/${encodeURIComponent(res.chat.id)}`;
+    } catch (err) { toast(err.message); prepStarting = false; if (token === seq) draw(); }
+  }
+  function prepMaybeOpen() {
+    if (!prepAuto || prepStarting) return;
+    const st = chatPrepState(chosenCard(), cur);
+    if (st && st.kind === "start" && !(cur.ledger && cur.ledger.lamp === "red")) { prepAuto = false; prepStart(); }
+  }
+  async function prepVerify(st) {
+    const ok = await confirmInPage(st.verify.title, st.verify.cost, "開始檢查");
+    if (!ok) return;
+    const ui = prepUi();
+    const version = st.verify.version || undefined;
+    ui.pending = true; prepAuto = true; draw();
+    try { await api.post("/api/chat-support/verify", st.verify.engine ? { engine: st.verify.engine, version } : { version }); }
+    catch (err) { ui.pending = false; prepAuto = false; toast(err.message); }
+    await refresh();
+  }
+  const drawPrep = () => {
+    const c = chosenCard();
+    const st = chatPrepState(c, cur);
+    const lampRed = !!cur.ledger && cur.ledger.lamp === "red";
+    const ui = prepUi();
+    const sup = cur.support && typeof cur.support === "object" ? cur.support : {};
+    const part = c && c.engine === "codex-chat" ? sup.codex : c && c.engine === "agy-chat" ? sup.agy : sup;
+    const status = part && part.verify && typeof part.verify === "object" ? part.verify : null;
+    const running = (status && status.running === true) || ui.pending === true;
+    let action = null;
+    if (st && running && st.kind === "verify") action = el("p", { class: "small", "data-chat": "prep-running", role: "status" }, "安全檢查進行中，通常要幾分鐘…");
+    else if (st && st.kind === "start") {
+      action = el("button", { type: "button", class: "btn primary", "data-chat": "prep-action", disabled: lampRed || prepStarting, on: { click: () => prepStart() } }, st.label);
+    } else if (st && st.kind === "verify") {
+      action = el("button", { type: "button", class: "btn primary", "data-chat": "prep-action", on: { click: () => prepVerify(st) } }, st.label);
+    } else if (st && st.kind === "retry") {
+      action = el("button", { type: "button", class: "btn primary", "data-chat": "prep-action", on: { click: () => refresh() } }, st.label);
+    } else if (st) action = el("a", { class: "btn primary", href: st.href, "data-chat": "prep-action" }, st.label);
+    setKids(prepBox,
+      el("p", { class: "lede", "data-chat": "prep-reason" }, st ? st.reason : "找不到這位員工。"),
+      lampRed ? limitReachedNotice(null, { text: "今天的用量到你設的上限了，所以現在不能開始聊天（沒有花錢）。明天 0 點會重新算；要現在繼續，可以調高上限。" }) : null,
+      action,
+      !running && status && typeof status.message === "string" && status.message && st && st.kind !== "start"
+        ? el("p", { class: "small", "data-chat": "prep-result" }, status.message) : null);
+  };
+  if (prepMode) {
+    const baseDraw = draw;
+    draw = () => { baseDraw(); drawPrep(); };
+  }
   draw();
   const intro = chatIntroNode();
-  setKids(main, el("h1", null, "跟員工聊天"),
-    el("p", { class: "lede" }, "和一位員工（角色卡）一對一聊天。員工想動手時，會先問你。"),
-    needsClaudeSlot(token, "聊天需要 Claude Code、Codex 或 AGY：工具是 Claude Code 的員工用 Claude Code，工具是 Codex 的員工用 Codex（Codex 要先在「開始設定」登入聊天用的那一份），工具是 AGY 的員工用 AGY（AGY 要先通過聊天驗證）。",
+  if (prepMode) {
+    const c = chosenCard();
+    setKids(main, el("h1", null, `準備和 ${c.name || "這位員工"} 聊天`), prepBox,
+      el("details", { class: "fold section chat-more-info", "data-chat": "prep-more" }, el("summary", null, "了解更多"), supportBox, ledgerBox, intro,
+        el("p", { class: "small" }, el("a", { href: "#/chat" }, "看所有對話紀錄"))));
+    chatTick = refresh;
+    activeViewCleanup = () => { chatTick = null; };
+    return;
+  }
+  const moreInfo = el("details", { class: "fold section chat-more-info", "data-chat": "more-info" }, el("summary", null, "了解更多"), ledgerBox, intro);
+  setKids(main, el("h1", null, "對話紀錄"),
+    el("p", { class: "lede" }, "和一位員工一對一對話。員工想動手時，會先問你。"),
+    needsClaudeSlot(token, "對話需要 Claude Code、Codex 或 AGY：工具是 Claude Code 的員工用 Claude Code，工具是 Codex 的員工用 Codex（Codex 要先在「開始設定」登入聊天用的那一份），工具是 AGY 的員工用 AGY（AGY 要先通過聊天驗證）。",
       (res) => !codexChatReady(res) && !agyChatReady(res)),
-    intro, supportBox, ledgerBox, formBox,
-    el("section", { class: "section" }, sectionHead("聊天紀錄", "每 5 秒更新"), listBox));
+    supportBox, formBox,
+    el("section", { class: "section" }, sectionHead("對話紀錄", "每 5 秒更新"), listBox),
+    moreInfo);
   chatTick = refresh;
   activeViewCleanup = () => { chatTick = null; };
 }
 let chatTick = null;
 
-function chatIntroSeen() {
-  try { return localStorage.getItem(CHAT_INTRO_KEY) === "1"; } catch (_) { return false; }
-}
+// P47-4: the long explanation of how a chat works is behind 「了解更多」 on the list page. It is closed (it does not open itself the first time any more,
+// so nothing is remembered in the browser) and has no button of its own.
 function chatIntroNode() {
-  const seen = chatIntroSeen();
-  const box = el("details", { class: "fold section chat-intro", "data-chat": "intro" },
-    el("summary", null, "聊天怎麼運作（第一次請先看）"),
-    CHAT_INTRO.map(([t, body]) => el("p", { class: "small" }, el("strong", null, `${t}：`), body)),
-    el("button", { type: "button", class: "btn small", "data-chat": "intro-ok",
-      on: { click: () => { try { localStorage.setItem(CHAT_INTRO_KEY, "1"); } catch (_) { /* private mode */ } box.removeAttribute("open"); } } }, "我知道了"));
-  if (!seen) box.setAttribute("open", "");
-  return box;
+  return el("details", { class: "fold section chat-intro", "data-chat": "intro" },
+    el("summary", null, "聊天怎麼運作"),
+    CHAT_INTRO.map(([t, body]) => el("p", { class: "small" }, el("strong", null, `${t}：`), body)));
 }
 
 // ---- one chat ----
@@ -13853,11 +14732,75 @@ async function chatReadAll(id) {
   return { ...first, records, live: null, next_after: after, more: true, first };
 }
 
+// P47-4: which company the words of a chat go to, by the AI tool of the employee (or the engine of the chat).
+const CHAT_COMPANY = { claude: "Anthropic", "claude-chat": "Anthropic", codex: "OpenAI", "codex-chat": "OpenAI", agy: "Google", "agy-chat": "Google" };
+function chatCompanyOf(x) { return typeof x === "string" && cardHas(CHAT_COMPANY, x) ? CHAT_COMPANY[x] : "AI 公司"; }
+// The one line under the name that is always seen: position, AI tool, that every action asks first, and where the words go.
+function chatHeadLine(card, engine) {
+  const c = card && typeof card === "object" ? card : null;
+  const position = c && cardHas(CARD_POSITION_LABEL, c.position) ? CARD_POSITION_LABEL[c.position] : "";
+  const tool = c && c.tool ? chatToolName(c.tool) : engine ? chatToolName(engine) : "";
+  return [position, tool, "每件事先問你", `對話會送到 ${chatCompanyOf(engine || (c && c.tool))}`].filter(Boolean).join("・");
+}
+
+// P47-4: the 「⋯」 menu of a chat page. `items`: { key, label, hints?: [{ text, attrs? }], href?, attrs?, danger?, onPress? }, or null for the line between.
+// Every item is in the page all the time (the list is only hidden), so a keyboard and a screen reader reach it; an item that opens
+// something opens the box it always opened, with its own cost and where the words go. Esc closes it and the focus goes back to the button.
+function chatMoreMenu(items) {
+  const list = el("div", { class: "chat-more-menu", role: "menu", "data-chat": "more-menu", "aria-label": "這個對話的其他功能" });
+  const button = el("button", { type: "button", class: "btn small chat-more-btn", "data-chat": "more", "aria-haspopup": "menu", "aria-expanded": "false",
+    "aria-label": "其他功能" }, el("span", { "aria-hidden": "true" }, "⋯"));
+  const wrap = el("div", { class: "chat-more" }, button, list);
+  list.hidden = true;
+  let isOpen = false;
+  const nodes = [];
+  const away = (e) => { if (isOpen && e && e.target && !wrap.contains(e.target)) close(false); };
+  const focusAt = (i) => { if (nodes.length) { const n = nodes[(i + nodes.length) % nodes.length]; if (n.focus) n.focus(); } };
+  function open() {
+    if (isOpen) return;
+    isOpen = true;
+    list.hidden = false;
+    button.setAttribute("aria-expanded", "true");
+    if (document.addEventListener) document.addEventListener("click", away);
+    focusAt(0);
+  }
+  function close(giveFocusBack) {
+    if (!isOpen) return;
+    isOpen = false;
+    list.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+    if (document.removeEventListener) document.removeEventListener("click", away);
+    if (giveFocusBack !== false && button.focus) button.focus();
+  }
+  button.addEventListener("click", () => (isOpen ? close(true) : open()));
+  list.addEventListener("keydown", (e) => {
+    const at = nodes.indexOf(document.activeElement);
+    if (e.key === "Escape") { if (e.preventDefault) e.preventDefault(); close(true); }
+    else if (e.key === "ArrowDown") { if (e.preventDefault) e.preventDefault(); focusAt(at < 0 ? 0 : at + 1); }
+    else if (e.key === "ArrowUp") { if (e.preventDefault) e.preventDefault(); focusAt(at < 0 ? -1 : at - 1); }
+    else if (e.key === "Home") { if (e.preventDefault) e.preventDefault(); focusAt(0); }
+    else if (e.key === "End") { if (e.preventDefault) e.preventDefault(); focusAt(-1); }
+    else if (e.key === "Tab") close(false);
+  });
+  for (const it of items) {
+    if (!it) { list.append(el("div", { class: "chat-more-line", role: "separator" })); continue; }
+    const props = { class: "chat-more-item" + (it.danger ? " danger" : ""), role: "menuitem", "data-chat-menu": it.key, ...(it.attrs || {}) };
+    const kids = [el("span", { class: "chat-more-label" }, it.label),
+      ...(it.hints || []).map((x) => el("span", { class: "chat-more-hint small muted", ...(x.attrs || {}) }, x.text))];
+    const node = it.href
+      ? el("a", { ...props, href: it.href, on: { click: () => close(false) } }, kids)
+      : el("button", { ...props, type: "button", on: { click: () => { close(false); if (it.onPress) it.onPress(); } } }, kids);
+    nodes.push(node);
+    list.append(node);
+  }
+  return { node: wrap, button, list, open, close: () => close(false) };
+}
+
 async function viewChatDetail(token, id) {
   let all;
   try { all = await chatReadAll(id); }
   catch (e) {
-    setKids(claim(token), crumbs([["聊天", "#/chat"], ["找不到"]]), notice("bad", e.status === 404 ? e.message : "讀不到這個聊天：" + e.message));
+    setKids(claim(token), crumbs([["對話紀錄", "#/chat"], ["找不到"]]), notice("bad", e.status === 404 ? e.message : "讀不到這段對話：" + e.message));
     return;
   }
   const main = claim(token);
@@ -13871,19 +14814,28 @@ async function viewChatDetail(token, id) {
   const transcript = el("ul", { class: "chat-log", "data-chat": "log", "aria-live": "off" });
   const liveBox = el("div", { class: "chat-live", "data-chat": "live", "aria-live": "polite" });
   const headBox = el("div", { class: "chat-head" });
+  const titleBox = el("div", { class: "chat-title" });
+  const lineBox = el("p", { class: "small chat-line", "data-chat": "line" });
+  const detailsBody = el("div", { class: "chat-details-body" });
+  const detailsBox = el("details", { class: "fold chat-details small", "data-chat": "details" }, el("summary", null, "詳細資訊"), detailsBody);
   const noteBox = el("div", { class: "chat-notes" });
   const input = el("textarea", { rows: "3", "data-chat": "input", "aria-label": "要對員工說的話", maxlength: "20000", placeholder: "要對員工說什麼？（Cmd/Ctrl + Enter 送出）",
     on: { keydown: (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } } } });
+  // v0.21.0: words kept under the employee's id (the 「到準備頁」 link, a refused first send) come back to this chat when it has none of its own
+  const ownerId = (all && all.card && typeof all.card.id === "string" && all.card.id) || (all && all.chat && all.chat.profile_id) || "";
+  if (ownerId) { if (ceoDrafts.has(id)) ceoDrafts.delete(ownerId); else ceoMoveDraft(ownerId, id); }   // one set of words per chat, the newest; never pasted twice
   const opening = ceoTakeDraft(id);        // P38-8: the first CEO's opening sentence: put in the box, sent only by the send button
   if (opening) input.value = opening;
   const openingNote = opening ? el("p", { class: "small", "data-ceo": "opening-note" }, CEO_OPENING_NOTE) : null;
   const sendBtn = el("button", { type: "button", class: "btn primary", "data-chat": "send", on: { click: () => send() } }, "送出");
   const stopBtn = el("button", { type: "button", class: "btn", "data-chat": "stop", on: { click: () => stop() } }, "停止這一回合");
   const sendNote = el("p", { class: "small muted", "data-chat": "send-note" });
+  const limitBox = el("div", { "data-chat": "limit-box", "aria-live": "polite" });       // the day's limit stopped a send: said in plain words, with the way to the settings
   let noteText = "";                      // the server's last refusal, kept until the person acts again
   let planRecord = null;                  // the last plan_usage record: what Codex last said of the ChatGPT plan's use
   let memState = null;                    // P42-3: { on, count, readable } of this employee's memory, or null when it cannot be had
   const memoryBox = el("div", { "data-memory": "chat-state-box" });
+  const memoryNoteBox = el("div", { "data-memory": "chat-note-box" });      // the note that the memory changed (it is not folded away: it asks the person to act)
   const sharedBox = el("div", { "data-shared": "chat-state-box" });       // P43-4: whether this employee may use the shared folder
   let sharedUnverified = false;                                             // a send was refused with shared_unverified (the check itself: P43-2's note below)
   const engineOf = () => (view.chat && view.chat.engine) || (view.card && view.card.engine) || null;
@@ -13891,25 +14843,26 @@ async function viewChatDetail(token, id) {
   const isAgy = () => engineOf() === "agy-chat";
 
   const turnOpen = () => view.live && view.live.turn != null;
-  const gate = () => (view.card && view.card.can_chat === false ? view.card.reason || "這張角色卡現在不能聊天。" : "");
+  const gate = () => (view.card && view.card.can_chat === false ? view.card.reason || "這位員工現在不能聊天。" : "");
   const draw = () => {
     const live = view.live && typeof view.live === "object" ? view.live : null;
     const state = live ? live.state : "idle";
     const word = cardHas(CHAT_STATE, state) ? CHAT_STATE[state] : ["狀態不明", "b-mute"];
-    setKids(headBox, el("h1", null, typeof view.routine_title === "string" ? view.routine_title : (view.card && view.card.name ? view.card.name : "聊天")),
-      el("p", { class: "small" }, badge(live ? word[0] : "沒有程序在跑", live ? word[1] : "b-mute"), " ",
-        view.card ? `${view.card.position ? "職位：" + view.card.position + "・" : ""}工具：${chatToolName(view.card.tool)}` : ""),
+    setKids(titleBox, el("h1", null, typeof view.routine_title === "string" ? view.routine_title : (view.card && view.card.name ? view.card.name : "對話")));
+    setKids(lineBox, live ? badge(word[0], word[1]) : null, live ? " " : null, chatHeadLine(view.card, engineOf() || (view.card && view.card.tool)));
+    setKids(detailsBody,
       el("p", { class: "small muted", "data-chat": "limits" }, chatLimitsText(limits, ledger)),
       isAgy() ? el("p", { class: "small muted", "data-chat": "agy-note" }, CHAT_AGY_NOTE)
         : isCodex() ? el("p", { class: "small muted", "data-chat": "codex-note" }, CHAT_CODEX_NOTE)
-        : el("p", { class: "small muted" }, "員工只能在自己的工作資料夾裡讀寫；要執行指令、改檔或寫檔，都會先問你。"),
+        : el("p", { class: "small muted", "data-chat": "claude-note" }, "員工只能在自己的工作資料夾裡讀寫；要執行指令、改檔或寫檔，都會先問你。"),
       isCodex() && chatPlanUsageText(planRecord) ? el("p", { class: "small", "data-chat": "plan-usage" }, chatPlanUsageText(planRecord)) : null,
       memoryBox, sharedBox);
     const notes = [];
     if (gate()) notes.push(notice("warn", gate()));
-    if (view.runtime && view.runtime.available === false) notes.push(notice("warn", `${view.runtime.message || "VBear 的背景程序連不上"}　紀錄還看得到，但現在不能送訊息。`));
+    if (view.runtime && view.runtime.available === false) notes.push(notice("warn", `${view.runtime.message || "VBear 的背景程式連不上"}　紀錄還看得到，但現在不能送訊息。`));
     if ((view.shared && view.shared.code === "shared_unverified") || sharedUnverified) notes.push(sharedCheckNode());       // P43-2 (also after a send was refused so)
-    if (view.problem) notes.push(notice("bad", `這個聊天的紀錄有問題：${view.problem}。VBear 不會再往裡面寫，也不能再送訊息；已花的錢仍算在今天的額度裡。`));
+    if (memoryNoteBox.children.length) notes.push(memoryNoteBox);
+    if (view.problem) notes.push(notice("bad", `這個對話的紀錄有問題：${view.problem}。VBear 不會再往裡面寫，也不能再送訊息；已花的錢仍算在今天的額度裡。`));
     if (view.more === true) notes.push(notice("info", "這個聊天很長，只顯示了前面一段。"));
     setKids(noteBox, notes);
     drawLive();
@@ -13922,13 +14875,13 @@ async function viewChatDetail(token, id) {
     const live = view.live && typeof view.live === "object" ? view.live : null;
     const kids = [];
     if (live && live.partial) kids.push(el("div", { class: "chat-msg chat-them chat-partial", "data-chat": "partial" },
-      el("div", { class: "chat-who small muted" }, "員工正在寫…"), el("div", { class: "chat-text" }, live.partial),
+      el("div", { class: "chat-who small muted" }, `${view.card && view.card.name ? view.card.name : "員工"}正在寫…`), el("div", { class: "chat-text" }, live.partial),
       live.partial_truncated === true ? el("div", { class: "small muted" }, "（只顯示最後一段，寫完後會完整出現）") : null));
-    else if (live && live.state === "working") kids.push(el("p", { class: "small muted", "data-chat": "thinking", role: "status" }, "員工正在想…"));
+    else if (live && live.state === "working") kids.push(el("p", { class: "small muted", "data-chat": "thinking", role: "status" }, `${view.card && view.card.name ? view.card.name : "員工"}正在想…`));
     const cards = live && Array.isArray(live.cards) ? live.cards : [];
     for (const card of cards) {
       if (!edits.has(card.card_id)) edits.set(card.card_id, { open: false, text: undefined });
-      kids.push(chatCardNode(card, { engine: engineOf(), busy: answering.has(card.card_id), edit: edits.get(card.card_id), redraw: drawLive, onAnswer: answer }));
+      kids.push(chatCardNode(card, { engine: engineOf(), who: view.card && view.card.name, busy: answering.has(card.card_id), edit: edits.get(card.card_id), redraw: drawLive, onAnswer: answer }));
     }
     const active = document.activeElement;
     const hadFocus = !!active && liveBox.contains(active) && String(active.tagName || active.tag || "").toUpperCase() === "TEXTAREA";
@@ -13940,7 +14893,7 @@ async function viewChatDetail(token, id) {
       if (!r || typeof r.seq !== "number" || r.seq <= lastSeq) continue;
       lastSeq = r.seq;
       if (r.kind === "plan_usage") planRecord = r;
-      const line = chatLine(r, { engine: engineOf(), remember: rememberLine, saveSkill: saveSkillLine });
+      const line = chatLine(r, { engine: engineOf(), remember: rememberLine, saveSkill: saveSkillLine, who: view.card && view.card.name });
       if (line) { transcript.append(line); if (line.origin) chatOriginFill(line, line.origin); }
     }
   };
@@ -14016,7 +14969,9 @@ async function viewChatDetail(token, id) {
     if (token !== seq) return;
     memState = state;
     const grouped = !!(view.group || all.group);       // a chat a group opened: a new chat would not be in the group
-    setKids(memoryBox, memoryChatLine(memState, engineOf()), memoryChangedNote(memState, grouped || !card ? null : newChatWithEmployee(card), view.shared));
+    setKids(memoryBox, memoryChatLine(memState, engineOf()));
+    setKids(memoryNoteBox, memoryChangedNote(memState, grouped || !card ? null : newChatWithEmployee(card), view.shared));
+    draw();
     drawShared();
   };
   // P43-4: the one line about the shared folder
@@ -14029,21 +14984,33 @@ async function viewChatDetail(token, id) {
     if (r && token === seq) { limits = r.limits; ledger = r.ledger; draw(); }
   };
 
+  const boxText = () => input.value;       // what is typed in the box (read only; the link to the page that prepares the chat keeps it)
   async function send() {
     const text = input.value;
     if (busy || !text.trim()) return;
-    busy = true; noteText = ""; draw();
+    busy = true; noteText = ""; setKids(limitBox, null); draw();
     try {
       await api.post(`/api/chats/${encodeURIComponent(id)}/messages`, { text });
       input.value = "";
       if (openingNote) openingNote.remove();
       await pollOnce();
     } catch (e) {
-      noteText = e.message;
-      toast(e.message);
+      // The day's limit stopped it (nothing was sent, nothing was spent): said in plain words with the way to the settings; the words stay in the box.
+      if (e.code === "red" || e.code === "budget" || plainWords(e).limit) setKids(limitBox, limitReachedNotice(e.message));
+      else if (CHAT_NOT_READY_CODES.includes(e.code)) await notReadyNote(e);
+      else { noteText = e.message; toast(e.message); }
       if (e.code === "shared_unverified") { sharedUnverified = true; drawShared(); }
     }
     busy = false; if (token === seq) draw();
+  }
+  // The server refused the send because this AI tool cannot chat (not checked for chat, an administrator's policy, not logged in...): the real reason is
+  // read from the chat support now (the server's sentence may name only the first thing it found), said in plain words with one way to the page that
+  // prepares it; the server's own sentence is kept whole behind 「技術細節」, and the words stay in the box.
+  async function notReadyNote(e) {
+    const pid = (view.card && typeof view.card.id === "string" && view.card.id) || (view.chat && view.chat.profile_id) || "";
+    const data = pid ? await api.get("/api/chats").catch(() => null) : null;
+    const st = data ? chatPrepState(homeCardOf(data, pid), data) : null;
+    setKids(limitBox, chatNotReadyNotice(e, pid, st, { scope: "chat", go: "prep-go", keep: boxText }));
   }
   async function stop() {
     try { await api.post(`/api/chats/${encodeURIComponent(id)}/stop`, {}); await pollOnce(); }
@@ -14111,19 +15078,34 @@ async function viewChatDetail(token, id) {
   const groupNote = inGroup ? el("p", { class: "small", "data-chat": "group-note" },
     `這是群組「${typeof inGroup.name === "string" ? inGroup.name : ""}」裡的對話，要說話請到群組裡。 `,
     el("a", { href: `#/chat/group/${encodeURIComponent(inGroup.id)}` }, "回到群組")) : null;
-  const composer = inGroup ? null : el("div", { class: "chat-composer" }, input, el("div", { class: "row" }, sendBtn, stopBtn, skillUseButton(input),
-    el("button", { type: "button", class: "btn small", "data-chat": "delete", on: { click: async () => {
-      if (!(await confirmInPage("刪除聊天", "確定要刪除這個聊天的紀錄嗎？刪除後無法復原；已花的錢仍算在今天的額度裡。員工還在回覆時要先按停止。"
-        + (isAgy() ? CHAT_AGY_DELETE_NOTE : isCodex() ? CHAT_CODEX_DELETE_NOTE : ""), "刪除"))) return;
-      try { await api.del(`/api/chats/${encodeURIComponent(id)}`); stopStream(); toast("聊天已刪除"); location.hash = "#/chat"; }
-      catch (e) { toast(e.message); }
-    } } }, "刪除這個聊天")), sendNote, openingNote);
+  const composer = inGroup ? null : el("div", { class: "chat-composer" }, input,
+    el("div", { class: "row" }, sendBtn, stopBtn, skillUseButton(input)), sendNote, limitBox, openingNote);
   const isCeo = !inGroup && !!all.card && all.card.position === "planner";        // P40: only a CEO's chat has 「請幕僚長安排」
   const chief = isCeo ? chiefDesk(id, all.card) : null;
   const suggest = inGroup ? null : memorySuggestDesk(id);                   // P42-4: 「整理要記住的事」, one-to-one chats only
-  const skillDesk = inGroup ? null : skillSuggestDesk(id);                  // P44-5: 「整理成技能」, one-to-one chats only
-  setKids(main, crumbs([["聊天", "#/chat"], [view.card && view.card.name || id]]), headBox, groupNote, chief ? chief.node : null, suggest ? suggest.node : null, skillDesk ? skillDesk.node : null, noteBox, transcript, liveBox, composer);
-  activeViewCleanup = () => { stopStream(); if (chief) chief.stop(); if (suggest) suggest.stop(); if (skillDesk) skillDesk.stop(); };
+  const skillDesk = inGroup ? null : skillSuggestDesk(id);                  // P44-5: 「整理成常用做法」, one-to-one chats only
+  // Deleting a chat asks first and says what stays; it is only in the 「⋯」 menu, away from the send button.
+  const deleteThisChat = async () => {
+    if (!(await confirmInPage("刪除這個對話", "確定要刪除這個對話的紀錄嗎？刪除後無法復原；已花的錢仍算在今天的額度裡。員工還在回覆時要先按停止。"
+      + (isAgy() ? CHAT_AGY_DELETE_NOTE : isCodex() ? CHAT_CODEX_DELETE_NOTE : ""), "刪除"))) return;
+    try { await api.del(`/api/chats/${encodeURIComponent(id)}`); stopStream(); toast("對話已刪除"); location.hash = "#/chat"; }
+    catch (e) { toast(e.message); }
+  };
+  const menuItems = inGroup ? [] : [
+    chief ? { key: "chief", label: CHIEF_BUTTON, attrs: { "data-chief": "open" }, onPress: () => chief.open(),
+      hints: [{ text: CHIEF_LEDE }, all.card && all.card.tool === "codex" ? { text: CHIEF_CODEX_SENDS, attrs: { "data-chief": "codex-sends" } } : null,
+        all.card && all.card.tool === "agy" ? { text: CHIEF_AGY_SENDS, attrs: { "data-chief": "agy-sends" } } : null].filter(Boolean) } : null,
+    { key: "memory", label: MSUGGEST_BUTTON, hints: [{ text: MSUGGEST_LEDE }], attrs: { "data-msuggest": "open" }, onPress: () => suggest.open() },
+    { key: "skill", label: KSUGGEST_BUTTON, hints: [{ text: KSUGGEST_LEDE }], attrs: { "data-ksuggest": "open" }, onPress: () => skillDesk.open() },
+    { key: "dispatch", label: "所有分配工作", href: "#/dispatch", attrs: { "data-chief": "all" } },
+    { key: "actions", label: "AI 自己做了什麼", href: "#/actions", attrs: { "data-chief": "actions" } },
+    null,
+    { key: "delete", label: "刪除這個對話", danger: true, attrs: { "data-chat": "delete" }, onPress: deleteThisChat },
+  ].filter((x, i, arr) => x !== null || (i > 0 && arr[i - 1] !== null));
+  const more = inGroup ? null : chatMoreMenu(menuItems);
+  setKids(headBox, el("div", { class: "chat-head-top" }, titleBox, more ? more.node : null), lineBox, detailsBox);
+  setKids(main, crumbs([["員工", "#/employees"], [view.card && view.card.name || id]]), headBox, groupNote, chief ? chief.node : null, suggest ? suggest.node : null, skillDesk ? skillDesk.node : null, noteBox, transcript, liveBox, composer);
+  activeViewCleanup = () => { stopStream(); if (more) more.close(); if (chief) chief.stop(); if (suggest) suggest.stop(); if (skillDesk) skillDesk.stop(); };
   stream();
   if (opening) input.focus();
 }
@@ -14307,16 +15289,16 @@ function memorySuggestCard(v, hooks) {
 // The desk on a one-to-one chat page: the button, the dialog, the call that runs and the card of what came back.
 function memorySuggestDesk(chatId) {
   const runs = el("div", { "data-msuggest": "runs" });
-  const button = el("button", { class: "btn", type: "button", "data-msuggest": "open", on: { click: () => openDialog() } }, MSUGGEST_BUTTON);
-  const box = el("section", { class: "panel pad", "data-msuggest": "desk" }, el("div", { class: "row" }, button),
-    el("p", { class: "small" }, MSUGGEST_LEDE), runs);
+  const box = el("div", { class: "chat-results", "data-msuggest": "desk" }, runs);       // P47-4: only what came back; the button is in the 「⋯」 menu (`open`)
+  let opening = false;
   let gone = false, watching = null, mine = null, shown = null, timer = null;
   async function openDialog() {
-    button.disabled = true;
+    if (opening) return;
+    opening = true;
     let pv;
     try { pv = await api.post("/api/memory/suggest/preview", { chat_id: chatId }); }
-    catch (e) { toast(e.message); button.disabled = false; return; }
-    button.disabled = false;
+    catch (e) { toast(e.message); opening = false; return; }
+    opening = false;
     openMemorySuggestDialog(pv, {
       onRecheck: openDialog,
       onStart: async (previewId) => {
@@ -14376,7 +15358,7 @@ function memorySuggestDesk(chatId) {
   }
   timer = setInterval(() => { if (!document.hidden) poll(); }, MSUGGEST_POLL_MS);
   refresh();
-  return { node: box, stop: () => { gone = true; clearInterval(timer); } };
+  return { node: box, open: openDialog, stop: () => { gone = true; clearInterval(timer); } };
 }
 // ---------- end of memory suggestions ----------
 
@@ -14404,12 +15386,12 @@ const GROUP_SHARED_ON_NOTE = "打開之後，這幾位可以在共用資料夾�
 const GROUP_SHARED_CODEX_NOTE = "Codex 員工讀到的檔案會送到 OpenAI。";
 const GROUP_SHARED_AGY_NOTE = "AGY 員工這版不能用共用資料夾，之後 AGY 新版再檢查。有 AGY 員工的群組先不要打開共用資料夾。";
 const GROUP_WHAT = "群組：你說話，被叫到的員工輪流回答，員工動手前都會問你。要大家各寫一份意見、由 CEO 做決定，用「會議」；"
-  + "要員工照順序做完一件事，請 CEO 那邊的幕僚長安排「派工」。";
+  + "要員工照順序做完一件事，請 CEO 那邊的幕僚長安排「分配工作」。";
 const GROUP_CARD_NOTE = "員工想執行指令或改檔案時，卡片會出現在那位員工的名字下面，每一次都要你按「允許這一次」，沒有一次允許好幾張的按鈕。不按的話，5 分鐘後視為拒絕。";
 const GROUP_EDIT_LOCKED = "這一句還沒回完的時候，不能改名、加人、移除或刪除群組。";
 const GROUP_DELETE_NOTE = "會刪掉群組和群組裡每位員工的對話紀錄；已經花的錢照記。Codex 自己保存的對話副本不會被刪。";
 const GROUP_DELETE_AGY_NOTE = "AGY 自己保存的對話副本也不會被刪。";
-const GROUP_RED_NOTE = "今天的額度已用完（亮紅燈），今天不能再送訊息，本機日期隔天才會重算。";
+const GROUP_RED_NOTE = "今天的用量到你設的上限了，今天不能再送訊息。明天 0 點會重新算；要現在繼續，可以調高上限。";
 const GROUP_STATE = {
   idle: ["等你說話", "b-mute"], running: ["進行中", "b-info"], paused: ["暫停了", "b-warn"], readonly: ["紀錄有問題", "b-bad"],
 };
@@ -14438,7 +15420,7 @@ function groupCostText(names, perTurn, dayLeft) {
   if (per === null) return { text: `${who}，最多花多少：未知（讀不到每回合上限）。今天還剩 ${usdDown(left)}。`, over: false };
   const max = per * names.length;
   const over = left !== null && max > left + 1e-9;
-  return { text: `${who}，最多 ${usdUp(max)}，今天還剩 ${usdDown(left)}。` + (over ? "可能做到一半碰到每天上限，VBear 會停下來。" : ""), over };
+  return { text: `${who}，最多 ${usdUp(max)}，今天還剩 ${usdDown(left)}。` + (over ? "可能做到一半碰到花費上限，VBear 會停下來。" : ""), over };
 }
 function groupStateBadge(state) {
   return cardHas(GROUP_STATE, state) ? badge(GROUP_STATE[state][0], GROUP_STATE[state][1]) : badge("狀態不明", "b-mute");
@@ -14485,19 +15467,19 @@ function groupRow(g) {
 function groupItemNode(item, opts) {
   if (!item || typeof item !== "object" || typeof item.kind !== "string") return null;
   const remember = opts && typeof opts.remember === "function" ? opts.remember : null;       // P42-3: 「記住」 beside a spoken line
-  const saveSkill = opts && typeof opts.saveSkill === "function" ? opts.saveSkill : null;   // P44-1: 「存成技能」 beside it
+  const saveSkill = opts && typeof opts.saveSkill === "function" ? opts.saveSkill : null;   // P44-1: 「存成常用做法」 beside it
   const text = (x) => (typeof x === "string" ? x : "");
   const base = { "data-seq": String(item.seq) };
   switch (item.kind) {
     case "said": {
       const names = Array.isArray(item.to_names) ? item.to_names : null;
-      return el("li", { class: "chat-msg chat-me", "data-group": "said", ...base },
+      return el("li", { class: "chat-msg chat-me", "data-group": "said", tabindex: "0", ...base },
         el("div", { class: "chat-who small muted" }, `你對${names ? names.map((n) => "@" + text(n)).join(" ") : "大家"}說・${fmtTime(item.at)}`),
         el("div", { class: "chat-text" }, text(item.text)),
         remember && Number.isInteger(item.round) && text(item.text) ? memoryRememberRow(() => remember(item, "you"), saveSkill ? () => saveSkill(item, "you") : null) : null);
     }
     case "reply":
-      return el("li", { class: "chat-msg chat-them", "data-group": "reply", "data-profile-id": text(item.profile_id), ...base },
+      return el("li", { class: "chat-msg chat-them", "data-group": "reply", "data-profile-id": text(item.profile_id), tabindex: "0", ...base },
         el("div", { class: "chat-who small muted" }, `${text(item.name) || "未知"}（${chatToolName(item.tool)}）・${fmtTime(item.at)}`),
         el("div", { class: "chat-text" }, item.unreadable === true ? "（讀不到這則回覆）" : text(item.text) || "（沒有文字回覆）"),
         el("div", { class: "small muted", "data-group": "cost" }, groupReplyCost(item)),
@@ -14552,7 +15534,7 @@ function openGroupDialog(cards, hooks) {
     const box = el("input", { type: "checkbox", "data-group": "pick", "data-profile-id": c.id, disabled: !ok, "aria-label": `${c.name || c.id}`,
       on: { change: (e) => { if (e.target.checked) chosen.add(c.id); else chosen.delete(c.id); redraw(); } } });
     return el("li", { class: "group-pick" }, el("label", null, box, " ", `${c.name || c.id}（${chatToolName(c.tool)}）`),
-      ok ? null : el("span", { class: "small muted" }, `　不能加入：${c.reason || "這張角色卡現在不能聊天。"}`));
+      ok ? null : el("span", { class: "small muted" }, `　不能加入：${c.reason || "這位員工現在不能聊天。"}`));
   });
   function redraw() {
     const picked = list.filter((c) => chosen.has(c.id));
@@ -14578,7 +15560,7 @@ function openGroupDialog(cards, hooks) {
     el("div", { class: "modal-box", style: "max-width: 560px; max-height: 88vh; overflow-y: auto;" }, head,
       el("p", null, `選 ${GROUP_MIN} 到 ${GROUP_MAX} 位員工，一起聊天。你說話時，他們一位一位照順序回答，後面的人看得到前面的人說了什麼。`),
       el("p", { class: "small", "data-group": "share-note" }, GROUP_SHARE_NOTE),
-      list.length ? el("ul", { class: "group-picks" }, rows) : emptyState("還沒有可以聊天的員工", "先到角色頁做一張角色卡。"),
+      list.length ? el("ul", { class: "group-picks" }, rows) : emptyState("還沒有可以聊天的員工", "先到員工頁新增一位員工。"),
       countBox, mixedBox,
       el("label", { class: "ceo-field" }, el("span", null, "群組的名字"), name),
       el("p", { class: "small" }, el("label", null, sharedBox, " ", GROUP_SHARED_LABEL), " ", el("span", { class: "muted" }, "（預設不勾）")),
@@ -14632,13 +15614,13 @@ function groupMentions(words, names) {
 async function viewGroup(id) {
   const token = seq;
   if (!id || !GROUP_ID_RE.test(id)) {
-    setKids(claim(token), crumbs([["聊天", "#/chat"], ["找不到"]]), notice("bad", "找不到這個群組。"));
+    setKids(claim(token), crumbs([["對話紀錄", "#/chat"], ["找不到"]]), notice("bad", "找不到這個群組。"));
     return;
   }
   let all;
   try { all = await groupReadAll(id); }
   catch (e) {
-    setKids(claim(token), crumbs([["聊天", "#/chat"], ["找不到"]]), notice("bad", e.status === 404 ? "找不到這個群組。" : "讀不到這個群組：" + e.message));
+    setKids(claim(token), crumbs([["對話紀錄", "#/chat"], ["找不到"]]), notice("bad", e.status === 404 ? "找不到這個群組。" : "讀不到這個群組：" + e.message));
     return;
   }
   let sharedOf = await sharedCardsById();     // P43-4: which members may use the shared folder (empty when it cannot be read: no marks)
@@ -14754,7 +15736,10 @@ async function viewGroup(id) {
     sendBtn.disabled = busy || !ok;
     input.disabled = !ok;
     const why = typeof can().why_not_send === "string" && can().why_not_send;
-    setKids(sendNote, noteText || (ok ? "" : red() && !why ? GROUP_RED_NOTE : why || (red() ? GROUP_RED_NOTE : "現在不能送訊息。")));
+    const sendWhy = noteText || (ok ? "" : red() && !why ? GROUP_RED_NOTE : why || (red() ? GROUP_RED_NOTE : "現在不能送訊息。"));
+    // the day's limit stopped it (the server's own sentence, or the lamp the page reads): plain words, a way to the settings, the original kept in 技術細節
+    const limitStop = typeof sendWhy === "string" && sendWhy !== "" && (sendWhy === GROUP_RED_NOTE || plainWords(sendWhy).limit);
+    setKids(sendNote, limitStop ? limitReachedNotice(sendWhy === GROUP_RED_NOTE ? null : sendWhy, { text: GROUP_RED_NOTE }) : sendWhy);
   };
   // who is answering, the words being written and, under that name, the card that asks the person
   const drawLive = () => {
@@ -14936,9 +15921,9 @@ async function viewGroup(id) {
   await readLive();
   draw();
   const what = el("p", { class: "small muted group-what", "data-group": "what" }, GROUP_WHAT, " ",
-    el("a", { href: "#/meetings" }, "前往會議"), "　", el("a", { href: "#/dispatch" }, "前往派工"));
+    el("a", { href: "#/meetings" }, "前往會議"), "　", el("a", { href: "#/dispatch" }, "前往分配工作"));
   const composer = el("div", { class: "chat-composer", "data-group": "composer" }, toBox, input, costBox, el("div", { class: "row" }, sendBtn, skillUseButton(input)), sendNote);
-  setKids(main, el("nav", { class: "crumbs", "aria-label": "路徑" }, el("a", { href: "#/chat" }, "聊天"), " / ", crumbName), what, headBox, manageBox, statusBox, transcript, liveBox, ctlBox, composer);
+  setKids(main, el("nav", { class: "crumbs", "aria-label": "路徑" }, el("a", { href: "#/chat" }, "對話紀錄"), " / ", crumbName), what, headBox, manageBox, statusBox, transcript, liveBox, ctlBox, composer);
   timer = setInterval(() => { if (!document.hidden) pollOnce(); }, GROUP_POLL_MS);
   activeViewCleanup = () => stopPolling();
 }
@@ -14954,7 +15939,7 @@ async function viewGroup(id) {
 // the settings, the limits or the 「自己動手」 ticks, installs a skill or answers a permission card of an employee.
 
 const CHIEF_BUTTON = "請幕僚長安排";
-const CHIEF_LEDE = "想把一件事交給員工做時，按這顆：幕僚長會看你和 CEO 最近的對話，提議要找哪些員工、分幾步做。它只提議，你看過、確認了，VBear 才會動手。";
+const CHIEF_LEDE = "想把一件事交給員工做時，選這一項：幕僚長會看你和 CEO 最近的對話，提議要找哪些員工、分幾步做。它只提議，你看過、確認了，VBear 才會動手。";
 const CHIEF_CODEX_SENDS = "這位 CEO 用的是 Codex：你和它的對話會送給 Claude Code（Anthropic）整理成提議。";
 const CHIEF_AGY_SENDS = "這位 CEO 用的是 AGY：你和它的對話會送給 Claude Code（Anthropic）整理成提議。";
 const CHIEF_NEEDS_TITLE = "幕僚長目前需要 Claude Code";
@@ -14975,13 +15960,13 @@ const DISPATCH_STATE = {
 const DISPATCH_BY = { you: "你確認的", auto1: "自己動手第 1 項", auto2: "自己動手第 2 項", vbear: "VBear" };
 const STEP_END_TEXT = {
   result: "做完了", is_error: "員工回報這一步沒有成功", stopped: "這一回合被停止了", timeout: "等太久，逾時了", process_exit: "員工的程序中途結束了",
-  violation: "員工違反了 VBear 的設定，被停掉了", daemon_restart: "VBear 的背景程序重新啟動，被中斷了", error: "出了錯",
+  violation: "員工違反了 VBear 的設定，被停掉了", daemon_restart: "VBear 的背景程式重新啟動，被中斷了", error: "出了錯",
   not_sent: "訊息沒有送到員工那裡", limit: "用到每回合的花費上限，被停下來了",
 };
-const DISPATCH_SENT_NOTE = "每一步送出後就收不回來；你隨時可以在派工頁按「停止」。員工做事時，每個指令、每個檔案修改照舊都問你。";
+const DISPATCH_SENT_NOTE = "每一步送出後就收不回來；你隨時可以在分配工作頁按「停止」。員工做事時，每個指令、每個檔案修改照舊都問你。";
 const DISPATCH_HANDOFF_NOTE = "第 2 步起，VBear 會把上一步員工的回覆一起送給下一位（標成資料，不是指令）。";
-const DISPATCH_NEW_NOTE = "VBear 會建這位新員工：一律安全模式、不插任何技能，指示是這個職位的固定文字。";
-const DISPATCH_RED_NOTE = "今天的花費已經到每天上限（亮紅燈），現在不能確認派工；明天（本機 0:00 之後）再來。";
+const DISPATCH_NEW_NOTE = "VBear 會建這位新員工：一律「每件事先問我」、不插任何技能，指示是這個職位的固定文字。";
+const DISPATCH_RED_NOTE = "今天的用量到你設的上限了，現在不能確認分配工作。明天 0 點會重新算；要現在繼續，可以調高上限。";
 
 // "US$1.50" from a money text, or "未知". A sum the person may be asked to pay is rounded up and what is left rounded down, so the
 // page never says less than the most or more than what is left.
@@ -15009,7 +15994,7 @@ function dispatchCostText(steps, perTurn, dayLeft) {
   const max = per * steps;
   const over = left !== null && max > left + 1e-9;
   return { text: `最多 ${usdUp(max)}（${steps} 步 × 每回合上限 ${usdUp(per)}），${leftText}。`
-    + (over ? "這比今天還剩的多，可能做到一半碰到每天上限，VBear 會停下來，明天 0:00 後按「繼續」。" : ""), over };
+    + (over ? "這比今天還剩的多，可能做到一半碰到花費上限，VBear 會停下來，明天 0:00 後按「繼續」。" : ""), over };
 }
 function chiefNeedsClaudeNode() {
   return el("div", { class: "notice info", "data-chief": "needs-claude" }, el("span", { class: "ico", "aria-hidden": "true" }, "i"),
@@ -15053,7 +16038,7 @@ function openChiefDialog(pv, hooks) {
     el("div", { class: "modal-box", style: "max-width: 640px; max-height: 88vh; overflow-y: auto;" }, head,
       blockers.map((b) => (b.code === "cli_not_found" ? chiefNeedsClaudeNode() : notice("warn", b.message || "現在不能開始"))),
       el("p", null, `幕僚長會讀你和 CEO 最近的對話（${reads}${pv.omitted_messages ? `，更早的 ${pv.omitted_messages} 則不讀` : ""}），`
-        + `和 ${Number.isInteger(pv.cards) ? pv.cards : "幾"} 位可以派工的員工名單（只有名字、職位、AI 工具、模型，沒有指示和技能）。工具的輸出、檔案內容、你按過的允許都不會送出。`),
+        + `和 ${Number.isInteger(pv.cards) ? pv.cards : "幾"} 位可以分配工作的員工名單（只有名字、職位、AI 工具、模型，沒有指示和技能）。工具的輸出、檔案內容、你按過的允許都不會送出。`),
       el("p", { class: "chief-money", "data-chief": "money" }, el("b", null, `最多花 ${cap}，今天還剩 ${left}。`),
         " 這只是幕僚長想一想的花費；員工之後真的做事，每一步另外算，提議卡上會寫最多多少。"),
       el("p", null, `你和 CEO 的對話會送給 ${typeof pv.sends_to === "string" && pv.sends_to ? pv.sends_to : "Claude Code"}（Anthropic）。它只提議，不會動手；你看過、確認了才會做。`),
@@ -15074,10 +16059,10 @@ function openChiefDialog(pv, hooks) {
 // one that was shown. The card has `update({lamp})` for the caller that learns the lamp later.
 // P43-3: the person's tick on the proposal card. Off unless they put it there; it opens the shared folder for the employees of this
 // dispatch who have it off now and for the ones VBear is about to make. `v.shared.people` is what the server knows of the ones that exist.
-const DISPATCH_SHARED_LABEL = "替這次派工的員工打開共用資料夾";
+const DISPATCH_SHARED_LABEL = "替這次分配工作的員工打開共用資料夾";
 const DISPATCH_SHARED_NOTE = "打開之後，這些員工可以在共用資料夾放檔案給彼此和你，下一步的員工會收到上一步期間新增或改過的檔名（只有檔名）。每一次寫進去都照舊先問你。";
 const DISPATCH_SHARED_CODEX_NOTE = "Codex 員工讀到的檔案會送到 OpenAI。";
-const DISPATCH_SHARED_AGY_NOTE = "AGY 員工這版不能用共用資料夾，之後 AGY 新版再檢查。有 AGY 員工的派工先不要打開共用資料夾。";
+const DISPATCH_SHARED_AGY_NOTE = "AGY 員工這版不能用共用資料夾，之後 AGY 新版再檢查。有 AGY 員工的分配工作先不要打開共用資料夾。";
 function proposalDraft(v) {
   const plan = v.plan && typeof v.plan === "object" ? v.plan : {};
   const cards = Array.isArray(plan.new_cards) ? plan.new_cards : [];
@@ -15106,7 +16091,7 @@ function proposalCard(v, opts = {}) {
   const whyOff = el("p", { class: "small", "data-dispatch": "why-disabled", role: "status" });
   const errorBox = el("div", { class: "prop-error", "data-dispatch": "error", role: "alert" });
   // a proposal with no step (the chief of staff only has questions) has nothing to confirm
-  const confirmBtn = orig.steps.length ? el("button", { class: "btn primary", type: "button", "data-dispatch": "confirm", on: { click: () => confirmPlan() } }, "確認派工") : null;
+  const confirmBtn = orig.steps.length ? el("button", { class: "btn primary", type: "button", "data-dispatch": "confirm", on: { click: () => confirmPlan() } }, "確認分配工作") : null;
   const origCard = (ref) => orig.cards.find((c) => c.ref === ref);
   const usedRefs = () => new Set(draft.steps.map((s) => s.who));
   const liveCards = () => draft.cards.filter((c) => !c.gone);
@@ -15183,7 +16168,7 @@ function proposalCard(v, opts = {}) {
     const sp = sharedPlan();
     const agyShared = sharedOn && !!sp && sp.agy === true && (sp.off.length > 0 || sp.fresh.length > 0);
     if (confirmBtn) confirmBtn.disabled = busy || red || bad.length > 0 || agyShared || !(v.can && v.can.confirm);
-    setKids(whyOff, !confirmBtn ? "" : red ? DISPATCH_RED_NOTE : bad.length ? bad[0] : agyShared ? DISPATCH_SHARED_AGY_NOTE : "");
+    setKids(whyOff, !confirmBtn ? "" : red ? limitReachedNotice(null, { text: DISPATCH_RED_NOTE }) : bad.length ? bad[0] : agyShared ? DISPATCH_SHARED_AGY_NOTE : "");
   };
   const redraw = () => { draw(); derive(); };
 
@@ -15207,7 +16192,7 @@ function proposalCard(v, opts = {}) {
       el("div", null, el("strong", null, c.name || "（還沒取名）"), " ", badge("新建", "b-info"), " ", mark(() => cardChanged(c))),
       team.find((t) => t.who === c.ref) && team.find((t) => t.who === c.ref).why ? el("p", { class: "small" }, team.find((t) => t.who === c.ref).why) : null,
       el("div", { class: "prop-fields" }, field("name", "名字", name), field("position", "職位", position), field("tool", "AI 工具", tool), model ? field("model_alias", "模型", model) : null),
-      locked ? el("p", { class: "small muted" }, "這位新員工已經建好了（自己動手第 1 項），不能再改；要停用請到派工頁撤回。")
+      locked ? el("p", { class: "small muted" }, "這位新員工已經建好了（自己動手第 1 項），不能再改；要停用請到分配工作頁撤回。")
         : el("p", { class: "small muted" }, DISPATCH_NEW_NOTE),
       locked ? null : el("button", { class: "btn small", type: "button", on: { click: () => { c.gone = true; redraw(); } } }, "不要這位新員工"));
   };
@@ -15267,7 +16252,7 @@ function proposalCard(v, opts = {}) {
     busy = true; errorText = ""; setKids(errorBox, null); derive();
     try {
       const res = await api.post(`/api/dispatch/${encodeURIComponent(v.id)}/confirm`, { ...payload(), ...sharedFields() });
-      toast("派工開始了");
+      toast("分配工作開始了");
       if (opts.onDone) opts.onDone(res);
     } catch (e) {
       busy = false;
@@ -15286,9 +16271,9 @@ function proposalCard(v, opts = {}) {
     el("div", { class: "prop-head" }, el("h2", null, "幕僚長的提議"), " ", dispatchStateBadge("proposed"), " ", cardMark),
     editedNote, body,
     el("p", { class: "small muted", "data-dispatch": "what-next" }, (Array.isArray(v.plan && v.plan.new_cards) ? v.plan.new_cards : []).some((c) => !made.has(c.ref))
-      ? "按「確認派工」之後，VBear 會建上面的新員工（安全模式）、建一張任務卡，再照順序把每一步送給員工。"
-      : made.size ? "新員工已經建好了（自己動手第 1 項，安全模式）。按「確認派工」之後，VBear 建一張任務卡，再照順序把每一步送給員工。"
-        : "按「確認派工」之後，VBear 建一張任務卡，再照順序把每一步送給員工。"),
+      ? "按「確認分配工作」之後，VBear 會建上面的新員工（「每件事先問我」）、建一個專案，再照順序把每一步送給員工。"
+      : made.size ? "新員工已經建好了（自己動手第 1 項，「每件事先問我」）。按「確認分配工作」之後，VBear 建一個專案，再照順序把每一步送給員工。"
+        : "按「確認分配工作」之後，VBear 建一個專案，再照順序把每一步送給員工。"),
     sharedBox, costBox, spent ? el("p", { class: "small muted", "data-dispatch": "chief-cost" },
       `幕僚長這次花了 ${usdUp(dispatchNum(spent.spent_usd))}（${spent.cost_source === "worst_case" ? "沒有回報，以上限計" : "Claude Code 回報"}）。`) : null,
     whyOff, errorBox,
@@ -15302,26 +16287,21 @@ function proposalCard(v, opts = {}) {
 // The desk on the CEO's chat page: the button, the chief of staff's runs on this chat and the dispatches made from them. `card` is
 // the chat's card (its tool decides whether the Codex sentence is beside the button).
 function chiefDesk(chatId, chatCard) {
-  const codex = !!chatCard && chatCard.tool === "codex";
-  const agy = !!chatCard && chatCard.tool === "agy";
   const runs = el("div", { class: "chief-runs", "data-chief": "runs" });
-  const button = el("button", { class: "btn primary", type: "button", "data-chief": "open", on: { click: () => openDialog() } }, CHIEF_BUTTON);
-  const box = el("section", { class: "panel pad chief-desk", "data-chief": "desk" },
-    el("div", { class: "row" }, button, el("a", { class: "btn small", href: "#/dispatch", "data-chief": "all" }, "所有派工"),
-      el("a", { class: "btn small", href: "#/actions", "data-chief": "actions" }, "AI 自己做了什麼")),
-    el("p", { class: "small" }, CHIEF_LEDE),
-    codex ? el("p", { class: "small", "data-chief": "codex-sends" }, CHIEF_CODEX_SENDS) : null,
-    agy ? el("p", { class: "small", "data-chief": "agy-sends" }, CHIEF_AGY_SENDS) : null,
-    runs);
+  // P47-4: the desk is only what came back (the runs and the proposal cards); it is empty while there is nothing. The button, the
+  // sentence about the money and the two links live in the 「⋯」 menu of the chat page (chatMoreMenu), which calls `open`.
+  const box = el("div", { class: "chat-results", "data-chief": "desk" }, runs);
+  let opening = false;
   const cards = new Map();                 // dispatch id -> { sha, node }: a card the person may be editing is kept, not rebuilt
   let gone = false, timer = null, drawing = false;
   const mine = (list, key) => (Array.isArray(list && list[key]) ? list[key].filter((x) => x && typeof x === "object" && !x.blocked && x.chat_id === chatId) : []);
   async function openDialog() {
-    button.disabled = true;
+    if (opening) return;
+    opening = true;
     let pv;
     try { pv = await api.get(`/api/chief/preview?chat_id=${encodeURIComponent(chatId)}`); }
-    catch (e) { toast(e.message); button.disabled = false; return; }
-    button.disabled = false;
+    catch (e) { toast(e.message); opening = false; return; }
+    opening = false;
     openChiefDialog(pv, {
       onRecheck: openDialog,
       onStart: async (previewId, note) => {
@@ -15385,7 +16365,7 @@ function chiefDesk(chatId, chatCard) {
         cards.set(r.id, { sha: v.proposal_sha, node });
         nodes.push(node);
       }
-      if (dispatches.length > 3) nodes.push(el("p", { class: "small" }, el("a", { href: "#/dispatch" }, `還有 ${dispatches.length - 3} 份較舊的派工 →`)));
+      if (dispatches.length > 3) nodes.push(el("p", { class: "small" }, el("a", { href: "#/dispatch" }, `還有 ${dispatches.length - 3} 份較舊的分配工作 →`)));
       const active = document.activeElement;
       if (active && runs.contains(active) && ["TEXTAREA", "INPUT", "SELECT"].includes(String(active.tagName || active.tag || "").toUpperCase())) {
         for (const [, k] of cards) k.node.update({ lamp });      // the person is typing: nothing is rebuilt under their hands
@@ -15397,7 +16377,7 @@ function chiefDesk(chatId, chatCard) {
   const stop = () => { gone = true; clearInterval(timer); };
   timer = setInterval(() => { if (!document.hidden) refresh(); }, CHIEF_POLL_MS);
   refresh();
-  return { node: box, refresh, stop };
+  return { node: box, open: openDialog, refresh, stop };
 }
 
 // ---- the dispatch pages ------------------------------------------------------------------------------------------------------------
@@ -15430,7 +16410,7 @@ function dispatchContinueNote(v) {
     const next = steps.find((s) => s.seq > bad.seq && s.state === "pending");
     return next
       ? `按「繼續」不會重做第 ${bad.seq} 步，會直接做第 ${next.seq} 步（它會收到第 ${bad.seq} 步不完整的回覆，並被告知可能不完整）。要重做第 ${bad.seq} 步，請到那位員工的聊天自己再說一次。`
-      : `第 ${bad.seq} 步是最後一步，按「繼續」不會重做它，只會把這份派工標成做完了。要重做，請到那位員工的聊天自己再說一次。`;
+      : `第 ${bad.seq} 步是最後一步，按「繼續」不會重做它，只會把這份分配工作標成做完了。要重做，請到那位員工的聊天自己再說一次。`;
   }
   const next = steps.find((s) => s.state === "pending");
   return next ? `按「繼續」會接著送第 ${next.seq} 步。` : "";
@@ -15461,8 +16441,8 @@ async function viewDispatch(id) {
 
 function dispatchRow(r) {
   if (r.blocked) {
-    return el("li", { class: "mt-row card", "data-dispatch": "row" }, el("strong", null, `無法讀取的派工紀錄 ${r.id}`), badge("無法讀取", "b-bad"),
-      el("span", { class: "small muted" }, r.error || "這份派工的紀錄讀不出來，已留在清單裡，沒有被刪掉。"));
+    return el("li", { class: "mt-row card", "data-dispatch": "row" }, el("strong", null, `無法讀取的分配工作紀錄 ${r.id}`), badge("無法讀取", "b-bad"),
+      el("span", { class: "small muted" }, r.error || "這份分配工作的紀錄讀不出來，已留在清單裡，沒有被刪掉。"));
   }
   return el("li", { class: "mt-row card", "data-dispatch": "row", "data-dispatch-id": r.id },
     el("a", { class: "mt-row-title", href: `#/dispatch/${encodeURIComponent(r.id)}` }, r.title || "（沒有名稱）"), dispatchStateBadge(r.state),
@@ -15472,19 +16452,19 @@ function dispatchRow(r) {
 async function viewDispatchList(token) {
   let data;
   try { data = await api.get("/api/dispatch"); }
-  catch (e) { setKids(claim(token), el("h1", null, "派工"), notice("bad", "讀不到派工：" + e.message)); return; }
+  catch (e) { setKids(claim(token), el("h1", null, "分配工作"), notice("bad", "讀不到分配工作：" + e.message)); return; }
   const main = claim(token);
   const box = el("div", { "data-dispatch": "list" });
   const draw = (d) => {
     const rows = d && Array.isArray(d.dispatch) ? d.dispatch.filter((r) => r && typeof r === "object") : [];
     setKids(box, rows.length ? el("ul", { class: "mt-list" }, rows.map(dispatchRow))
-      : emptyState("還沒有派工", "在和 CEO 聊天的頁面按「請幕僚長安排」，幕僚長提議、你確認之後，派工就會出現在這裡。"));
+      : emptyState("還沒有分配工作", "在和 CEO 聊天的頁面按「請幕僚長安排」，幕僚長提議、你確認之後，分配工作就會出現在這裡。"));
   };
   draw(data);
   dispatchTick = async () => { try { draw(await api.get("/api/dispatch")); } catch (_) { /* the next tick tries again */ } };
   activeViewCleanup = () => { dispatchTick = null; };
-  setKids(main, el("h1", null, "派工"),
-    el("p", { class: "lede" }, "幕僚長提議、你確認之後，VBear 把一件工作分成幾步，照順序在員工的聊天裡交給他們做。這裡看每一份派工做到哪裡。"),
+  setKids(main, el("h1", null, "分配工作"),
+    el("p", { class: "lede" }, "幕僚長提議、你確認之後，VBear 把一件工作分成幾步，照順序在員工的聊天裡交給他們做。這裡看每一份分配工作做到哪裡。"),
     el("p", null, el("a", { class: "btn small", href: "#/actions", "data-dispatch": "actions-link" }, "AI 自己做了什麼"), " ", el("span", { class: "small muted" }, DISPATCH_POLL_NOTE)),
     box);
 }
@@ -15492,7 +16472,7 @@ async function viewDispatchList(token) {
 async function viewDispatchDetail(token, id) {
   let cur;
   try { cur = await api.get(`/api/dispatch/${encodeURIComponent(id)}`); }
-  catch (e) { setKids(claim(token), crumbs([["派工", "#/dispatch"], ["找不到"]]), notice("bad", e.status === 404 ? e.message : "讀不到這份派工：" + e.message)); return; }
+  catch (e) { setKids(claim(token), crumbs([["分配工作", "#/dispatch"], ["找不到"]]), notice("bad", e.status === 404 ? e.message : "讀不到這份分配工作：" + e.message)); return; }
   const main = claim(token);
   const root = el("div", { "data-dispatch": "detail" });
   let lamp = null, waiting = new Set(), proposal = null, proposalSha = "", chiefView = null, shownKey = "";
@@ -15517,9 +16497,9 @@ async function viewDispatchDetail(token, id) {
     shownKey = key;
     const v = cur;
     const plan = v.plan || {};
-    const head = el("div", { class: "chat-head" }, el("h1", null, plan.title || "派工"),
+    const head = el("div", { class: "chat-head" }, el("h1", null, plan.title || "分配工作"),
       el("p", { class: "small" }, dispatchStateBadge(v.state), v.started_by ? el("span", null, " ", dispatchByText(v.started_by)) : null, " ", el("span", { class: "muted" }, `建立於 ${fmtTime(v.created_at)}`)));
-    const crumb = crumbs([["派工", "#/dispatch"], [plan.title || id]]);
+    const crumb = crumbs([["分配工作", "#/dispatch"], [plan.title || id]]);
     if (v.state === "proposed") {
       if (!proposal || proposalSha !== v.proposal_sha) {
         proposalSha = v.proposal_sha;
@@ -15538,35 +16518,35 @@ async function viewDispatchDetail(token, id) {
     const buttons = [
       can.continue ? el("button", { class: "btn primary", type: "button", "data-dispatch": "continue", on: { click: () => act("continue", {}, "繼續做了") } }, "繼續") : null,
       can.stop ? el("button", { class: "btn", type: "button", "data-dispatch": "stop", on: { click: async () => {
-        if (await confirmInPage("停止這份派工", "停止後，VBear 不會再送任何一步；正在做的那一回合會被停下來。已經送出的訊息收不回來。", "停止")) await act("stop", {}, "已停止");
+        if (await confirmInPage("停止這份分配工作", "停止後，VBear 不會再送任何一步；正在做的那一回合會被停下來。已經送出的訊息收不回來。", "停止")) await act("stop", {}, "已停止");
       } } }, "停止") : null,
       can.delete ? el("button", { class: "btn", type: "button", "data-dispatch": "delete", on: { click: async () => {
-        if (!(await confirmInPage("刪除這份派工", "只刪派工和幕僚長這一次的紀錄；員工、任務卡和聊天都留著。刪掉後不能復原。", "刪除"))) return;
+        if (!(await confirmInPage("刪除這份分配工作", "只刪分配工作和幕僚長這一次的紀錄；員工、專案和聊天都留著。刪掉後不能復原。", "刪除"))) return;
         try { await api.post(`/api/dispatch/${encodeURIComponent(id)}/delete`, {}); toast("已刪除"); location.hash = "#/dispatch"; } catch (e) { toast(e.message); }
-      } } }, "刪除這份派工") : null,
+      } } }, "刪除這份分配工作") : null,
     ].filter(Boolean);
     setKids(root, crumb, head,
       v.pause ? notice("warn", el("div", { "data-dispatch": "pause" }, el("b", null, "暫停了　"), v.pause.text || "原因不明。",
         dispatchCountdown(v.pause),
         can.continue && dispatchContinueNote(v) ? el("p", { class: "small", style: "margin:6px 0 0", "data-dispatch": "continue-note" }, dispatchContinueNote(v)) : null)) : null,
       v.state === "done" ? notice("info", "每一步都做完了。") : null,
-      v.state === "stopped" ? notice("info", "你停止了這份派工。已經送出的訊息收不回來，沒有再送新的。") : null,
+      v.state === "stopped" ? notice("info", "你停止了這份分配工作。已經送出的訊息收不回來，沒有再送新的。") : null,
       v.state === "dismissed" ? notice("info", "你沒有採用這份提議，什麼都沒有發生（幕僚長那一次的花費照記）。") : null,
       buttons.length ? el("div", { class: "row" }, buttons) : null,
       plan.goal ? el("p", { "data-dispatch": "goal" }, el("span", { class: "muted" }, "目標："), plan.goal) : null,
       el("section", { class: "section" }, sectionHead("每一步", DISPATCH_POLL_NOTE), el("ol", { class: "disp-steps" }, steps.map((s) => dispatchStepNode(s, { waiting })))),
-      el("p", { class: "small", "data-dispatch": "money" }, `這份派工${cost.text}`, steps.some((s) => dispatchNum(s.cost_usd) !== null) ? ` 已花約 ${usdUp(spent)}（各步的估值加起來）。` : ""),
+      el("p", { class: "small", "data-dispatch": "money" }, `這份分配工作${cost.text}`, steps.some((s) => dispatchNum(s.cost_usd) !== null) ? ` 已花約 ${usdUp(spent)}（各步的估值加起來）。` : ""),
       el("p", { class: "small muted" }, DISPATCH_SENT_NOTE),
-      made.length ? el("section", { class: "section", "data-dispatch": "made" }, sectionHead("VBear 為這份派工建的員工", "停用不是刪除，聊天紀錄都留著"),
+      made.length ? el("section", { class: "section", "data-dispatch": "made" }, sectionHead("VBear 為這份分配工作建的員工", "停用不是刪除，聊天紀錄都留著"),
         el("ul", { class: "mt-list" }, made.map((c) => el("li", { class: "mt-row card", "data-dispatch": "made-row", "data-profile": c.profile_id },
           el("strong", null, c.name || c.ref), c.withdrawn ? badge("已撤回（停用）", "b-mute") : badge("使用中", "b-ok"),
           c.withdrawn || !(Array.isArray(can.withdraw) && can.withdraw.includes(c.profile_id)) ? null
             : el("button", { class: "btn small", type: "button", "data-dispatch": "withdraw", on: { click: async () => {
-              if (await confirmInPage(`撤回「${c.name || c.ref}」`, "只是把這張角色卡停用，不會刪除，聊天紀錄都留著；之後可以到角色卡池再啟用。員工正在做事時不能撤回。", "撤回")) await act("withdraw-card", { profile_id: c.profile_id }, "已撤回");
+              if (await confirmInPage(`撤回「${c.name || c.ref}」`, "只是把這位員工停用，不會刪除，聊天紀錄都留著；之後可以到員工頁再啟用。員工正在做事時不能撤回。", "撤回")) await act("withdraw-card", { profile_id: c.profile_id }, "已撤回");
             } } }, "撤回")))))
         : null,
-      v.task_id ? el("p", { class: "small" }, "任務卡：", el("a", { href: `#/workbench?task=${encodeURIComponent(v.task_id)}`, "data-dispatch": "task-link" }, "看這份派工建的任務卡")) : null,
-      events.length ? el("details", { class: "fold section" }, el("summary", null, `這份派工做過的事（${events.length} 筆）`),
+      v.task_id ? el("p", { class: "small" }, "專案：", el("a", { href: `#/workbench?task=${encodeURIComponent(v.task_id)}`, "data-dispatch": "task-link" }, "看這份分配工作建的專案")) : null,
+      events.length ? el("details", { class: "fold section" }, el("summary", null, `這份分配工作做過的事（${events.length} 筆）`),
         el("ul", { class: "fold-body" }, events.map(dispatchEventNode)),
         el("p", { class: "small" }, el("a", { href: "#/actions" }, "到「AI 自己做了什麼」看全部"))) : null);
   }
@@ -15575,7 +16555,7 @@ async function viewDispatchDetail(token, id) {
   draw(true);
   dispatchTick = async () => {
     try { cur = await api.get(`/api/dispatch/${encodeURIComponent(id)}`); await sideAndDraw(); }
-    catch (e) { if (e.status === 404) setKids(root, crumbs([["派工", "#/dispatch"], ["已刪除"]]), notice("info", "這份派工已經被刪除。")); }
+    catch (e) { if (e.status === 404) setKids(root, crumbs([["分配工作", "#/dispatch"], ["已刪除"]]), notice("info", "這份分配工作已經被刪除。")); }
   };
   activeViewCleanup = () => { dispatchTick = null; };
   setKids(main, root);
@@ -15600,7 +16580,7 @@ async function viewActions() {
     const unreadable = d && Number.isInteger(d.unreadable) ? d.unreadable : 0;
     const stopShown = new Set();
     setKids(box,
-      unreadable ? notice("warn", `有 ${unreadable} 份派工的紀錄讀不出來，沒有列在這裡（它們還在，沒有被刪掉）。`) : null,
+      unreadable ? notice("warn", `有 ${unreadable} 份分配工作的紀錄讀不出來，沒有列在這裡（它們還在，沒有被刪掉）。`) : null,
       rows.length ? el("ul", { class: "mt-list" }, rows.map((r) => {
         const auto = r.by === "auto1" || r.by === "auto2" || r.by === "auto3" || r.by === "auto5";
         const routineRow = r.kind === "routine_started";
@@ -15613,12 +16593,12 @@ async function viewActions() {
           r.kind === "step_sent" ? el("span", { class: "small muted", "data-action": "sent-note" }, r.can_stop ? "收不回來；可以按「停止」。" : "收不回來。") : null,
           routineRow
             ? (typeof r.chat_id === "string" && r.chat_id ? el("a", { class: "small", href: `#/chat/${encodeURIComponent(r.chat_id)}`, "data-action": "routine-chat" }, "看這個聊天") : null)
-            : el("a", { class: "small", href: `#/dispatch/${encodeURIComponent(r.dispatch_id)}` }, "看這份派工"),
+            : el("a", { class: "small", href: `#/dispatch/${encodeURIComponent(r.dispatch_id)}` }, "看這份分配工作"),
           stopHere ? el("button", { class: "btn small", type: "button", "data-action": "stop", on: { click: async () => {
-            if (await confirmInPage("停止這份派工", "停止後，VBear 不會再送任何一步；正在做的那一回合會被停下來。已經送出的訊息收不回來。", "停止")) await act(r.dispatch_id, "stop", {}, "已停止");
+            if (await confirmInPage("停止這份分配工作", "停止後，VBear 不會再送任何一步；正在做的那一回合會被停下來。已經送出的訊息收不回來。", "停止")) await act(r.dispatch_id, "stop", {}, "已停止");
           } } }, "停止") : null,
           r.can_withdraw === true && typeof r.profile_id === "string" ? el("button", { class: "btn small", type: "button", "data-action": "withdraw", on: { click: async () => {
-            if (await confirmInPage("撤回這位員工", "只是把這張角色卡停用，不會刪除，聊天紀錄都留著；之後可以到角色卡池再啟用。員工正在做事時不能撤回。", "撤回")) await act(r.dispatch_id, "withdraw-card", { profile_id: r.profile_id }, "已撤回");
+            if (await confirmInPage("撤回這位員工", "只是把這位員工停用，不會刪除，聊天紀錄都留著；之後可以到員工頁再啟用。員工正在做事時不能撤回。", "撤回")) await act(r.dispatch_id, "withdraw-card", { profile_id: r.profile_id }, "已撤回");
           } } }, "撤回") : null);
       })) : emptyState("AI 還沒有自己做過任何事", "幕僚長提議、你確認，或你打開「自己動手」之後，每一件事都會列在這裡。"));
   };
@@ -15626,8 +16606,8 @@ async function viewActions() {
   actionsTick = async () => { try { draw(await api.get("/api/actions")); } catch (_) { /* the next tick tries again */ } };
   activeViewCleanup = () => { actionsTick = null; };
   setKids(main, el("h1", null, "AI 自己做了什麼"),
-    el("p", { class: "lede" }, "幕僚長和派工做過的每一件事都列在這裡：做了什麼、是誰決定的（你確認的，或「自己動手」第幾項）。可以停止進行中的派工，也可以把 VBear 建的員工撤回（停用，不會刪除）。已經送出的訊息收不回來。"),
-    el("p", null, el("a", { class: "btn small", href: "#/dispatch", "data-actions": "dispatch-link" }, "所有派工"), " ",
+    el("p", { class: "lede" }, "幕僚長和分配工作做過的每一件事都列在這裡：做了什麼、是誰決定的（你確認的，或「自己動手」第幾項）。可以停止進行中的分配工作，也可以把 VBear 建的員工撤回（停用，不會刪除）。已經送出的訊息收不回來。"),
+    el("p", null, el("a", { class: "btn small", href: "#/dispatch", "data-actions": "dispatch-link" }, "所有分配工作"), " ",
       el("a", { class: "btn small", href: "#/settings", "data-actions": "settings-link" }, "到設定看「自己動手」"), " ", el("span", { class: "small muted" }, DISPATCH_POLL_NOTE)),
     box);
 }
@@ -15650,9 +16630,9 @@ function dispatchTurnCard(r) {
   return el("article", { class: "card quest quest-turn", "data-quest": "dispatch", "data-dispatch": "board-card", "data-dispatch-id": r.id },
     el("div", { class: "card-top" },
       el("div", { style: "min-width:0" },
-        el("div", { class: "card-title" }, el("a", { class: "quest-link", href: `#/dispatch/${encodeURIComponent(r.id)}` }, `${proposed ? "派工提議" : "派工暫停"}：${r.title || "（沒有名稱）"}`)),
-        el("div", { class: "card-sub" }, proposed ? "幕僚長提出了一份派工提議，等你看過、確認" : "這份派工暫停了，原因在派工頁；按「繼續」才會接著做")),
-      el("span", { class: "badge b-warn quest-type" }, questIcon("turn"), proposed ? "派工提議" : "派工暫停")),
+        el("div", { class: "card-title" }, el("a", { class: "quest-link", href: `#/dispatch/${encodeURIComponent(r.id)}` }, `${proposed ? "分配工作提議" : "分配工作暫停"}：${r.title || "（沒有名稱）"}`)),
+        el("div", { class: "card-sub" }, proposed ? "幕僚長提出了一份分配工作提議，等你看過、確認" : "這份分配工作暫停了，原因在分配工作頁；按「繼續」才會接著做")),
+      el("span", { class: "badge b-warn quest-type" }, questIcon("turn"), proposed ? "分配工作提議" : "分配工作暫停")),
     el("div", { class: "stat-line" }, el("span", null, `${r.steps} 步`)),
     el("div", { class: "quest-go" }, "前往處理 →"));
 }
@@ -15689,7 +16669,7 @@ function chatOriginOf(rec) {
 function chatOriginKids(origin, info) {
   const title = info && typeof info.title === "string" && info.title ? `「${info.title}」` : "";
   const by = info && info.by_text ? `（${info.by_text}）` : "";
-  return [`這則是 VBear 依派工${title}送出的第 ${origin.step} 步${by}，不是你打的。 `, el("a", { href: `#/dispatch/${encodeURIComponent(origin.dispatch)}` }, "看這份派工")];
+  return [`這則是 VBear 依分配工作${title}送出的第 ${origin.step} 步${by}，不是你打的。 `, el("a", { href: `#/dispatch/${encodeURIComponent(origin.dispatch)}` }, "看這份分配工作")];
 }
 function chatOriginNote(origin, info) {
   return el("div", { class: "chat-origin small", "data-chat": "origin", "data-dispatch-id": origin.dispatch }, chatOriginKids(origin, info));
@@ -15709,7 +16689,7 @@ function chatOriginFill(line, origin) {
 // A dispatch or a group that stopped for a limit (the day's money, or an AI tool's plan) shows when it can go on, and the line over every page lists
 // them. The words come from the server (`countdown.text`, a row's `text`); this block only draws what it is given, makes no request, and sets every name
 // and word as text. A dispatch goes on by itself only when 「自己動手」 item 5 is ticked, a group never does, and the page says both.
-const COUNTDOWN_DISPATCH_NOTE = "設定頁勾了「自己動手」第 5 項時，到了恢復時間 VBear 會自己按「繼續」（每份派工最多 3 次）；沒勾，就由你按「繼續」。";
+const COUNTDOWN_DISPATCH_NOTE = "設定頁勾了「自己動手」第 5 項時，到了恢復時間 VBear 會自己按「繼續」（每份分配工作最多 3 次）；沒勾，就由你按「繼續」。";
 const COUNTDOWN_UNKNOWN_NOTE = "沒有恢復時間，VBear 不會自己接續；等你確認 AI 工具可以用了，再按「繼續」。";
 const COUNTDOWN_GROUP_NOTE = "群組不會自己接續，到時候請你按「繼續」。";
 function countdownNode(cd, note) {
@@ -15726,7 +16706,7 @@ function resumeBarRows(rows) {
   const out = [];
   for (const r of Array.isArray(rows) ? rows : []) {
     if (!r || typeof r !== "object" || typeof r.name !== "string" || typeof r.text !== "string") continue;
-    if (r.kind === "dispatch_resume" && typeof r.dispatch_id === "string") out.push({ text: `派工「${r.name}」${r.text}`, href: `#/dispatch/${encodeURIComponent(r.dispatch_id)}` });
+    if (r.kind === "dispatch_resume" && typeof r.dispatch_id === "string") out.push({ text: `分配工作「${r.name}」${r.text}`, href: `#/dispatch/${encodeURIComponent(r.dispatch_id)}` });
     else if (r.kind === "group_resume" && typeof r.group_id === "string") out.push({ text: `群組「${r.name}」${r.text}`, href: `#/chat/group/${encodeURIComponent(r.group_id)}` });
   }
   return out;
@@ -15746,13 +16726,13 @@ function resumeBarRows(rows) {
 const MEMORY_KINDS = [["about_you", "關於你"], ["work", "你的工作"], ["decision", "決定"]];
 const MEMORY_MAX_TEXT = 200;
 const MEMORY_WHERE = "員工開新程序時，記憶會跟著送給 Anthropic（Claude Code 的員工）、OpenAI（Codex 的員工）或 Google（AGY 的員工）。不要寫密碼、帳號、卡號；VBear 看到像這樣的內容會擋下。";
-const MEMORY_SPLIT = "只有這位員工要照做的，寫在角色卡的固定指示；換一位員工也該知道的，放記憶。";
+const MEMORY_SPLIT = "只有這位員工要照做的，寫在員工的固定指示；換一位員工也該知道的，放記憶。";
 const MEMORY_COST = "記憶越長，員工每次開新程序會多花一點。";
 const MEMORY_DELETE_NOTE = "已經送出的對話，Claude Code 與 Codex 自己保存的副本不會因此刪掉。AGY 自己保存的副本也一樣。";
 const MEMORY_BLOCKED = "這一條現在不能送出（看起來有密碼、金鑰或帳號一類的內容），員工的聊天會被擋下。請刪掉它。";
 const MEMORY_REMEMBER_SENDS = "存了以後，每位員工開新聊天時都會看到（在記憶頁關掉的員工除外）。記憶會跟著送給 Anthropic（Claude Code 的員工）、OpenAI（Codex 的員工，要先在記憶頁打開）或 Google（AGY 的員工，要先在記憶頁打開）。不要存密碼、帳號、卡號。";
 const MEMORY_EMPLOYEE_WORDS = "這段是員工說的，存了以後每位員工開新聊天都會看到，請確定內容正確。";
-const MEMORY_TERMINAL = "在終端機（完整模式）出發時不帶記憶。";
+const MEMORY_TERMINAL = "在指令視窗（「完全交給他（有風險）」）開始工作時不帶記憶。";
 const MEMORY_CARDS_NOTE = "Claude Code 的員工預設帶記憶，記憶會送給 Anthropic。Codex 的員工預設不帶；打開後，記憶會送給 OpenAI。AGY 的員工預設不帶；打開後，記憶內容會送到 Google。員工說「我記住了」不會存任何東西，只有你按「存」才算數。";
 const MEMORY_CHAT_COMPANY = { "claude-chat": "Anthropic", "codex-chat": "OpenAI", "agy-chat": "Google" };
 // The company whose employee needs the person's yes before the memory goes along (the server refuses without it): the word the box says.
@@ -15920,7 +16900,7 @@ function openMemoryRemember(o) {
 function memoryRememberRow(onPress, onSkill) {
   return el("div", { class: "chat-remember" },
     el("button", { type: "button", class: "btn small", "data-memory": "remember", "aria-label": "記住這句話", on: { click: onPress } }, "記住"),
-    typeof onSkill === "function" ? el("button", { type: "button", class: "btn small", "data-skill": "save-line", "aria-label": "把這句話存成技能", on: { click: onSkill } }, "存成技能") : null);
+    typeof onSkill === "function" ? el("button", { type: "button", class: "btn small", "data-skill": "save-line", "aria-label": "把這句話存成常用做法", on: { click: onSkill } }, "存成常用做法") : null);
 }
 
 // A dialog that wants a word typed before its button works. Resolves true on the button, false on 取消 or Escape.
@@ -16126,12 +17106,12 @@ async function viewMemory() {
 const SKILL_MAX_NAME = 40;
 const SKILL_MAX_TEXT = 4000;
 const SKILL_LEAD = "這裡是你存在 VBear 的做法。用的時候會變成你對員工說的話；員工照舊每個指令、每個檔案修改都會問你。";
-const SKILL_NOT_CARDS = "『技能庫』列的是 AI 工具自己的技能檔，是另一回事。";
+const SKILL_NOT_CARDS = "『AI 工具的外掛清單』列的是 AI 工具自己的技能檔，是另一回事。";
 const SKILL_SENDS = "存的做法留在這台電腦。用的時候，它會放進輸入框，你看過、可以改，按送出才會送給員工（和你打字一樣）。不要存密碼、帳號、卡號。";
-const SKILL_EMPLOYEE_WORDS = "這段是員工寫的，存成技能後，你用它時會變成你對員工說的話。";
+const SKILL_EMPLOYEE_WORDS = "這段是員工寫的，存成常用做法後，你用它時會變成你對員工說的話。";
 const SKILL_HOW = { typed: "你寫的", said: "從你說的話存的", reply: "從員工說的話存的", suggested: "整理提議、你確認的" };
-const SKILL_NONE = "還沒有存任何技能。";
-const SKILL_UNREADABLE = "技能的檔案有問題，VBear 先不碰它：現在看不到也存不了技能，聊天照常。";
+const SKILL_NONE = "還沒有存任何常用做法。";
+const SKILL_UNREADABLE = "常用做法的檔案有問題，VBear 先不碰它：現在看不到也存不了常用做法，聊天照常。";
 
 function skillLen(s) { return Array.from(String(s)).length; }
 function skillCut(raw, max) {
@@ -16149,10 +17129,10 @@ function skillPreview(t) {
 // `o.needYes` (an employee's words) the box is there from the start and nothing is sent before it is ticked.
 // `o.submit(body)` does the saving (a promise; an error carries .code and .data); `o.done(result)` runs after it; `o.onCancel` adds 取消.
 function skillForm(o) {
-  const name = el("input", { type: "text", "data-skill": "name", maxlength: String(SKILL_MAX_NAME), "aria-label": "技能的名稱", placeholder: "名稱，例如：市集日報",
+  const name = el("input", { type: "text", "data-skill": "name", maxlength: String(SKILL_MAX_NAME), "aria-label": "常用做法的名稱", placeholder: "名稱，例如：市集日報",
     autocomplete: "off" });
   name.value = o.name || "";
-  const text = el("textarea", { rows: o.rows || "5", "data-skill": "text", maxlength: String(SKILL_MAX_TEXT), "aria-label": "技能的內容（做法）",
+  const text = el("textarea", { rows: o.rows || "5", "data-skill": "text", maxlength: String(SKILL_MAX_TEXT), "aria-label": "常用做法的內容",
     placeholder: "寫下做法，一步一步。用的時候會變成你對員工說的話。" });
   text.value = o.text || "";
   const count = () => `名稱 ${skillLen(name.value)}／${SKILL_MAX_NAME} 字、內容 ${skillLen(text.value)}／${SKILL_MAX_TEXT} 字`;
@@ -16169,7 +17149,7 @@ function skillForm(o) {
   const cancel = o.onCancel ? el("button", { type: "button", class: "btn", "data-skill": "cancel", on: { click: () => o.onCancel() } }, "取消") : null;
   const send = async () => {
     setKids(problem, null);
-    if (confirmed && !confirmed.checked) { setKids(problem, notice("warn", "要存這個技能，請先勾「我確定，存起來」。")); return; }
+    if (confirmed && !confirmed.checked) { setKids(problem, notice("warn", "要存這個常用做法，請先勾「我確定，存起來」。")); return; }
     save.disabled = true;
     const body = { name: name.value, text: text.value };
     if (confirmed) body.confirm_warning = true;
@@ -16213,8 +17193,8 @@ function skillRow(skill, h) {
         el("strong", { "data-skill": "title" }, skill.name),
         el("span", { class: "memory-text", "data-skill": "preview" }, skillPreview(skill.text)),
         el("span", { class: "small muted", "data-skill": "meta" }, `${src}・${fmtTime(skill.created_at)}${changed ? `・改於 ${fmtTime(skill.updated_at)}` : ""}`),
-        el("button", { type: "button", class: "btn small", "data-skill": "edit", "aria-label": "改這個技能", on: { click: () => { editing = true; paint(); } } }, "改"),
-        el("button", { type: "button", class: "btn small", "data-skill": "delete", "aria-label": "刪這個技能", on: { click: () => h.onDelete && h.onDelete(skill) } }, "刪"));
+        el("button", { type: "button", class: "btn small", "data-skill": "edit", "aria-label": "改這個常用做法", on: { click: () => { editing = true; paint(); } } }, "改"),
+        el("button", { type: "button", class: "btn small", "data-skill": "delete", "aria-label": "刪這個常用做法", on: { click: () => h.onDelete && h.onDelete(skill) } }, "刪"));
       return;
     }
     const form = skillForm({ name: skill.name, text: skill.text, onCancel: () => { editing = false; paint(); },
@@ -16241,7 +17221,7 @@ async function viewMySkills() {
   const token = seq;
   let cur;
   try { cur = await api.get("/api/my-skills"); }
-  catch (e) { setKids(claim(token), el("h1", null, "技能"), notice("bad", "讀不到技能：" + e.message)); return; }
+  catch (e) { setKids(claim(token), el("h1", null, "常用做法"), notice("bad", "讀不到常用做法：" + e.message)); return; }
   const main = claim(token);
   const listBox = el("div", { "data-skill": "list" });
   const addBox = el("div", { "data-skill": "add-box" });
@@ -16250,29 +17230,29 @@ async function viewMySkills() {
     const limits = cur.limits && typeof cur.limits === "object" ? cur.limits : {};
     const count = cur.used && Number.isFinite(cur.used.count) ? cur.used.count : skills.length;
     const form = skillForm({ clearOnSave: true, submit: (body) => api.post("/api/my-skills", body),
-      done: async () => { toast("已存成技能"); await reload(); } });
+      done: async () => { toast("已存成常用做法"); await reload(); } });
     setKids(addBox, cur.readable === false ? null
-      : el("section", { class: "section", "data-skill": "add" }, sectionHead("新增一個技能", "名稱加上一段做法；存了以後，在任何聊天或群組按「用技能」就能放進輸入框。"), form.node));
+      : el("section", { class: "section", "data-skill": "add" }, sectionHead("新增一個常用做法", "名稱加上一段做法；存了以後，在任何聊天或群組按「用常用做法」就能放進輸入框。"), form.node));
     setKids(listBox,
       cur.readable === false ? notice("bad", cur.problem || SKILL_UNREADABLE) : null,
-      el("p", { class: "small", "data-skill": "used" }, `${count}／${Number.isFinite(limits.max_skills) ? limits.max_skills : 100} 個技能`),
+      el("p", { class: "small", "data-skill": "used" }, `${count}／${Number.isFinite(limits.max_skills) ? limits.max_skills : 100} 個常用做法`),
       skills.length ? el("ul", { class: "mt-list" }, skills.map((s) => skillRow(s, { onDelete: remove, onSaved: reload })))
         : cur.readable === false ? null : el("p", { class: "small muted", "data-skill": "none" }, SKILL_NONE));
   };
   async function reload() {
-    try { cur = await api.get("/api/my-skills"); } catch (e) { toast("讀不到技能：" + e.message); }
+    try { cur = await api.get("/api/my-skills"); } catch (e) { toast("讀不到常用做法：" + e.message); }
     if (token === seq) draw();
   }
   async function remove(skill) {
-    if (!(await confirmInPage("刪除這個技能", "刪掉之後無法復原。已經用這個技能送出的訊息不會變。", "刪除"))) return;
+    if (!(await confirmInPage("刪除這個常用做法", "刪掉之後無法復原。已經用這個常用做法送出的訊息不會變。", "刪除"))) return;
     try { await api.post(`/api/my-skills/${encodeURIComponent(skill.id)}/delete`, {}); toast("已刪除"); }
     catch (e) { toast(e.message); }
     await reload();
   }
   draw();
-  setKids(main, el("h1", null, "技能"),
+  setKids(main, el("h1", null, "常用做法"),
     notice("info", SKILL_LEAD),
-    el("p", { class: "small", "data-skill": "not-cards" }, SKILL_NOT_CARDS, " ", el("a", { href: "#/skills" }, "看技能庫")),
+    el("p", { class: "small", "data-skill": "not-cards" }, SKILL_NOT_CARDS, " ", el("a", { href: "#/skills" }, "看 AI 工具的外掛清單")),
     el("p", { class: "small muted", "data-skill": "sends" }, SKILL_SENDS),
     addBox, listBox);
 }
@@ -16286,8 +17266,8 @@ function openSkillSave(o) {
   let close = () => {};
   const form = skillForm({ name: o.name, text: got.text, rows: "6", needYes: o.speaker === "employee", onCancel: () => close(),
     submit: (body) => api.post("/api/my-skills", { ...body, source: o.source }),
-    done: async () => { close(); toast("已存成技能"); if (typeof o.onSaved === "function") await o.onSaved(); } });
-  const head = el("h2", { id: titleId, tabindex: "-1" }, "存成技能");
+    done: async () => { close(); toast("已存成常用做法"); if (typeof o.onSaved === "function") await o.onSaved(); } });
+  const head = el("h2", { id: titleId, tabindex: "-1" }, "存成常用做法");
   const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-skill": "dialog" },
     el("div", { class: "modal-box", style: "max-width: 600px; max-height: 88vh; overflow-y: auto;" }, head,
       el("p", { class: "small", "data-skill": "sends" }, SKILL_SENDS),
@@ -16307,7 +17287,7 @@ function skillPut(input, words, replace) {
   const now = String(input.value || "");
   const joined = now.trim() && !replace ? now.replace(/\s+$/, "") + "\n\n" + words : words;
   const max = Number(input.getAttribute("maxlength"));
-  if (Number.isFinite(max) && max > 0 && skillLen(joined) > max) { toast(`放不下：這個輸入框最多 ${max} 字。請先清掉一些，或到「技能」頁改短一點。`); return false; }
+  if (Number.isFinite(max) && max > 0 && skillLen(joined) > max) { toast(`放不下：這個輸入框最多 ${max} 字。請先清掉一些，或到「常用做法」頁改短一點。`); return false; }
   input.value = joined;
   if (typeof input.dispatchEvent === "function" && typeof Event === "function") input.dispatchEvent(new Event("input", { bubbles: true }));
   if (typeof input.focus === "function") input.focus();
@@ -16317,7 +17297,7 @@ function skillPut(input, words, replace) {
 // 「用技能」: a button beside the send button of a chat or a group. It lists the skills (one request for the list, nothing else) and puts
 // the one the person picks into `input`. It sends nothing.
 function skillUseButton(input) {
-  return el("button", { type: "button", class: "btn", "data-skill": "use", "aria-haspopup": "dialog", on: { click: () => openSkillPicker(input) } }, "用技能");
+  return el("button", { type: "button", class: "btn", "data-skill": "use", "aria-haspopup": "dialog", on: { click: () => openSkillPicker(input) } }, "用常用做法");
 }
 // `opts` (all optional): { title, pickLabel, replace, note } - 「從技能帶入」 of a routine's form says so in its words and replaces.
 async function openSkillPicker(input, opts) {
@@ -16328,18 +17308,18 @@ async function openSkillPicker(input, opts) {
   let close = () => {};
   const skills = data && Array.isArray(data.skills) ? data.skills.filter((s) => s && typeof s.id === "string" && typeof s.text === "string") : [];
   const pick = (skill) => { if (skillPut(input, skill.text, opts.replace === true)) close(); };
-  const body = failed ? notice("bad", "讀不到技能：" + failed)
+  const body = failed ? notice("bad", "讀不到常用做法：" + failed)
     : data && data.readable === false ? notice("bad", data.problem || SKILL_UNREADABLE)
     : skills.length ? el("ul", { class: "mt-list", "data-skill": "choices" }, skills.map((s) =>
       el("li", { class: "mt-row card", "data-skill": "choice", "data-skill-id": s.id },
         el("strong", null, s.name),
         el("span", { class: "memory-text small" }, skillPreview(s.text)),
-        el("button", { type: "button", class: "btn small primary", "data-skill": "pick", "aria-label": `${opts.title || "用技能"}：${s.name}`, on: { click: () => pick(s) } }, opts.pickLabel || "放進輸入框"))))
-    : el("p", { class: "small muted", "data-skill": "none" }, SKILL_NONE, " ", el("a", { href: "#/my-skills", on: { click: () => close() } }, "到技能頁新增"));
-  const head = el("h2", { id: titleId, tabindex: "-1" }, opts.title || "用技能");
+        el("button", { type: "button", class: "btn small primary", "data-skill": "pick", "aria-label": `${opts.title || "用常用做法"}：${s.name}`, on: { click: () => pick(s) } }, opts.pickLabel || "放進輸入框"))))
+    : el("p", { class: "small muted", "data-skill": "none" }, SKILL_NONE, " ", el("a", { href: "#/my-skills", on: { click: () => close() } }, "到常用做法頁新增"));
+  const head = el("h2", { id: titleId, tabindex: "-1" }, opts.title || "用常用做法");
   const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-skill": "picker" },
     el("div", { class: "modal-box", style: "max-width: 600px; max-height: 88vh; overflow-y: auto;" }, head,
-      el("p", { class: "small", "data-skill": "pick-note" }, opts.note || "選一個技能，它的內容會放進輸入框。你可以先看、先改，再按送出；這裡不會送出任何東西。"),
+      el("p", { class: "small", "data-skill": "pick-note" }, opts.note || "選一個常用做法，它的內容會放進輸入框。你可以先看、先改，再按送出；這裡不會送出任何東西。"),
       opts.replace && String(input.value || "").trim() ? notice("warn", "這個欄位已經有字，帶入會取代它。") : null,
       body,
       el("div", { class: "modal-actions" }, el("button", { type: "button", class: "btn", "data-skill": "pick-cancel", on: { click: () => close() } }, "取消"))));
@@ -16358,13 +17338,13 @@ async function openSkillPicker(input, opts) {
 // record, set as text; what a model wrote is never markup. Nothing here saves a skill by itself, writes a setting or a limit, installs
 // a skill card, makes a role card, sends to a chat or answers a card of an employee.
 
-const KSUGGEST_BUTTON = "整理成技能";
-const KSUGGEST_LEDE = "VBear 會讀這段聊天最近的對話（最多 20 則），提議 1 個技能（名稱和做法），最多花 US$0.10；這段對話會送給 Anthropic。"
-  + "提議不會自己存：它會放進「存成技能」的視窗，你看過、可以改，按「存」才會存。";
-const KSUGGEST_NEEDS_WHY = "整理成技能要用 Claude Code；只有 Codex 或 AGY 的話，這個功能現在還不能用，但每句話旁的「存成技能」照常能用。";
+const KSUGGEST_BUTTON = "整理成常用做法";
+const KSUGGEST_LEDE = "VBear 會讀這段對話最近的內容（最多 20 則），提議 1 個常用做法（名稱和做法），最多花 US$0.10；這段對話會送給 Anthropic。"
+  + "提議不會自己存：它會放進「存成常用做法」的視窗，你看過、可以改，按「存」才會存。";
+const KSUGGEST_NEEDS_WHY = "整理成常用做法要用 Claude Code；只有 Codex 或 AGY 的話，這個功能現在還不能用，但每句話旁的「存成常用做法」照常能用。";
 const KSUGGEST_POLL_MS = 3000;
 const KSUGGEST_ERROR_TEXT = {
-  invalid_output: "整理回的格式不對，已經丟掉，沒有存任何東西。可以再按一次「整理成技能」。",
+  invalid_output: "整理回的格式不對，已經丟掉，沒有存任何東西。可以再按一次「整理成常用做法」。",
   not_traditional: "整理回的字含簡體字，已經丟掉，沒有存任何東西。可以再按一次。",
   timeout: "等太久，逾時了。可以再按一次。",
   budget: "額度不夠，沒有送出。",
@@ -16414,7 +17394,7 @@ function openSkillSuggestDialog(pv, hooks) {
     el("div", { class: "modal-box", style: "max-width: 640px; max-height: 88vh; overflow-y: auto;" }, head,
       blockers.map((b) => (b.code === "cli_not_found" ? skillSuggestNeedsClaude() : notice("warn", b.message || "現在不能開始"))),
       el("p", null, `VBear 會讀你和這位員工最近的對話（${reads}${pv.omitted_messages ? `，更早的 ${pv.omitted_messages} 則不讀` : ""}）。`
-        + "工具的輸出、檔案內容、你按過的允許，還有你的記憶和其他技能，都不會送出。"),
+        + "工具的輸出、檔案內容、你按過的允許，還有你的記憶和其他常用做法，都不會送出。"),
       el("p", { class: "chief-money", "data-ksuggest": "money" }, el("b", null, `最多花 ${cap}，今天還剩 ${left}。`)),
       el("p", null, `這段對話會送給 ${typeof pv.sends_to === "string" && pv.sends_to ? pv.sends_to : "Anthropic"}。`),
       pv.notice ? notice("info", pv.notice) : null,
@@ -16441,7 +17421,7 @@ function skillSuggestCard(v, hooks) {
   });
   if (!items.length) {
     return el("section", { class: "panel pad", "data-ksuggest": "card" }, el("h3", null, "VBear 整理好了"),
-      el("p", null, "這段對話裡沒有值得存成技能的做法。"), el("p", { class: "small muted" }, spentNote), dismiss);
+      el("p", null, "這段對話裡沒有值得存成常用做法的內容。"), el("p", { class: "small muted" }, spentNote), dismiss);
   }
   const it = items[0];
   const refuse = it.refuse ? (typeof it.refuse_text === "string" && it.refuse_text ? it.refuse_text : "這一段現在不能存。") : null;
@@ -16451,8 +17431,8 @@ function skillSuggestCard(v, hooks) {
       try { await api.post(`/api/my-skills/suggest/${encodeURIComponent(v.id)}/saved`, {}); } catch (e) { toast(e.message); }
       hooks.onDone();
     } });
-  } } }, "放進「存成技能」的視窗");
-  return el("section", { class: "panel pad", "data-ksuggest": "card" }, el("h3", null, "VBear 提議了 1 個技能，預設沒存"),
+  } } }, "放進「存成常用做法」的視窗");
+  return el("section", { class: "panel pad", "data-ksuggest": "card" }, el("h3", null, "VBear 提議了 1 個常用做法，預設沒存"),
     el("p", { class: "small" }, KSUGGEST_MADE_BY_AI),
     el("p", null, el("strong", { "data-ksuggest": "name" }, it.name)),
     el("p", { class: "memory-text", style: "white-space: pre-wrap", "data-ksuggest": "text" }, it.text),
@@ -16466,16 +17446,16 @@ function skillSuggestCard(v, hooks) {
 // The desk on a one-to-one chat page: the button, the dialog, the call that runs and the card of what came back.
 function skillSuggestDesk(chatId) {
   const runs = el("div", { "data-ksuggest": "runs" });
-  const button = el("button", { class: "btn", type: "button", "data-ksuggest": "open", on: { click: () => openDialog() } }, KSUGGEST_BUTTON);
-  const box = el("section", { class: "panel pad", "data-ksuggest": "desk" }, el("div", { class: "row" }, button),
-    el("p", { class: "small" }, KSUGGEST_LEDE), runs);
+  const box = el("div", { class: "chat-results", "data-ksuggest": "desk" }, runs);       // P47-4: only what came back; the button is in the 「⋯」 menu (`open`)
+  let opening = false;
   let gone = false, watching = null, mine = null, shown = null;
   async function openDialog() {
-    button.disabled = true;
+    if (opening) return;
+    opening = true;
     let pv;
     try { pv = await api.post("/api/my-skills/suggest/preview", { chat_id: chatId }); }
-    catch (e) { toast(e.message); button.disabled = false; return; }
-    button.disabled = false;
+    catch (e) { toast(e.message); opening = false; return; }
+    opening = false;
     openSkillSuggestDialog(pv, {
       onRecheck: openDialog,
       onStart: async (previewId) => {
@@ -16534,7 +17514,7 @@ function skillSuggestDesk(chatId) {
   }
   const timer = setInterval(() => { if (!document.hidden) poll(); }, KSUGGEST_POLL_MS);
   refresh();
-  return { node: box, stop: () => { gone = true; clearInterval(timer); } };
+  return { node: box, open: openDialog, stop: () => { gone = true; clearInterval(timer); } };
 }
 // ---------- end of skill suggestions ----------
 
@@ -16556,7 +17536,7 @@ const SHARED_RULES = [
 const SHARED_AFTER = [
   ["new-chat-note", "剛打開時，要開新的聊天，員工才會知道有共用資料夾（舊的聊天不會被告知）。"],
   ["off-note", "關掉後，從員工的下一句話起就寫不進去了，也不會刪掉任何檔案；要刪檔案，請你在 Finder 刪。"],
-  ["full-note", "在終端機（完整模式）出發的員工，本來就能動你電腦上的任何檔案，VBear 不另外告訴它有這個資料夾。"],
+  ["full-note", "在指令視窗（「完全交給他（有風險）」）開始工作的員工，本來就能動你電腦上的任何檔案，VBear 不另外告訴它有這個資料夾。"],
 ];
 const SHARED_WRITE_NOTE = "員工在裡面新增或修改檔案，每一次都會先問你（卡片），和其他檔案一樣。VBear 自己不會讀、不會刪裡面的檔案，也不會把檔名寫進紀錄。";
 const SHARED_READ_NOTE = "員工讀到裡面的檔案，內容就會送給它的 AI 公司（Claude Code 是 Anthropic，Codex 是 OpenAI）。檔案可能是別的員工寫的，員工被告知那是資料、不是指令。不要放密碼、帳號、卡號。";
@@ -16765,9 +17745,9 @@ function meetingClockText(clock) {
   const reserve = Math.max(0, Math.round((c.deadline_at - c.speakers_until) / 60));
   const mmss = (x) => `${Math.floor(x / 60)} 分 ${String(x % 60).padStart(2, "0")} 秒`;
   return `剩下 ${mmss(left)}（這場最多 ${c.max_minutes} 分鐘，從開始算；最後 ${reserve} 分鐘留給 CEO`
-    + `${speak > 0 ? `，發言者還有 ${mmss(speak)}` : "，發言時間已到"}）。依主控台的時鐘，每 5 秒更新。`;
+    + `${speak > 0 ? `，發言者還有 ${mmss(speak)}` : "，發言時間已到"}）。依 VBear 的時鐘，每 5 秒更新。`;
 }
-const MEETING_CHAIRMAN_NOTE = "主控台記錄（未驗證身分）";
+const MEETING_CHAIRMAN_NOTE = "VBear 記錄（未驗證身分）";
 const MEETING_FLAGS = [["publish", "對外發布"], ["spend", "花錢"], ["delete", "刪除資料"], ["legal", "法律或合約"], ["deploy", "上線部署"],
   ["personal", "個資"]];
 // The positions that may speak and the one that chairs (vbear/meeting_runner.py SPEAKER_POSITIONS and CHAIR_POSITION).
@@ -16781,10 +17761,10 @@ const MEETING_ERROR_TEXT = {
   tools_not_clean: "這次呼叫回報的工具不是只有 StructuredOutput（或有 MCP），已停止、結果不採用，並撤銷這個版本的通過紀錄",
   budget: "額度不夠，沒有送出", no_opinions: "沒有任何發言可以整理，沒有送出", prompt_changed: "送出前的內容和預覽不同，沒有送出",
   too_large: "要送出的內容超過大小限制，沒有送出", time_up: "會議時間到（最後 3 分鐘留給 CEO）：沒有發言，或這次呼叫被時間上限停止",
-  restart: "主控台重新啟動時這一位還沒結束，已中斷，不會自動續跑", cancelled: "已取消", boundary_revoked: "這個版本的無工具檢查被撤銷，沒有送出",
+  restart: "VBear 重新啟動時這一位還沒結束，已中斷，不會自動續跑", cancelled: "已取消", boundary_revoked: "這個版本的無工具檢查被撤銷，沒有送出",
   process_unconfirmed: "無法確認程序已結束，已封鎖後續的會議", busy: "已有一場會議在進行", internal: "VBear 內部錯誤，這次的結果不採用",
   // P36-2: the day's spend could not be established (a record of a meeting, a staffing meeting or a chat does not read whole)
-  spend_unknown: "無法確認今天已經花了多少（有花費紀錄讀不完整），為了不超出每日上限，這一位沒有送出；請檢查狀態資料夾裡的紀錄",
+  spend_unknown: "無法確認今天已經花了多少（有花費紀錄讀不完整），為了不超出花費上限，這一位沒有送出；請檢查狀態資料夾裡的紀錄",
 };
 function meetingErrorText(code) {
   if (typeof code !== "string" || !code) return "";
@@ -16873,26 +17853,26 @@ function meetingSeatNode(seat, opts = {}) {
 
 function meetingLamp(ledgerData) {
   const l = ledgerData && typeof ledgerData === "object" ? ledgerData : null;
-  const unknown = { key: "unknown", word: "額度不明", canOpen: false, warn: false,
+  const unknown = { key: "unknown", word: "用量不明", canOpen: false, warn: false,
     text: "讀不到今天的花費，所以先不開新的會議。" };
   if (!l) return unknown;
   const num = (x) => typeof x === "string" && /^[0-9]+(\.[0-9]+)?$/.test(x);
   if (!num(l.spent_usd) || !num(l.daily_usd)) return unknown;
-  const base = `今天已花 US$${l.spent_usd}，每日上限 US$${l.daily_usd}`;
+  const base = `今天已花 US$${l.spent_usd}，花費上限 US$${l.daily_usd}`;
   const note = typeof l.note === "string" && l.note ? l.note : MEETING_COST_NOTE;
   if (l.blocked === true) {
     return { key: "red", word: "已封鎖", canOpen: false, warn: true,
       text: `${base}。無法確認上一場會議的程序已結束，已封鎖新的會議，請人工檢查 VBear 的狀態目錄。` };
   }
   if (l.lamp === "red") {
-    return { key: "red", word: "額度用完（亮紅燈）", canOpen: false, warn: true,
-      text: `${base}。已達上限（亮紅燈）：今天不能開新的會議，也不能重試，隔天（本機日期）才會重算。${note}` };
+    return { key: "red", word: "今天的用量到上限了", canOpen: false, warn: true,
+      text: `${base}。已到花費上限：今天不能開新的會議，也不能重試，隔天（本機日期）才會重算；要現在開，可以到設定調高上限。${note}` };
   }
   if (l.lamp === "yellow") {
-    return { key: "yellow", word: "額度快用完（亮黃燈）", canOpen: true, warn: true,
-      text: `${base}。已用到 80% 以上（亮黃燈），到 100% 就不能再開會。${note}` };
+    return { key: "yellow", word: "用量快到上限", canOpen: true, warn: true,
+      text: `${base}。已用到 80% 以上，到 100% 就不能再開會。${note}` };
   }
-  if (l.lamp === "green") return { key: "green", word: "額度正常", canOpen: true, warn: false, text: `${base}。${note}` };
+  if (l.lamp === "green") return { key: "green", word: "用量正常", canOpen: true, warn: false, text: `${base}。${note}` };
   return unknown;
 }
 function meetingLampNode(lamp) {
@@ -16965,7 +17945,7 @@ function meetingRoomModel(list, detail, staffing) {
     out.kind = "staffing";
     out.id = sRow.id;
     out.href = `#/staffing/${encodeURIComponent(sRow.id)}`;
-    out.topic = Array.isArray(tasks) ? staffingTaskTitle(sRow.task_id, tasks) : "（讀不到任務卡的名稱）";
+    out.topic = Array.isArray(tasks) ? staffingTaskTitle(sRow.task_id, tasks) : "（讀不到專案的名稱）";
     const d = staffing.detail;
     if (d && typeof d === "object" && d.id === sRow.id) { out.status = d.status; out.seats = staffingSeats(d); }
     else { out.status = sRow.status; out.detailMissing = true; }
@@ -17064,7 +18044,7 @@ function meetingTurnCard(m) {
 // P35-4: a staffing proposal that waits for the chairman. Its task card's title is the one the page last read (taskIndex).
 function staffingTurnTitle(x) {
   const t = taskIndex.get(x.task_id);
-  return t ? String(t.title || "（沒有名稱）") : "（任務卡的名稱讀不到，或已刪除）";
+  return t ? String(t.title || "（沒有名稱）") : "（專案的名稱讀不到，或已刪除）";
 }
 function staffingTurnCard(x) {
   return el("article", { class: "card quest quest-turn", "data-quest": "staffing", "data-st": "board-card", "data-staffing-id": x.id },
@@ -17089,11 +18069,11 @@ function meetingDecision(view) {
 // approved. A rejected or waiting one is not offered.
 function meetingTaskNoteOffer(view) {
   const status = view && view.status;
-  if (status === "waiting_chairman") return { ok: false, why: "這場會議要董事長核准，核准之後才能寫進任務卡。" };
-  if (status === "rejected") return { ok: false, why: "董事長已否決，不寫進任務卡。" };
-  if (status === "running") return { ok: false, why: "會議還在進行，CEO 做出決定之後才能寫進任務卡。" };
+  if (status === "waiting_chairman") return { ok: false, why: "這場會議要董事長核准，核准之後才能寫進專案。" };
+  if (status === "rejected") return { ok: false, why: "董事長已否決，不寫進專案。" };
+  if (status === "running") return { ok: false, why: "會議還在進行，CEO 做出決定之後才能寫進專案。" };
   if ((status === "decided" || status === "approved") && meetingDecision(view)) return { ok: true, why: "" };
-  return { ok: false, why: "CEO 還沒有做出決定，沒有東西可以寫進任務卡。" };
+  return { ok: false, why: "CEO 還沒有做出決定，沒有東西可以寫進專案。" };
 }
 const MEETING_NOTE_MAX = 2000;
 const MEETING_NOTE_ACTIONS_MAX = 1900;
@@ -17198,8 +18178,8 @@ function meetingPreviewDialog(pv, opts) {
         // the money: a meeting's limits by default; a staffing meeting gives its own lines (opts.facts)
         Array.isArray(opts.facts) ? opts.facts
           : el("li", null, `共 ${pv.calls} 次呼叫，預留 US$${pv.reserve_usd}${lim ? `（每次上限 US$${lim.per_call_usd}，每場 US$${lim.meeting_usd}，每天 US$${lim.daily_usd}）` : ""}`),
-        today.spent_usd !== undefined ? el("li", null, `今天已花 US$${today.spent_usd}，每日上限 US$${today.daily_usd}`) : null,
-        pv.task && pv.task.title ? el("li", null, `任務卡：${pv.task.title}（只送出欄位內容，不送資料夾路徑）`) : null,
+        today.spent_usd !== undefined ? el("li", null, `今天已花 US$${today.spent_usd}，花費上限 US$${today.daily_usd}`) : null,
+        pv.task && pv.task.title ? el("li", null, `專案：${pv.task.title}（只送出欄位內容，不送資料夾路徑）`) : null,
         meetingSpeedText(pv.speed) ? el("li", { "data-mt": "speed" }, meetingSpeedText(pv.speed)) : null),
       opts.extra || null,
       notice("info", pv.disclosure || ""),
@@ -17264,8 +18244,8 @@ function meetingForm(env) {
   const topic = el("textarea", { rows: "2", maxlength: "500", "data-mt": "topic", "aria-label": "議題", placeholder: "這場會議要討論什麼？（最多 500 字）" });
   topic.value = typeof init.topic === "string" ? init.topic : "";
   const context = el("textarea", { rows: "3", maxlength: "4000", "data-mt": "context", "aria-label": "補充說明", placeholder: "補充說明（選填，最多 4000 字）：不要貼密碼、金鑰或個資" });
-  const taskSel = el("select", { "data-mt": "task", "aria-label": "任務卡" },
-    el("option", { value: "" }, "（不綁任務卡）"), tasksList.map((t) => el("option", { value: t.id }, t.title || t.id)));
+  const taskSel = el("select", { "data-mt": "task", "aria-label": "專案" },
+    el("option", { value: "" }, "（不綁專案）"), tasksList.map((t) => el("option", { value: t.id }, t.title || t.id)));
   taskSel.value = typeof init.task === "string" && tasksList.some((t) => t.id === init.task) ? init.task : "";
   const chairSel = el("select", { "data-mt": "chair", "aria-label": "主席（CEO）" },
     chairs.map((p) => el("option", { value: p.id }, p.name || p.id)));
@@ -17295,14 +18275,14 @@ function meetingForm(env) {
     const blocked = !lamp.canOpen || !chairs.length || !speakers.length;
     preview.disabled = blocked;
     lampNote.textContent = lamp.canOpen ? ""
-      : (lamp.key === "red" ? "今日額度已用完（或已封鎖），先不開新的會議。" : "讀不到今天的花費，先不開新的會議。");
+      : (lamp.key === "red" ? "今天的用量到你設的上限了（或已封鎖），先不開新的會議。" : "讀不到今天的花費，先不開新的會議。");
   };
   async function run() {
     const t = topic.value.trim();
     if (!t) { toast("請寫下議題"); topic.focus(); return; }
     if (t.length > 500) { toast("議題不可超過 500 字"); return; }
     if (context.value.trim().length > 4000) { toast("補充說明不可超過 4000 字"); return; }
-    if (!chairs.length || !chairSel.value) { toast("需要一張 CEO 職位的角色卡當主席"); return; }
+    if (!chairs.length || !chairSel.value) { toast("需要一張 CEO 職位的員工當主席"); return; }
     const chosen = speakerBoxes.filter((s) => s.box.checked);
     if (!chosen.length) { toast("請至少選一個發言的職位"); return; }
     if (chosen.length > 6) { toast("最多 6 位發言者"); return; }
@@ -17325,15 +18305,15 @@ function meetingForm(env) {
     finally { preview.disabled = false; env.syncLamp(); }
   }
   const node = el("section", { class: "section mt-form", "data-mt": "form" },
-    sectionHead("開一場會", "你是董事長。各職位各發言一次（彼此看不到對方的發言；有選任務卡時 PM 另外會拿到它的進度摘要，會計師會拿到這場會議到目前為止的花費），CEO 看完全部發言後做決定；重大的事交給你核准。開始前一定先給你看會送出的全文。"),
-    !chairs.length ? notice("warn", el("span", null, "還沒有 CEO 職位的角色卡，沒有主席就不能開會。到 ", el("a", { href: "#/team" }, "角色卡池"), " 建一張（精靈第 2 步選 CEO）。")) : null,
+    sectionHead("開一場會", "你是董事長。各職位各發言一次（彼此看不到對方的發言；有選專案時 PM 另外會拿到它的進度摘要，會計師會拿到這場會議到目前為止的花費），CEO 看完全部發言後做決定；重大的事交給你核准。開始前一定先給你看會送出的全文。"),
+    !chairs.length ? notice("warn", el("span", null, "還沒有 CEO 職位的員工，沒有主席就不能開會。到 ", el("a", { href: "#/employees" }, "員工頁"), " 新增一位（精靈第 2 步選 CEO）。")) : null,
     !speakers.length ? notice("warn", "還沒有可以發言的職位卡（PM、社群媒體經理、全端工程師、藝術總監、法務經理、會計師）。") : null,
     noteOnly ? el("p", { class: "small muted", "data-mt": "note-only" },
       `有 ${noteOnly} 張卡的職位只記在這個瀏覽器（舊版的備註），沒有存在卡片上；開會看的是卡片上存的職位，所以這裡沒有列出。`,
-      "要讓它們參加，到角色卡池用精靈重新選一次職位並儲存。") : null,
+      "要讓它們參加，到員工頁用精靈重新選一次職位並儲存。") : null,
     el("label", null, "議題 *", topic),
     el("label", null, "補充說明", context),
-    el("label", null, "綁在哪張任務卡（選填）", taskSel),
+    el("label", null, "綁在哪個專案（選填）", taskSel),
     el("label", null, "主席（CEO）", chairSel),
     el("fieldset", { class: "mt-fieldset" }, el("legend", null, "誰來發言（每個職位一張卡）"), speakersNote,
       speakerBoxes.length ? speakerBoxes.map((s) => s.label) : el("span", { class: "small muted" }, "沒有可選的卡")),
@@ -17521,7 +18501,7 @@ async function viewMeetingDetail(token, id) {
     const d = meetingDecision(cur);
     if (!d) return null;
     return el("section", { class: "section", "data-mt": "decision" },
-      sectionHead("CEO 決定", "這只是紀錄：VBear 不會去執行它。要做的話，寫進任務卡，再照原本的流程。"),
+      sectionHead("CEO 決定", "這只是紀錄：VBear 不會去執行它。要做的話，寫進專案，再照原本的流程。"),
       el("div", { class: "card pad" },
         el("p", null, el("strong", null, d.decision || "")),
         el("p", null, d.rationale || ""),
@@ -17569,17 +18549,17 @@ async function viewMeetingDetail(token, id) {
     const go = (taskId) => { location.hash = `#/workbench?task=${encodeURIComponent(taskId)}&meeting=${encodeURIComponent(id)}`; };
     if (!offer.ok) nodes.push(el("p", { class: "small muted", "data-mt": "write-task-why" }, offer.why));
     else if (cur.task_id) {
-      nodes.push(el("button", { class: "btn", type: "button", "data-mt": "write-task", on: { click: () => go(cur.task_id) } }, "把決定寫進任務卡"),
-        el("span", { class: "small muted" }, "只會打開任務卡的編輯器並填好文字，要你自己按「儲存修改」。"));
+      nodes.push(el("button", { class: "btn", type: "button", "data-mt": "write-task", on: { click: () => go(cur.task_id) } }, "把決定寫進專案"),
+        el("span", { class: "small muted" }, "只會打開專案的編輯器並填好文字，要你自己按「儲存修改」。"));
     } else if (tasksList.length) {
-      const pick = el("select", { class: "mt-task-pick", "data-mt": "write-task-pick", "aria-label": "寫進哪張任務卡" },
-        el("option", { value: "" }, "（選一張任務卡）"), tasksList.map((t) => el("option", { value: t.id }, t.title || t.id)));
+      const pick = el("select", { class: "mt-task-pick", "data-mt": "write-task-pick", "aria-label": "寫進哪個專案" },
+        el("option", { value: "" }, "（選一個專案）"), tasksList.map((t) => el("option", { value: t.id }, t.title || t.id)));
       const btn = el("button", { class: "btn", type: "button", disabled: true, "data-mt": "write-task", on: { click: () => { if (pick.value) go(pick.value); } } },
-        "把決定寫進任務卡");
+        "把決定寫進專案");
       pick.addEventListener("change", () => { btn.disabled = !pick.value; });
       nodes.push(pick, btn, el("span", { class: "small muted" }, "只會打開編輯器並填好文字，要你自己按「儲存修改」。"));
-    } else nodes.push(el("p", { class: "small muted", "data-mt": "write-task-why" }, "沒有任務卡可以寫。"));
-    return el("section", { class: "section", "data-mt": "task-note" }, sectionHead("寫進任務卡", null), el("div", { class: "row" }, nodes));
+    } else nodes.push(el("p", { class: "small muted", "data-mt": "write-task-why" }, "沒有專案可以寫。"));
+    return el("section", { class: "section", "data-mt": "task-note" }, sectionHead("寫進專案", null), el("div", { class: "row" }, nodes));
   }
 
   function draw() {
@@ -17591,7 +18571,7 @@ async function viewMeetingDetail(token, id) {
       el("div", { class: "row" }, el("h1", null, cur.topic || "（沒有議題）")),
       el("div", { class: "row small" }, meetingStatusBadge(cur.status), cur.major ? badge("重大", "b-warn", "符合交給董事長的固定規則") : null,
         el("span", { class: "muted" }, `會議紀錄 ${cur.id}・${fmtTime(cur.created_at)}・花費 US$${cur.spent_usd}（估值）`),
-        cur.task_id ? el("a", { href: `#/workbench?task=${encodeURIComponent(cur.task_id)}` }, task ? `任務卡：${task.title}` : "任務卡") : null),
+        cur.task_id ? el("a", { href: `#/workbench?task=${encodeURIComponent(cur.task_id)}` }, task ? `專案：${task.title}` : "專案") : null),
       flags.length ? el("p", { class: "small" }, `你建立時勾了：${flags.map((f) => (MEETING_FLAGS.find((x) => x[0] === f) || [f, f])[1]).join("、")}`) : null,
       cur.context ? el("p", { class: "small" }, `補充說明：${cur.context}`) : null,
       meetingClockText(cur.clock) ? el("p", { class: "small mt-clock", "data-mt": "clock", role: "status" }, meetingClockText(cur.clock)) : null,
@@ -18762,36 +19742,36 @@ bootstrap();
 // the page itself writes nothing: 套用, 復原這次套用 (P45-2) and 存成團隊範本, 改名, 刪除 (P45-3) are presses of the person that the server
 // answers, and nothing here makes a card, a skill or a routine by itself. Names and texts are set with textContent only (el() children).
 const TPL_LINES = [
-  "團隊範本是一組現成的員工、技能和例行工作。勾你要的，按「預覽並套用」看清楚再套用。",
-  "套用不用 AI、不花錢。員工一律用安全模式，跑指令、改檔案照舊每次都問你；記憶和共用資料夾照你平常的設定；例行工作建好是關著的。",
+  "團隊範本是一組現成的員工、常用做法和定時工作。勾你要的，按「預覽並套用」看清楚再套用。",
+  "套用不用 AI、不花錢。員工一律用「每件事先問我」，跑指令、改檔案照舊每次都問你；記憶和共用資料夾照你平常的設定；定時工作建好是關著的。",
   "每次套用都可以「復原這次套用」：只刪這次建的、你沒改過也沒用過的，改過或用過的會留著並告訴你。團隊範本不會改或刪你原本就有的東西。",
   "團隊範本只存在這台電腦，不會上傳，也不能匯出。",
 ];
-const TPL_CEO_LINE = "要用幕僚長派工，還需要一位 CEO（到角色卡池建）。";
+const TPL_CEO_LINE = "要用幕僚長分配工作，還需要一位 CEO（到員工頁新增）。";
 const TPL_PREVIEW_LINES = {
-  safe: "員工一律用安全模式：跑指令、改檔案照舊每次都問你。團隊範本不會建出完整模式的員工。",
+  safe: "員工一律用「每件事先問我」：跑指令、改檔案照舊每次都問你。團隊範本不會建出「完全交給他（有風險）」的員工。",
   memory: "記憶照你平常的設定（Claude Code 的員工帶記憶，Codex 的員工不帶，因為記憶會送到 OpenAI）；共用資料夾都關著。要改，到記憶頁或共用資料夾頁一位一位打開。",
-  off: "例行工作建好是關著的，要你自己到例行工作頁打開。",
-  free: "套用不用 AI、不花錢。之後跟員工聊天才會花錢，照你的每回合上限與每天上限。",
-  codex: "Codex 的員工在 VBear 裡可以聊天；要在終端機用 Codex 只能用完整模式，團隊範本建的員工不會是完整模式。",
+  off: "定時工作建好是關著的，要你自己到定時工作頁打開。",
+  free: "套用不用 AI、不花錢。之後跟員工聊天才會花錢，照你的每回合上限與花費上限。",
+  codex: "Codex 的員工在 VBear 裡可以聊天；要在指令視窗用 Codex 只能用「完全交給他（有風險）」，團隊範本建的員工不會是「完全交給他（有風險）」。",
   notReady: "這個 AI 工具還沒準備好：員工會建好，但要先到開始設定登入才能聊天。",
-  agy: "AGY 的員工預設不帶記憶（打開時要你同意，內容會送到 Google），這版也不能用共用資料夾；員工會用到你自己裝的 AGY 技能。要在終端機用 AGY 只能用完整模式，團隊範本建的員工不會是完整模式。",
+  agy: "AGY 的員工預設不帶記憶（打開時要你同意，內容會送到 Google），這版也不能用共用資料夾；員工會用到你自己裝的 AGY 技能。要在指令視窗用 AGY 只能用「完全交給他（有風險）」，團隊範本建的員工不會是「完全交給他（有風險）」。",
   agyUnverified: "你的 AGY 還沒通過聊天驗證：員工會建好，但要先到聊天頁按「驗證聊天」（用你的 Google 方案）才能聊天。",
 };
 const TPL_TOOL_LABEL = { claude: "Claude Code", codex: "Codex", agy: "AGY" };
-const TPL_KINDS = [["cards", "員工"], ["skills", "技能"], ["routines", "例行工作"]];
-const TPL_ONE = { card: "員工", skill: "技能", routine: "例行工作" };
+const TPL_KINDS = [["cards", "員工"], ["skills", "常用做法"], ["routines", "定時工作"]];
+const TPL_ONE = { card: "員工", skill: "常用做法", routine: "定時工作" };
 const TPL_STATE_TEXT = { done: "完成", partial: "建到一半停下了", interrupted: "中斷了", applying: "進行中" };
-const TPL_INTERRUPTED = "這次套用中斷了，最後一個技能或例行工作可能已經建好但沒記到，復原不會刪它；請到技能頁、例行工作頁看看。";
+const TPL_INTERRUPTED = "這次套用中斷了，最後一個常用做法或定時工作可能已經建好但沒記到，復原不會刪它；請到常用做法頁、定時工作頁看看。";
 const TPL_APPLIES_LIMIT = "只能復原最近 50 次套用；更早的東西照樣留著，要刪請到各自的頁面。";
-const TPL_APPLIED_LINE = "例行工作都是關著的，要用的話到例行工作頁打開。不滿意的話，到頁面下面的套用紀錄按「復原這次套用」。";
+const TPL_APPLIED_LINE = "定時工作都是關著的，要用的話到定時工作頁打開。不滿意的話，到頁面下面的套用紀錄按「復原這次套用」。";
 
 function tplId(ref) { return `${ref.template}/${ref.key}`; }
 function tplSelection() { return { cards: new Map(), skills: new Map(), routines: new Map() }; }
 function tplCounts(sel) { return { cards: sel.cards.size, skills: sel.skills.size, routines: sel.routines.size }; }
 function tplCountText(sel) {
   const c = tplCounts(sel);
-  return `已勾：${c.cards} 位員工、${c.skills} 個技能、${c.routines} 件例行工作`;
+  return `已勾：${c.cards} 位員工、${c.skills} 個常用做法、${c.routines} 件定時工作`;
 }
 // The request of the preview and (P45-2) of the apply: the same body. `name` and `to` are sent only when the person changed them.
 function tplRequestBody(sel, opts) {
@@ -18859,10 +19839,10 @@ function templatesBlock(template, ctx) {
 // ---- the person's own team templates (P45-3): 存成團隊範本, 你現在的, 改名, 刪除 ----
 // Saving posts to /api/templates/mine with what is ticked in the blocks and what is ticked in 「你現在的」; the server keeps a copy.
 const TPL_SAVE_LINES = [
-  "存的是現在這一刻的複本：之後你改了原本的員工、技能或例行工作，這個團隊範本不會跟著變。",
-  "員工只存名字、職位、你寫在卡上的固定指示和 Claude 的模型。不存 AI 工具、技能卡、記憶、共用資料夾和聊天紀錄；完整模式的員工存下來也不帶出發模式，套用時一律是安全模式。",
-  "例行工作存名稱、內容、星期和時間，還有交給誰（那位員工也一起存才有，沒有的話套用時再選）；存下來沒有開關，套用時一律是關著的。技能存名稱和內容。",
-  "存之前每段字都會用和記憶、技能同一組規則檢查：有金鑰、密碼這類字不能存，像是叫員工不問你就做事的字要你多確認一次。",
+  "存的是現在這一刻的複本：之後你改了原本的員工、常用做法或定時工作，這個團隊範本不會跟著變。",
+  "員工只存名字、職位、你寫在卡上的固定指示和 Claude 的模型。不存 AI 工具、技能卡、記憶、共用資料夾和聊天紀錄；「完全交給他（有風險）」的員工存下來也不帶開始工作模式，套用時一律是「每件事先問我」。",
+  "定時工作存名稱、內容、星期和時間，還有交給誰（那位員工也一起存才有，沒有的話套用時再選）；存下來沒有開關，套用時一律是關著的。常用做法存名稱和內容。",
+  "存之前每段字都會用和記憶、常用做法同一組規則檢查：有金鑰、密碼這類字不能存，像是叫員工不問你就做事的字要你多確認一次。",
   "團隊範本只存在這台電腦，不會上傳，也不能匯出。",
 ];
 const TPL_NOW_LINE = "這一區只給「存成團隊範本」用：這些已經在你這裡了，套用時不會再建一次。";
@@ -18913,7 +19893,7 @@ function templatesBlockActions(template, ctx) {
   return el("span", { "data-templates": "mine-actions" },
     el("button", { class: "btn small", type: "button", "data-tpl-action": "rename", "data-tpl-target": template.id, on: { click: () => openTemplatesRename(template, ctx) } }, "改名"), " ",
     el("button", { class: "btn small", type: "button", "data-tpl-action": "delete", "data-tpl-target": template.id, on: { click: async () => {
-      if (!(await confirmInPage(`刪除「${template.name}」`, "只刪這個團隊範本。用它建過的員工、技能、例行工作，和它是從哪裡存來的，都不會動。", "刪除"))) return;
+      if (!(await confirmInPage(`刪除「${template.name}」`, "只刪這個團隊範本。用它建過的員工、常用做法、定時工作，和它是從哪裡存來的，都不會動。", "刪除"))) return;
       try { await api.post(`/api/templates/mine/${encodeURIComponent(template.id)}/delete`, {}); toast("已刪除"); tplReloadHere(ctx); }
       catch (e) { toast("刪不了：" + e.message); }
     } } }, "刪除"));
@@ -18935,7 +19915,7 @@ function templatesMineSection(ctx) {
   const count = el("span", { class: "small", "data-templates": "now-count" });
   const button = el("button", { class: "btn small", type: "button", "data-tpl-action": "save-now", on: { click: () => openTemplatesSave(ctx) } }, "存成團隊範本");
   const redraw = () => {
-    count.textContent = `你現在的，已勾：${now.cards.size} 位員工、${now.skills.size} 個技能、${now.routines.size} 件例行工作`;
+    count.textContent = `你現在的，已勾：${now.cards.size} 位員工、${now.skills.size} 個常用做法、${now.routines.size} 件定時工作`;
     button.disabled = !tplCanSave(ctx);
   };
   now.listeners.push(redraw);
@@ -18943,7 +19923,7 @@ function templatesMineSection(ctx) {
   return el("section", { class: "panel pad tpl-block", "data-templates": "now" },
     el("h2", null, "你現在的"),
     el("p", { class: "small muted", "data-templates": "now-line" }, TPL_NOW_LINE),
-    empty ? el("p", { class: "small muted", "data-templates": "now-empty" }, "你現在還沒有員工、技能或例行工作。") : null,
+    empty ? el("p", { class: "small muted", "data-templates": "now-empty" }, "你現在還沒有員工、常用做法或定時工作。") : null,
     TPL_KINDS.map(([kind, word]) => ((have[kind] || []).length
       ? el("div", { class: "tpl-group", "data-templates": `now-${kind}` }, el("h3", null, word), el("ul", { class: "tpl-list" }, have[kind].map((item) => line(kind, item))))
       : null)),
@@ -18999,7 +19979,7 @@ function openTemplatesSave(ctx) {
     if (state.done) {
       const t = state.done.template;
       setKids(bodyBox,
-        notice("info", `已存成團隊範本「${t.name}」：${t.cards.length} 位員工、${t.skills.length} 個技能、${t.routines.length} 件例行工作。`),
+        notice("info", `已存成團隊範本「${t.name}」：${t.cards.length} 位員工、${t.skills.length} 個常用做法、${t.routines.length} 件定時工作。`),
         (state.done.notes || []).map((n) => el("p", { class: "small", "data-tpl-save-note": n.code }, n.text)),
         el("p", { class: "small muted" }, "要用的時候，在上面「你存的團隊範本」勾選，按「預覽並套用」。"));
       setKids(foot, el("button", { class: "btn primary", type: "button", "data-tpl-action": "save-close", on: { click: () => close() } }, "關閉"));
@@ -19008,9 +19988,9 @@ function openTemplatesSave(ctx) {
     const kids = [
       el("label", { class: "small" }, "名稱（1 到 40 個字）　", input),
       el("p", { class: "small", "data-templates": "save-summary" },
-        `這次會存：${items.cards.length} 位員工、${items.skills.length} 個技能、${items.routines.length} 件例行工作。` +
-        `最多存 ${limits.max_mine || 20} 個團隊範本，一個最多 ${per.cards} 位員工、${per.skills} 個技能、${per.routines} 件例行工作。`),
-      list("cards", "員工"), list("skills", "技能"), list("routines", "例行工作")];
+        `這次會存：${items.cards.length} 位員工、${items.skills.length} 個常用做法、${items.routines.length} 件定時工作。` +
+        `最多存 ${limits.max_mine || 20} 個團隊範本，一個最多 ${per.cards} 位員工、${per.skills} 個常用做法、${per.routines} 件定時工作。`),
+      list("cards", "員工"), list("skills", "常用做法"), list("routines", "定時工作")];
     if (state.error) kids.push(notice("bad", state.error + (state.where ? `（${state.where}）` : "")));
     if (state.warn) {
       const box = el("input", { type: "checkbox", "data-tpl-save": "confirm", on: { change: (e) => { state.confirm = e.target.checked; draw(); } } });
@@ -19053,7 +20033,7 @@ function openTemplatesRename(template, ctx) {
     state.busy = false; draw();
   };
   const draw = () => {
-    const kids = [el("label", { class: "small" }, "新的名稱　", input), el("p", { class: "small muted" }, "只改名稱，裡面的員工、技能和例行工作不變。")];
+    const kids = [el("label", { class: "small" }, "新的名稱　", input), el("p", { class: "small muted" }, "只改名稱，裡面的員工、常用做法和定時工作不變。")];
     if (state.error) kids.push(notice("bad", state.error));
     if (state.warn) {
       const box = el("input", { type: "checkbox", "data-tpl-rename": "confirm", on: { change: (e) => { state.confirm = e.target.checked; draw(); } } });
@@ -19076,7 +20056,7 @@ function tplTemplateName(ctx, id) {
   const found = all.find((t) => t.id === id);
   return found ? found.name : "（團隊範本已刪除）";
 }
-function tplCountLine(c) { return `${c.cards} 位員工、${c.skills} 個技能、${c.routines} 件例行工作`; }
+function tplCountLine(c) { return `${c.cards} 位員工、${c.skills} 個常用做法、${c.routines} 件定時工作`; }
 function templatesAppliesSection(ctx) {
   const applies = Array.isArray(ctx.data.applies) ? ctx.data.applies : [];
   const row = (a) => {
@@ -19254,7 +20234,7 @@ function openTemplatesPreview(ctx) {
   const assigneeValue = (a) => (a.kind === "card" ? `card:${tplId(a.card)}` : a.kind === "existing" ? `existing:${a.profile_id}` : "");
   const routineLine = (r) => {
     const choices = state.preview.choices;
-    const pick = el("select", { "data-tpl-to": tplId(r.from), "aria-label": `例行工作「${r.name}」交給誰`,
+    const pick = el("select", { "data-tpl-to": tplId(r.from), "aria-label": `定時工作「${r.name}」交給誰`,
       on: { change: (e) => {
         const entry = ctx.sel.routines.get(tplId(r.from));
         const v = String(e.target.value || "");
@@ -19272,7 +20252,7 @@ function openTemplatesPreview(ctx) {
       r.assignee.name ? el("span", { class: "small", "data-tpl-preview": "to-name" }, ` ${r.assignee.name}`) : null);
   };
   const afterLine = (after) =>
-    `套用後：員工 ${after.cards.after}/${after.cards.max}、技能 ${after.skills.after}/${after.skills.max}、例行工作 ${after.routines.after}/${after.routines.max}`;
+    `套用後：員工 ${after.cards.after}/${after.cards.max}、常用做法 ${after.skills.after}/${after.skills.max}、定時工作 ${after.routines.after}/${after.routines.max}`;
   const itemName = (kind, from) => {
     const template = (data.builtin || []).concat(data.mine || []).find((t) => t.id === from.template);
     const item = template ? (template[kind === "card" ? "cards" : kind === "skill" ? "skills" : "routines"] || []).find((x) => x.key === from.key) : null;
@@ -19282,9 +20262,9 @@ function openTemplatesPreview(ctx) {
     const box = el("input", { type: "checkbox", "data-tpl-confirm": "yes", on: { change: (e) => { state.confirm = e.target.checked; ask(); } } });
     box.checked = state.confirm === true;
     return el("div", { class: "tpl-warn", "data-templates": "warn" },
-      notice("warn", Object.values(p.warn_text || {}).join(" ")),
+      tplServerNotice("warn", Object.values(p.warn_text || {}).join(" "), p),
       el("ul", { class: "small" }, p.warn_items.map((w) => el("li", { "data-tpl-warn": w.kind },
-        `${w.kind === "card" ? "員工" : w.kind === "skill" ? "技能" : "例行工作"}：${itemName(w.kind, w.from)}`))),
+        `${w.kind === "card" ? "員工" : w.kind === "skill" ? "常用做法" : "定時工作"}：${itemName(w.kind, w.from)}`))),
       el("label", null, box, " 我確定"));
   };
   const doneItem = (item) => {
@@ -19300,18 +20280,18 @@ function openTemplatesPreview(ctx) {
       return;
     }
     const kids = [toolRow()];
-    if (state.error) kids.push(notice("bad", state.error));
+    if (state.error) kids.push(tplServerNotice("bad", state.error, p));
     if (p) {
       kids.push(
-        el("p", { "data-templates": "summary" }, `這次會建：${p.cards.length} 位員工、${p.skills.length} 個技能、${p.routines.length} 件例行工作。`),
+        el("p", { "data-templates": "summary" }, `這次會建：${p.cards.length} 位員工、${p.skills.length} 個常用做法、${p.routines.length} 件定時工作。`),
         p.cards.length ? el("div", null, el("h3", null, "員工"), el("ul", { class: "tpl-list", "data-templates": "preview-cards" }, p.cards.map(cardLine))) : null,
-        p.skills.length ? el("div", null, el("h3", null, "技能"), el("ul", { class: "tpl-list", "data-templates": "preview-skills" },
+        p.skills.length ? el("div", null, el("h3", null, "常用做法"), el("ul", { class: "tpl-list", "data-templates": "preview-skills" },
           p.skills.map((s) => el("li", { "data-tpl-preview": "skill" }, s.name)))) : null,
-        p.routines.length ? el("div", null, el("h3", null, "例行工作"), el("ul", { class: "tpl-list", "data-templates": "preview-routines" }, p.routines.map(routineLine))) : null,
+        p.routines.length ? el("div", null, el("h3", null, "定時工作"), el("ul", { class: "tpl-list", "data-templates": "preview-routines" }, p.routines.map(routineLine))) : null,
         el("p", { class: "small", "data-templates": "after" }, afterLine(p.after)),
-        p.problems.filter((x) => x.code !== "confirm_warning").map((x) => notice("bad", x.text)),
+        p.problems.filter((x) => x.code !== "confirm_warning").map((x) => tplServerNotice("bad", x, p)),
         p.warn_items.length ? warnBox(p) : null,
-        p.notes.map((n) => el("p", { class: "small muted", "data-tpl-preview": "note" }, n.text)));
+        p.notes.map((n) => el("p", { class: "small muted", "data-tpl-preview": "note" }, tplWords(n.text))));
     } else if (!state.error) kids.push(el("p", { class: "small muted" }, "整理中…"));
     const lines = [TPL_PREVIEW_LINES.safe, TPL_PREVIEW_LINES.memory, TPL_PREVIEW_LINES.off, TPL_PREVIEW_LINES.free];
     if (state.tool === "codex") lines.push(TPL_PREVIEW_LINES.codex);
@@ -19330,11 +20310,33 @@ function openTemplatesPreview(ctx) {
   return { close, state };
 }
 
+// The sentences the server writes for a team template's preview still say 角色卡, 技能, 例行工作 and 安全模式 (its Python words are not changed).
+// The page says them in its own words (the same sentence, other nouns) and keeps the server's sentence whole behind 「技術細節」. A counting
+// sentence (template_full) is built from the counts of the preview, since 張 and 個 do not fit 員工.
+const TPL_SWAPS = [[/角色卡/g, "員工"], [/例行工作/g, "定時工作"], [/技能/g, "常用做法"], [/安全模式/g, "每件事先問我"]];
+const TPL_KIND_WORDS = { cards: ["員工", "位"], skills: ["常用做法", "個"], routines: ["定時工作", "件"] };
+function tplWords(raw) { return TPL_SWAPS.reduce((t, [re, to]) => t.replace(re, to), String(raw)); }
+function tplServerNotice(kind, x, preview) {
+  const raw = typeof x === "string" ? x : x && typeof x.text === "string" ? x.text : "";
+  if (!raw) return null;
+  let text = tplWords(raw);
+  if (x && x.code === "template_full" && cardHas(TPL_KIND_WORDS, x.kind) && preview && preview.after && preview.after[x.kind] && Number.isFinite(x.over)) {
+    const a = preview.after[x.kind];
+    const [word, unit] = TPL_KIND_WORDS[x.kind];
+    text = `${word}會超過 ${a.max} ${unit}：你現在有 ${a.now} ${unit}，這次要加 ${a.add} ${unit}，請少勾 ${x.over} ${unit}。`;
+  }
+  return text === raw ? noticeBox(kind, raw) : noticeBox(kind, [text, plainTechFold(raw)]);
+}
+
 async function viewTemplates() {
   const token = seq;
   let data;
   try { data = await api.get("/api/templates"); }
   catch (e) { setKids(claim(token), el("h1", null, "團隊範本"), notice("bad", "讀不到團隊範本：" + e.message)); return; }
+  // the line about the CEO is for a person who has none: shown only when the employees were read and none of them is a CEO (not read: not said)
+  const staff = await api.get("/api/agent-profiles").catch(() => null);
+  if (token !== seq) return;
+  const noCeo = !!staff && Array.isArray(staff.profiles) && !staff.profiles.some((p) => p && typeof p === "object" && cardPosition({ position: p.position }) === MEETING_CHAIR_POSITION);
   const main = claim(token);
   const ctx = { data, sel: tplSelection(), boxes: [], reload: () => viewTemplates() };
   const count = el("span", { "data-templates": "count" });
@@ -19350,7 +20352,7 @@ async function viewTemplates() {
   const own = Array.isArray(data.mine) ? data.mine : [];
   setKids(main, el("h1", null, "團隊範本"),
     el("ul", { class: "lede tpl-lines", "data-templates": "lines" }, TPL_LINES.map((l) => el("li", null, l))),
-    el("p", { class: "small muted", "data-templates": "ceo-line" }, TPL_CEO_LINE),
+    noCeo ? el("p", { class: "small muted", "data-templates": "ceo-line" }, TPL_CEO_LINE) : null,
     problems.map((p) => notice("warn", `${p}　這個檔案讀不出來之前，不能套用。`)),
     data.mine_readable === false ? notice("warn", data.problem || "你存的團隊範本的檔案讀不出來；VBear 內建的照常可以用。") : null,
     blocks,
@@ -19366,6 +20368,17 @@ async function viewTemplates() {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    WORDS,
+    NAV_PARENT,
+    syncAdvancedNav,
+    PLAIN_ERRORS,
+    plainWords,
+    plainNotice,
+    plainLine,
+    limitReachedNotice,
+    LIMIT_REACHED_TEXT,
+    LIMIT_SETTINGS_HREF,
+    wordsToAvoid,
     base64ToUint8Array,
     createSSEParser,
     createInputBatcher,
@@ -19644,6 +20657,16 @@ if (typeof module !== "undefined" && module.exports) {
     chatAgySupportNode,
     CHAT_AGY_WORD,
     chatTurnCost,
+    chatHeadLine,
+    chatMoreMenu,
+    CHAT_CODEX_SANDBOX_WARNING,
+    CHAT_AGY_SANDBOX_WARNING,
+    CHAT_AGY_READ_WARNING,
+    CHAT_AGY_READ_NOTE,
+    CHAT_ASK_AGAIN,
+    CHAT_AGY_ASK_AGAIN,
+    CHAT_CODEX_NOTE,
+    CHAT_AGY_NOTE,
     chatMoney,
     chatStateWord,
     chatLimitsText,

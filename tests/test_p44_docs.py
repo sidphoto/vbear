@@ -129,14 +129,14 @@ class SkillsAndRoutinesDocsTests(unittest.TestCase):
             self.assertIn(word, self.adr, word)
 
     def test_the_glossary_has_the_new_terms_and_the_changed_ones(self):
-        for term in ("**技能**：", "**整理成技能**：", "**例行工作**：", "**醒來補做**：", "**倒數接續**：", "**讓 Mac 保持清醒**：", "_避免_：排程、cron、routine、定時任務"):
+        for term in ("**常用做法**：", "**整理成常用做法**：", "**定時工作**：", "**醒來補做**：", "**倒數接續**：", "**讓 Mac 保持清醒**：", "_避免_：例行工作、排程、cron、routine、定時任務"):
             self.assertIn(term, self.glossary, term)
         self.assertNotIn("草稿，P44-6 定稿", self.glossary)
         self.assertNotIn("依排定時間重複交給員工去做的一件工作。 _避免_", self.glossary)
-        for name in ("**派工**", "**AI 自己做了什麼**", "**群組**", "**自己動手**"):
+        for name in ("**分配工作**", "**AI 自己做了什麼**", "**群組**", "**自己動手**"):
             part = self.glossary_raw[self.glossary_raw.index(name):]
             part = part[:part.index("\n\n")]
-            self.assertTrue(any(w in part for w in ("倒數", "例行工作", "用技能", "第 3")), name)
+            self.assertTrue(any(w in part for w in ("倒數", "定時工作", "常用做法", "第 3")), name)
 
     # -- the numbers and the words ---------------------------------------------------------------------------------------------
 
@@ -159,10 +159,10 @@ class SkillsAndRoutinesDocsTests(unittest.TestCase):
         self.assertIn("5 minutes", self.section)
 
     def test_the_words_the_documents_quote_are_the_ones_the_page_uses(self):
-        for words in ("現在開始", "這次跳過", "補做", "不用了", "用技能", "存成技能", "整理成技能", "從技能帶入", "讓 Mac 保持清醒", "有工作在跑時不讓 Mac 睡著",
-                      "VBear 的視窗要開著、Mac 要醒著，例行工作才會做", "沒有打開「自己動手」第 3 項"):
+        for words in ("現在開始", "這次跳過", "補做", "不用了", "用常用做法", "存成常用做法", "整理成常用做法", "從常用做法帶入", "讓 Mac 保持清醒", "有工作在跑時不讓 Mac 睡著",
+                      "VBear 的視窗要開著、Mac 要醒著，定時工作才會做", "沒有打開「自己動手」第 3 項"):
             self.assertIn(words, self.app, words)
-        for words in ("這段是員工寫的，存成技能後，你用它時會變成你對員工說的話", "之後改技能，不會改這個例行工作"):
+        for words in ("這段是員工寫的，存成常用做法後，你用它時會變成你對員工說的話", "之後改常用做法，不會改這個定時工作"):
             self.assertIn(words, self.app, words)
         self.assertIn("這段是員工寫的，存成技能後，你用它時會變成你對員工說的話", self.adr_raw)
 

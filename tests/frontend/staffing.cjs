@@ -104,7 +104,7 @@ function setPage(over = {}) {
     }
     if (p === "/api/agent-profiles") return jsonResponse({ ok: true, profiles: page.profiles });
     if (p === "/api/tasks") return jsonResponse({ ok: true, tasks: page.tasks });
-    if (p === "/api/config") return jsonResponse({ ok: true, config: {} });
+    if (p === "/api/config") return jsonResponse({ ok: true, config: { advanced_mode: true } });   // P47-2: the board is the advanced part of the home page
     if (p === "/api/agent-builder/catalog") return jsonResponse(page.catalog);
     if (p === "/api/meetings" && method === "GET") return jsonResponse({ meetings: [] });
     if (p === "/api/meetings/ledger") return jsonResponse(page.ledger);
@@ -128,7 +128,7 @@ function setPage(over = {}) {
       const b = JSON.parse(opts.body);
       const state = b.decision === "adopt" ? "adopted" : "dismissed";
       page.details[m[1]] = { ...page.details[m[1]], status: state,
-        chairman: { state, at: 1790010000, note: b.note || "", adopted: b.adopted || null, label: "主控台記錄（未驗證身分）" } };
+        chairman: { state, at: 1790010000, note: b.note || "", adopted: b.adopted || null, label: "VBear 記錄（未驗證身分）" } };
       return jsonResponse(page.details[m[1]]);
     }
     if (p === "/api/meetings/verify") return jsonResponse({ version: "2.1.296", passed_at: 1790000000 });
@@ -383,7 +383,7 @@ function record(over = {}) {
     sent: SENT(), limits: { per_call_usd: "0.20", proposal_call_usd: "0.50", total_usd: "2.00" },
     turns: [sturn(1, "pm", "opinion", "done", { output: pmSaid() }), sturn(2, "law", "opinion", "done", { output: lawSaid() }),
       sturn(3, "ceo", "proposal", "done", { output: ceoSaid() })],
-    status: "ready", chairman: { state: "pending", at: null, note: "", adopted: null, label: "主控台記錄（未驗證身分）" },
+    status: "ready", chairman: { state: "pending", at: null, note: "", adopted: null, label: "VBear 記錄（未驗證身分）" },
     spent_usd: "0.6100", retryable: [], high_risk: true, changed_cards: ["C3"], ...over };
 }
 function detail(r) { page.details[r.id] = r; return r; }
@@ -555,10 +555,10 @@ test("a failed speaker shows why and can be tried again after its own preview; t
 });
 
 test("a decision the chairman recorded is shown as a record of the console; this page offers no way to record one", async () => {
-  setRecord({ status: "adopted", chairman: { state: "adopted", at: 1790009999, note: "照做 " + EVIL, adopted: null, label: "主控台記錄（未驗證身分）" } });
+  setRecord({ status: "adopted", chairman: { state: "adopted", at: 1790009999, note: "照做 " + EVIL, adopted: null, label: "VBear 記錄（未驗證身分）" } });
   const main = await open("#/staffing/" + SID);
   const desk = q(main, "chairman");
-  assert(text(desk).includes("採用") && text(desk).includes("主控台記錄（未驗證身分）") && text(desk).includes("照做"), text(desk));
+  assert(text(desk).includes("採用") && text(desk).includes("VBear 記錄（未驗證身分）") && text(desk).includes("照做"), text(desk));
   noMarkup(desk);
   assert.strictEqual(posts("/chairman").length, 0);
   assert.strictEqual(desk.findAll((n) => n.tag === "button").length, 0);
@@ -850,7 +850,7 @@ test("from the proposal to an adopted team: enable, the wizard, the skills, the 
   main = h.dom().mainEl;
   const desk = q(main, "chairman");
   noMarkup(desk);
-  for (const words of ["董事長記下：採用", "主控台記錄（未驗證身分）", "執行位：全端工程師", "插 2 張技能", "法務新卡", "由 CEO 建議的新卡 N1 建立）・插 1 張技能"]) {
+  for (const words of ["董事長記下：採用", "VBear 記錄（未驗證身分）", "執行位：全端工程師", "插 2 張技能", "法務新卡", "由 CEO 建議的新卡 N1 建立）・插 1 張技能"]) {
     assert(text(desk).includes(words), words + ": " + text(desk));
   }
   assert.strictEqual(q(main, "adopt"), null, "nothing more to adopt");
@@ -904,7 +904,7 @@ const roomOf = (main) => main.find((n) => n.getAttribute && n.getAttribute("data
 function runningStaffing() {
   return detail(record({ id: SID2, task_id: "task-9", status: "running", created_at: 1790000500,
     turns: [sturn(1, "pm", "opinion", "done", { output: pmSaid() }), sturn(2, "law", "opinion", "running"), sturn(3, "ceo", "proposal", "queued")],
-    chairman: { state: "pending", at: null, note: "", adopted: null, label: "主控台記錄（未驗證身分）" } }));
+    chairman: { state: "pending", at: null, note: "", adopted: null, label: "VBear 記錄（未驗證身分）" } }));
 }
 
 test("the office's meeting room shows a staffing meeting that runs, called 組隊會議; the desk counts the proposals waiting for you", async () => {
@@ -977,6 +977,8 @@ test("home: a staffing proposal waiting for the chairman is on the 'your turn' b
   assert(card.find((n) => n.tag === "a" && n.getAttribute("href") === "#/staffing/" + SID));
   assert(text(card).includes("官網改版") && text(card).includes("組隊提案"), text(card));
   assert(text(main).includes("1 份組隊提案等你"), text(main).slice(0, 600));
+  const waitRow = main.find((n) => n.getAttribute && n.getAttribute("data-home-row") === "staffing");
+  assert(waitRow && text(waitRow).includes("官網改版") && waitRow.find((n) => n.tag === "a" && n.getAttribute("href") === "#/staffing/" + SID), "and a row of 等你決定");
   noMarkup(main);
   setRecord({}, { staffingError: "壞了" });
   const bad = await open("#/");

@@ -145,7 +145,7 @@ test("the line over every page lists a dispatch and a group that wait for a limi
   await open("#/dispatch/" + DID);
   assert.strictEqual(b.hidden, false);
   const t = text(b);
-  assert(t.includes("等你決定：派工「週末市集擺攤」還有 2 小時 5 分可以繼續（11/09 00:00）"), t);
+  assert(t.includes("等你決定：分配工作「週末市集擺攤」還有 2 小時 5 分可以繼續（11/09 00:00）"), t);
   assert(t.includes("另外還有 1 件"), t);
   assert.strictEqual(attr(find(b, "data-waiting", "resume-link"), "href"), "#/dispatch/" + DID);
 });
@@ -161,7 +161,7 @@ test("a group alone links to the group, and routine reminders and these share th
     { kind: "group_resume", group_id: GID, name: "市集準備", state: "unknown", until: null, text: UNKNOWN.text }];
   serve({ dview: dview(null, { state: "running" }), waiting: both });
   await open("#/dispatch/" + DID);
-  assert(text(b).includes("例行工作「市集日報」08:00到時間了") && text(b).includes("群組「市集準備」AI 工具沒說什麼時候恢復"), text(b));
+  assert(text(b).includes("定時工作「市集日報」08:00到時間了") && text(b).includes("群組「市集準備」AI 工具沒說什麼時候恢復"), text(b));
   assert.strictEqual(attr(find(b, "data-waiting", "link"), "href"), "#/routines");
 });
 
