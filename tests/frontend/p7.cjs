@@ -928,7 +928,9 @@ const hrefOf = (root, pred) => (anchors(root).find(pred) || { getAttribute: () =
 
   await test("#11 the main path, rendered: lobby, task card, pool and the pass have none of those English words", async () => {
     const FORBIDDEN = /\b(Terminal|Session|Armory|Context)\b|Provenance|Tracking Only/;
-    const ctx = newCtx(teamHandlers({ "GET /api/tasks": () => jsonResponse({ ok: true, tasks: [baseTask({ id: "t1", title: "Lobby task" })] }),
+    // (P47-2: the task cards are in the advanced part of the home page)
+    const ctx = newCtx(teamHandlers({ "GET /api/config": () => jsonResponse({ config: { recent_folders: [], onboarding_dismissed: true, advanced_mode: true }, state_dir: "/x" }),
+      "GET /api/tasks": () => jsonResponse({ ok: true, tasks: [baseTask({ id: "t1", title: "Lobby task" })] }),
       "GET /api/flows": () => jsonResponse({ ok: true, flows: [flowView("planning", { task_id: "t1" })], families: [] }) }));
     await ctx.viewHome();
     await tick(8);
@@ -996,7 +998,7 @@ const hrefOf = (root, pred) => (anchors(root).find(pred) || { getAttribute: () =
     const mk = (profiles, tasks, flows) => newCtx(teamHandlers({
       "GET /api/agent-profiles": () => jsonResponse({ ok: true, profiles }), "GET /api/tasks": () => jsonResponse({ ok: true, tasks }),
       "GET /api/flows": () => jsonResponse({ ok: true, flows, families: [] }),
-      "GET /api/config": () => jsonResponse({ config: { recent_folders: [], onboarding_dismissed: false }, state_dir: "/x" }) }));
+      "GET /api/config": () => jsonResponse({ config: { recent_folders: [], onboarding_dismissed: false, advanced_mode: true }, state_dir: "/x" }) }));
     const go = () => byData(main, "data-board", "workbench")[0];
     const fresh = mk([], [], []);
     await fresh.viewHome();

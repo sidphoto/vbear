@@ -973,13 +973,15 @@ async function test(name, fn) {
   });
 
   await test("lobby: viewHome lists the unfinished task cards and the button that imports a project; a task list it cannot read is just an empty section", async () => {
-    const ctx = newCtx({ "GET /api/tasks": () => jsonResponse({ ok: true, tasks: [baseTask({ id: "t1", title: "Lobby task" })] }) });
+    // (P47-2: the task cards are in the advanced part of the home page, drawn only when the advanced mode is on)
+    const ctx = newCtx({ "GET /api/config": () => jsonResponse({ config: { advanced_mode: true }, state_dir: "/x" }),
+      "GET /api/tasks": () => jsonResponse({ ok: true, tasks: [baseTask({ id: "t1", title: "Lobby task" })] }) });
     await ctx.viewHome();
     await tick(6);
     assert.ok(findText(main, "任務卡") && findText(main, "Lobby task"));
     assert.ok(findText(main, "＋ 任務卡（導入專案）"));
     assert.ok(findText(main, "分支 main · HEAD 01234567"));
-    const ctx2 = newCtx({ "GET /api/tasks": () => jsonResponse({ error: "x" }, 503) });
+    const ctx2 = newCtx({ "GET /api/config": () => jsonResponse({ config: { advanced_mode: true }, state_dir: "/x" }), "GET /api/tasks": () => jsonResponse({ error: "x" }, 503) });
     await ctx2.viewHome();
     await tick(6);
     assert.ok(findText(main, "還沒有任務卡"));

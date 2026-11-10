@@ -101,7 +101,7 @@ function serve(over = {}) {
     if (p === "/api/tasks") return jsonResponse({ tasks: [] });
     if (p === "/api/agent-profiles") return jsonResponse({ profiles: [] });
     if (p === "/api/agent-builder/catalog") return jsonResponse({ ok: false });
-    if (p === "/api/config") return jsonResponse({ config: { advanced_mode: false, onboarding_dismissed: true, setup_done: true, welcome_seen: true }, state_dir: "/x", runtime_socket: "" });
+    if (p === "/api/config") return jsonResponse({ config: { advanced_mode: true, onboarding_dismissed: true, setup_done: true, welcome_seen: true }, state_dir: "/x", runtime_socket: "" });
     if (p === "/api/first-ceo") return jsonResponse({ needed: false });
     if (p === "/api/meetings" || p === "/api/staffing") return jsonResponse({ meetings: [], staffing: [] });
     if (p === "/api/setup/tools") return jsonResponse({ tools: [] });
@@ -863,7 +863,10 @@ test("the home page asks for the dispatches and puts them on the board", async (
   serve({ dispatches: [row(v)], views: { [DID]: v } });
   const main = await open("#/");
   assert(FETCH_LOG.some((c) => c.url === "/api/dispatch"), "asked for the list");
-  assert(find(main, "data-dispatch", "board-card"), "a card on the board");
+  assert(find(main, "data-dispatch", "board-card"), "a card on the board (the advanced part of the home page)");
+  // P47-2: and the same two things are rows of 「等你決定」, the first thing on the page
+  const waiting = find(main, "data-home", "waiting");
+  assert(waiting && text(waiting).includes("週末市集擺攤"), "a row of 等你決定: " + (waiting ? text(waiting) : ""));
 });
 const ORIGIN = { dispatch: DID, step: 2 };
 test("a message VBear sent for a dispatch is said so over it and is not shown as the person's", () => {

@@ -2288,19 +2288,68 @@ function sectionHead(title, sub, action) {
 
 // ---------- views ----------------------------------------------------------
 
+// The home page (v0.21, P47-2, ADR 0013): what waits for the person to decide, their employees (a click on an avatar is a chat), what is on today,
+// and one box to say what they want to the CEO. A person with no employee sees three steps instead. The page shows no amount of money and sends
+// nothing by itself: the only write it can make is the person's own press of 送出 (and the buttons of a row of 「等你決定」, which are the
+// routines page's own requests). The parts of the old lobby (the board, task cards, skill search, recent projects) are under 「進階」 and only in
+// the advanced mode, which decides nothing but what is shown.
+let homeTick = null;     // the refresh of the home page every 5 seconds (route() runs it); null on any other page
 async function viewHome() {
   const token = seq;
   // /api/flows reads live state from the cache /api/live fills, so live goes first.
-  const [, , tasksRes, profilesRes, catalogRes, configRes] = await Promise.all([loadStatic(), loadLive().then(() => loadFlows()),
+  const [, , tasksRes, profilesRes, catalogRes, configRes, chatsRes, routinesRes, waitingRes, ledgerRes] = await Promise.all([loadStatic(), loadLive().then(() => loadFlows()),
     api.get("/api/tasks").catch(() => null), api.get("/api/agent-profiles").catch(() => null),
-    api.get("/api/agent-builder/catalog").catch(() => null), api.get("/api/config").catch(() => null), loadMeetings(), loadStaffingList(), loadDispatchList(), loadGroupList()]);
-  const L = D.live;
+    api.get("/api/agent-builder/catalog").catch(() => null), api.get("/api/config").catch(() => null),
+    api.get("/api/chats").catch(() => null), api.get("/api/routines").catch(() => null), api.get("/api/waiting").catch(() => null),
+    api.get("/api/meetings/ledger").catch(() => null), loadMeetings(), loadStaffingList(), loadDispatchList(), loadGroupList()]);
   const setup = setupGateWanted(configRes) ? await setupGate(configRes) : setupGateQuiet(configRes);
   if (token !== seq) return;
   if (setup.redirect) { location.hash = welcomeWanted(configRes) ? "#/welcome" : "#/setup"; return; }
-  const ceoDoor = await ceoLobbyDoor(await ceoPlan(), configRes, profilesRes);       // P38-8
+  const conf = configRes && configRes.config && typeof configRes.config === "object" ? configRes.config : null;
+  const advanced = conf && typeof conf.advanced_mode === "boolean" ? conf.advanced_mode : navAdvanced;   // a display only: which blocks are drawn
+  const profiles = profilesRes && Array.isArray(profilesRes.profiles) ? profilesRes.profiles.filter((p) => p && typeof p === "object" && typeof p.id === "string") : null;
+  const toolsRes = profiles && !profiles.length ? await api.get("/api/setup/tools").catch(() => null) : null;
   if (token !== seq) return;
+  noteTasks(tasksRes && tasksRes.tasks);
+  const state = {
+    token, profiles, conf, catalog: catalogRes && catalogRes.ok ? catalogRes : null, chats: chatsRes, routines: routinesRes,
+    lamp: ledgerRes && typeof ledgerRes.lamp === "string" ? ledgerRes.lamp : "", waitingList: waitingRes && Array.isArray(waitingRes.waiting) ? waitingRes.waiting : null,
+    shown: "", now: () => new Date(),
+  };
+  const board = boardGroups(D.live, D.flows, D.meetings, D.staffing, D.dispatch, D.groups);
+  boardShownKey = boardKey(board, boardKeyContext());
+  const waiting = homeWaiting(state, board);
+  const advancedPart = advanced ? homeAdvanced({ tasksRes, profilesRes, catalogRes, configRes, board }) : null;
   const main = claim(token);
+  let body;
+  if (profiles === null) {
+    body = [el("section", { class: "section", "data-home": "team" }, sectionHead(WORDS.employeeList.use, null),
+      notice("warn", "讀不到員工的資料，所以先不顯示。重新整理看看；還是不行，請到「設定」看一下 VBear 的狀態。")), homeToday(state)];
+  } else if (!profiles.length) body = [homeFirstSteps(toolsRes)];
+  else body = [homeTeam(state), homeToday(state), homeAsk(state)];
+  setKids(main,
+    el("h1", null, WORDS.home.use),
+    el("p", { class: "lede" }, "這裡看有什麼等你決定、你的員工，和今天要做的事。"),
+    corruptNotice(),
+    staleNotice(),
+    herdrMigrationNotice(),
+    setup.notice ? setupUpgradeNotice() : null,
+    runtimeNotice(),
+    waiting.node,
+    body,
+    advancedPart ? advancedPart.node : null);
+  homeTick = async () => {
+    if (token !== seq) return;
+    await state.refreshWaiting();
+    if (advancedPart) await advancedPart.refresh();
+  };
+  activeViewCleanup = () => { homeTick = null; };
+  // no auto-focus on the boxes: it would scroll the page past what waits for the person
+}
+
+// The old lobby, kept whole for the advanced mode: the first game, the board of flows, task cards, the skill search, recent projects, skills with problems.
+function homeAdvanced({ tasksRes, profilesRes, catalogRes, configRes, board }) {
+  const L = D.live;
   const onboardingHost = el("div", { id: "h-onboarding" });
   const onboardingInput = () => ({
     profiles: profilesRes && Array.isArray(profilesRes.profiles) ? profilesRes.profiles : null,
@@ -2334,22 +2383,11 @@ async function viewHome() {
   input.addEventListener("input", searchSoon);
   input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { searchSoon.cancel(); location.hash = `#/skills?q=${encodeURIComponent(input.value.trim())}`; } });
   const examples = ["網站安全", "做簡報", "剪影片", "部署網站", "寫小說", "設計品牌"];
-
-  noteTasks(tasksRes && tasksRes.tasks);
-  const board = boardGroups(L, D.flows, D.meetings, D.staffing, D.dispatch, D.groups);
-  boardShownKey = boardKey(board, boardKeyContext());
   const recentProjects = (L.projects || []).filter((p) => p.live_session_ids.length || p.last_activity).slice(0, 6);
   const problemSkills = (D.overview.skills_with_problems || []).map((id) => D.byId.get(id)).filter(Boolean);
-
-  setKids(main, 
-    el("h1", null, "冒險者大廳"),
-    el("p", { class: "lede" }, "這裡看哪些任務在等你、隊伍走到哪一步。"),
-    corruptNotice(),
-    staleNotice(),
-    herdrMigrationNotice(),
-    setup.notice ? setupUpgradeNotice() : null,
-    runtimeNotice(),
-    ceoDoor,
+  const node = el("section", { class: "section home-advanced", "data-home": "advanced" },
+    el("h2", null, "進階"),
+    el("p", { class: "small muted" }, "這一區只有在設定打開進階模式時才看得到。"),
     onboardingHost,
     el("div", { id: "h-board" }, boardSection(board)),
     taskCardsSection(tasksRes && tasksRes.tasks, { flows: D.flows && !D.flows.error ? D.flows.flows || [] : undefined,
@@ -2366,10 +2404,425 @@ async function viewHome() {
       recentProjects.length ? el("div", { class: "grid" }, recentProjects.map(projectCard)) : emptyState("最近沒有工作紀錄", null)),
     problemSkills.length ? el("section", { class: "section" },
       sectionHead("需要留意的技能", "可使用的技能中，結構檢查發現問題的項目"),
-      el("div", { class: "grid" }, problemSkills.slice(0, 6).map((s) => skillCard(s)))) : null,
-  );
-  // no auto-focus on the search box: it would scroll the page past the first-game steps and the "your turn" board
+      el("div", { class: "grid" }, problemSkills.slice(0, 6).map((s) => skillCard(s)))) : null);
+  // the board repaints only when something it shows changed, so the search box keeps its focus
+  const refresh = async () => {
+    const box = document.getElementById("h-board");
+    if (!box) return;
+    const g = boardGroups(D.live, D.flows, D.meetings, D.staffing, D.dispatch, D.groups);
+    const key = boardKey(g, boardKeyContext());
+    if (key === boardShownKey) return;
+    boardShownKey = key;
+    setKids(box, boardSection(g));
+  };
+  return { node, refresh };
 }
+
+// ---------- plain pages (v0.21, P47-2) ----------------------------------------------------------------------------------------
+// The home page's blocks, the employees' page and the work page. They read what the console already has (GET only) and set every name and
+// sentence as text. A page never guesses: what could not be read is said so, never shown as zero or as an empty team.
+
+const HOME_CEO_ASK = "CEO 要動手前都會先問你。";
+const HOME_BUSY_TEXT = "CEO 還在回上一則（或有卡片在等你決定），所以這句話沒有送出。字已經放在他的對話的輸入框裡，按「送出」才會送。";
+const HOME_LIMIT_KINDS = ["red", "budget"];
+
+// The chats a routine opened (they are not "a chat with" anyone for the home page): the ids in the routines' runs.
+function homeRoutineChatIds(routinesRes) {
+  const ids = new Set();
+  const list = routinesRes && typeof routinesRes === "object" && Array.isArray(routinesRes.routines) ? routinesRes.routines : [];
+  for (const r of list) for (const run of r && Array.isArray(r.runs) ? r.runs : []) if (run && typeof run.chat_id === "string" && run.chat_id) ids.add(run.chat_id);
+  return ids;
+}
+// The chats the person talked in with one employee, newest first. A chat with a problem, one a routine opened and one in a group are not.
+function homeChatsOf(chatsRes, routinesRes, profileId) {
+  const list = chatsRes && typeof chatsRes === "object" && Array.isArray(chatsRes.chats) ? chatsRes.chats : [];
+  const routine = homeRoutineChatIds(routinesRes);
+  return list.filter((c) => c && typeof c === "object" && typeof c.id === "string" && c.profile_id === profileId && !c.problem && !routine.has(c.id))
+    .sort((a, b) => (Number(b.last_at) || 0) - (Number(a.last_at) || 0));
+}
+// The employee who is the CEO: the first CEO the person made (config first_ceo_id) when that card is there, else the first card whose position is CEO.
+function homeCeoOf(profiles, conf) {
+  const list = (Array.isArray(profiles) ? profiles : []).filter((p) => p && p.enabled !== false);
+  const id = conf && typeof conf.first_ceo_id === "string" ? conf.first_ceo_id : "";
+  return list.find((p) => p.id === id) || list.find((p) => cardPosition(p) === "planner") || null;
+}
+function homeCardOf(chatsRes, profileId) {
+  const cards = chatsRes && typeof chatsRes === "object" && Array.isArray(chatsRes.cards) ? chatsRes.cards : null;
+  return cards ? cards.find((c) => c && c.id === profileId) || null : null;
+}
+function homeWhen(sec, now) {
+  const t = Number(sec);
+  if (!Number.isFinite(t) || t <= 0) return "";
+  const d = new Date(t * 1000);
+  const two = (n) => String(n).padStart(2, "0");
+  const dayStart = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const gap = Math.round((dayStart(now) - dayStart(d)) / 86400000);
+  if (gap === 0) return `${two(d.getHours())}:${two(d.getMinutes())}`;
+  if (gap === 1) return "昨天";
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+// Opens the chat with an employee, and with `opts.text` sends it, the way the chat page's 送出 does. One call = at most one POST /api/chats (when
+// there is no chat with them yet; opening costs nothing) and at most one POST to its /messages. A card that cannot chat yet leads to the page that
+// prepares it (nothing is sent). A chat whose turn is running or that has a card waiting is not sent into: the words are kept for the box of that chat.
+// -> { ok, sent, kept, error, chatId }. It always goes to the chat page when it is not an error.
+async function openChatWith(profileId, opts = {}) {
+  const text = typeof opts.text === "string" ? opts.text : "";
+  const [chatsRes, routinesRes] = await Promise.all([api.get("/api/chats").catch(() => null), api.get("/api/routines").catch(() => null)]);
+  const card = homeCardOf(chatsRes, profileId);
+  const prepare = () => {            // the page that makes the chat ready; the words wait under the employee's id (no chat to put them in yet)
+    if (text.trim()) ceoDrafts.set(profileId, text);
+    location.hash = `#/chat?profile=${encodeURIComponent(profileId)}`;
+  };
+  if (card && card.can_chat === false) { prepare(); return { ok: false, sent: false, kept: false, error: null, chatId: "", reason: card.reason || "" }; }
+  let chat = homeChatsOf(chatsRes, routinesRes, profileId)[0] || null;
+  if (!chat) {
+    try {
+      const r = await api.post("/api/chats", { profile_id: profileId });
+      chat = r && r.chat && typeof r.chat.id === "string" ? { id: r.chat.id, open: false, waiting: false } : null;
+    } catch (e) {
+      prepare();
+      toast("現在還不能開對話：" + e.message);
+      return { ok: false, sent: false, kept: false, error: e, chatId: "" };
+    }
+    if (!chat) { prepare(); return { ok: false, sent: false, kept: false, error: null, chatId: "" }; }
+  }
+  const go = () => { location.hash = `#/chat/${encodeURIComponent(chat.id)}`; };
+  if (!text.trim()) { go(); return { ok: true, sent: false, kept: false, error: null, chatId: chat.id }; }
+  if (chat.open === true || chat.waiting === true) {
+    ceoDrafts.set(chat.id, text);          // the chat page takes it into its box; only the send button there sends it
+    go();
+    return { ok: true, sent: false, kept: true, error: null, chatId: chat.id };
+  }
+  try { await api.post(`/api/chats/${encodeURIComponent(chat.id)}/messages`, { text }); }
+  catch (e) { return { ok: false, sent: false, kept: false, error: e, chatId: chat.id }; }
+  go();
+  return { ok: true, sent: true, kept: false, error: null, chatId: chat.id };
+}
+
+// ---- 等你決定 ----
+// The rows of what waits for the person, from what the old lobby's 「輪到你」 and the line over every page listed (the same in the normal and
+// in the advanced mode). `g`: boardGroups(...); `list`: GET /api/waiting's rows (null = not read); `lamp`: today's lamp ("red" = at the limit).
+// -> { rows: [{ kind, key, text, href?, act? }], notes: [what could not be read], complete }. A paused dispatch or group that has its countdown row is not said twice.
+function homeWaitingRows(g, list, lamp) {
+  const rows = [];
+  const notes = [];
+  const resumeDispatch = new Set();
+  const resumeGroup = new Set();
+  if (list === null) notes.push("讀不到定時工作和接著做的提醒");
+  for (const w of Array.isArray(list) ? list : []) {
+    if (!w || typeof w !== "object" || typeof w.name !== "string") continue;
+    if (w.kind === "routine_due" && typeof w.run_id === "string") {
+      const at = typeof w.slot === "string" ? w.slot.slice(11, 16) : "";
+      rows.push({ kind: "routine_due", key: "due:" + w.run_id, text: `定時工作「${w.name}」${at}到時間了，還沒開始。`, act: { type: "due", id: w.run_id } });
+    } else if (w.kind === "routine_missed" && typeof w.routine_id === "string") {
+      rows.push({ kind: "routine_missed", key: "missed:" + w.routine_id, text: `定時工作「${w.name}」錯過了 ${Number.isFinite(w.count) ? w.count : 1} 次（VBear 剛才沒在看）。`, act: { type: "missed", id: w.routine_id } });
+    } else if (w.kind === "dispatch_resume" && typeof w.dispatch_id === "string") {
+      resumeDispatch.add(w.dispatch_id);
+      rows.push({ kind: "dispatch_resume", key: "dr:" + w.dispatch_id, text: `分配工作「${w.name}」${typeof w.text === "string" ? w.text : "暫停了"}`, href: `#/dispatch/${encodeURIComponent(w.dispatch_id)}` });
+    } else if (w.kind === "group_resume" && typeof w.group_id === "string") {
+      resumeGroup.add(w.group_id);
+      rows.push({ kind: "group_resume", key: "gr:" + w.group_id, text: `群組「${w.name}」${typeof w.text === "string" ? w.text : "暫停了"}`, href: `#/chat/group/${encodeURIComponent(w.group_id)}` });
+    }
+  }
+  if (g.error) notes.push(`讀不到流程：${g.error}`);
+  for (const f of g.yourTurnFlows) {
+    const why = f.attention_reason || (f.phase && f.phase.reason) || "";
+    rows.push({ kind: "flow", key: "f:" + f.id, text: `流程「${f.task_missing ? "（專案已刪除或無法讀取）" : f.task_title}」等你處理${why ? "：" + why : ""}`, href: `#/flows/${encodeURIComponent(f.id)}` });
+  }
+  for (const s of g.yourTurnSessions) {
+    rows.push({ kind: "session", key: "s:" + s.terminal_id, text: `指令視窗「${s.role_label || TOOL[s.agent] || "未命名"}」在等你回覆`, href: `#/term/${encodeURIComponent(s.pane_id)}` });
+  }
+  if (g.meetingsError) notes.push(`讀不到會議：${g.meetingsError}`);
+  for (const m of g.yourTurnMeetings || []) rows.push({ kind: "meeting", key: "m:" + m.id, text: `會議「${m.topic || "（沒有議題）"}」等你核准`, href: `#/meetings/${encodeURIComponent(m.id)}` });
+  if (g.staffingError) notes.push(`讀不到組隊會議：${g.staffingError}`);
+  for (const x of g.yourTurnStaffing || []) rows.push({ kind: "staffing", key: "st:" + x.id, text: `組隊會議「${staffingTurnTitle(x)}」等你決定要不要採用`, href: `#/staffing/${encodeURIComponent(x.id)}` });
+  if (g.dispatchError) notes.push(`讀不到分配工作：${g.dispatchError}`);
+  for (const r of g.yourTurnDispatch || []) {
+    if (r.state === "proposed") rows.push({ kind: "dispatch_proposed", key: "dp:" + r.id, text: `幕僚長的提議「${r.title || "（沒有名稱）"}」等你確認（分配工作）`, href: `#/dispatch/${encodeURIComponent(r.id)}` });
+    else if (!resumeDispatch.has(r.id)) rows.push({ kind: "dispatch_paused", key: "dq:" + r.id, text: `分配工作「${r.title || "（沒有名稱）"}」暫停了，等你按「繼續」`, href: `#/dispatch/${encodeURIComponent(r.id)}` });
+  }
+  if (g.groupsError) notes.push(`讀不到群組：${g.groupsError}`);
+  for (const r of g.yourTurnGroups || []) {
+    if (r.waiting === true) rows.push({ kind: "group_waiting", key: "gw:" + r.id, text: `群組「${r.name || "（沒有名稱）"}」有員工想動手，等你按「允許這一次」或「拒絕」`, href: `#/chat/group/${encodeURIComponent(r.id)}` });
+    else if (!resumeGroup.has(r.id)) rows.push({ kind: "group_paused", key: "gq:" + r.id, text: `群組「${r.name || "（沒有名稱）"}」暫停了，等你按「繼續」或「不用了」`, href: `#/chat/group/${encodeURIComponent(r.id)}` });
+  }
+  if (lamp === "red") rows.push({ kind: "limit", key: "limit", text: "今天的用量到上限了，員工明天 0 點前不會再回話。", href: LIMIT_SETTINGS_HREF, link: "到設定看" });
+  return { rows, notes, complete: !notes.length && g.runtimeAvailable === true };
+}
+
+const HOME_ROW_BUTTONS = {
+  due: [["wait-start", "現在開始", true], ["wait-skip", "這次跳過", false]],
+  missed: [["missed-run", "補做", true], ["missed-dismiss", "不用了", false]],
+};
+function homeRowNode(row, act) {
+  const buttons = row.act
+    ? HOME_ROW_BUTTONS[row.act.type].map(([key, label, primary]) => el("button", { type: "button", class: `btn small${primary ? " primary" : ""}`, "data-home-action": key,
+      on: { click: (e) => { e.target.disabled = true; act(key, row.act.id); } } }, label))
+    : [el("a", { class: "btn small", href: row.href, "data-home-action": "go" }, row.link || "去看看")];
+  const node = el("div", { class: "home-row", "data-home-row": row.kind },
+    el("span", { class: "home-dot", "aria-hidden": "true" }), el("span", { class: "home-row-text" }, row.text), el("span", { class: "home-row-go" }, buttons));
+  if (row.kind === "limit") node.setAttribute("data-home", "limit-reached");
+  return node;
+}
+// The block. `state.refreshWaiting()` reads again (the same GETs as the page) and repaints the list only when it changed.
+function homeWaiting(state, board) {
+  const list = el("div", { class: "home-rows", "data-home": "waiting-list" });
+  const note = (m) => notice("warn", m);
+  const requests = {
+    "wait-start": (id) => api.post(`/api/routines/waiting/${encodeURIComponent(id)}`, { action: "start" }),
+    "wait-skip": (id) => api.post(`/api/routines/waiting/${encodeURIComponent(id)}`, { action: "skip" }),
+    "missed-run": (id) => api.post(`/api/routines/missed/${encodeURIComponent(id)}`, { action: "run" }),
+    "missed-dismiss": (id) => api.post(`/api/routines/missed/${encodeURIComponent(id)}`, { action: "dismiss" }),
+  };
+  const done = { "wait-start": "已開始", "wait-skip": "這次跳過了", "missed-run": "已開始補做", "missed-dismiss": "不補做了" };
+  const act = async (key, id) => {
+    try { await requests[key](id); toast(done[key]); } catch (e) { toast(e.message); }
+    await state.refreshWaiting();
+    refreshWaitingBar();
+  };
+  const paint = (g) => {
+    const m = homeWaitingRows(g, state.waitingList, state.lamp);
+    const key = JSON.stringify([m.rows, m.notes, m.complete]);
+    if (key === state.shown) return;
+    state.shown = key;
+    setKids(list,
+      m.notes.map(note),
+      m.rows.length ? el("div", { class: "home-row-list" }, m.rows.map((r) => homeRowNode(r, act)))
+        : el("p", { class: "small muted", "data-home": "waiting-none" }, m.complete ? "現在沒有要你決定的事。" : "目前讀得到的資料裡，沒有要你決定的事。"));
+  };
+  paint(board);
+  state.refreshWaiting = async () => {
+    if (state.token !== seq) return;
+    await Promise.all([loadLive().then(() => loadFlows()), loadMeetings(), loadStaffingList(), loadDispatchList(), loadGroupList()]);
+    const [w, l] = await Promise.all([api.get("/api/waiting").catch(() => null), api.get("/api/meetings/ledger").catch(() => null)]);
+    if (state.token !== seq) return;
+    state.waitingList = w && Array.isArray(w.waiting) ? w.waiting : null;
+    state.lamp = l && typeof l.lamp === "string" ? l.lamp : "";
+    paint(boardGroups(D.live, D.flows, D.meetings, D.staffing, D.dispatch, D.groups));
+  };
+  return { node: el("section", { class: "section home-block", "data-home": "waiting" }, sectionHead(WORDS.waiting.use, null), list) };
+}
+
+// ---- 我的員工 ----
+// The avatar of one employee: a click talks with them (openChatWith). One that cannot chat is grey, with the reason under it.
+function homeAvatar(p, chatsRes) {
+  const card = homeCardOf(chatsRes, p.id);
+  const off = !!card && card.can_chat === false;
+  const pos = cardPosition(p);
+  const reason = off ? plainWords(card.reason || "現在不能聊天").text : "";
+  const btn = el("button", { type: "button", class: `home-avatar${off ? " home-avatar-off" : ""}`, "data-employee": p.id, "data-employee-action": "chat",
+    "aria-label": `和 ${p.name || p.id} 聊天${off ? "（現在不能聊天）" : ""}`, on: { click: () => { openChatWith(p.id); } } },
+    el("span", { class: "home-avatar-art", "aria-hidden": "true" }, cardAvatar(p, 3)),
+    el("span", { class: "home-avatar-name" }, p.name || p.id),
+    el("span", { class: "home-avatar-pos small muted" }, pos ? CARD_POSITION_LABEL[pos] : ""));
+  return el("div", { class: "home-person" }, btn, reason ? el("span", { class: "small muted home-avatar-why", "data-employee-note": p.id }, reason) : null);
+}
+function homeNewEmployee(state) {
+  return el("button", { type: "button", class: "btn small", "data-employee-action": "new", on: { click: () => {
+    if (!state.catalog) { toast("現在還不能新增員工，請稍後再試。"); return; }
+    openCardWizard({ catalog: state.catalog, profiles: state.profiles || [], existing: null, onSaved: () => route() });
+  } } }, WORDS.newEmployee.use);
+}
+function homeTeam(state) {
+  const ceo = homeCeoOf(state.profiles, state.conf);
+  const people = [...(ceo ? [ceo] : []), ...state.profiles.filter((p) => !ceo || p.id !== ceo.id)];
+  return el("section", { class: "section home-block", "data-home": "team" },
+    sectionHead(WORDS.employeeList.use, "點頭像就能聊", homeNewEmployee(state)),
+    el("div", { class: "home-people" }, people.map((p) => homeAvatar(p, state.chats))));
+}
+
+// ---- 今天 ----
+// -> { readable, total, left, next: { name, time } | null }: from GET /api/routines. `left` counts the times of the routines that are on and
+// run today that have not come yet; `now` is a Date (the page's clock; a test passes its own).
+function homeTodayModel(res, now) {
+  if (!res || typeof res !== "object" || !Array.isArray(res.routines) || res.readable === false) return { readable: false, total: 0, left: 0, next: null };
+  const day = (now.getDay() + 6) % 7;
+  const minutes = now.getHours() * 60 + now.getMinutes();
+  let left = 0;
+  let next = null;
+  for (const r of res.routines) {
+    if (!r || r.enabled !== true || !Array.isArray(r.days) || !r.days.includes(day)) continue;
+    for (const t of Array.isArray(r.times) ? r.times : []) {
+      const m = /^(\d\d):(\d\d)$/.exec(String(t));
+      if (!m) continue;
+      const v = Number(m[1]) * 60 + Number(m[2]);
+      if (v <= minutes) continue;
+      left += 1;
+      if (!next || v < next.v) next = { v, name: String(r.name || ""), time: m[0] };
+    }
+  }
+  return { readable: true, total: res.routines.length, left, next: next ? { name: next.name, time: next.time } : null };
+}
+function homeToday(state) {
+  const now = state.now();
+  const m = homeTodayModel(state.routines, now);
+  let line;
+  if (!m.readable) line = "讀不到定時工作，所以看不出今天還有什麼要做。";
+  else if (!m.total) line = "還沒有定時工作。";
+  else if (!m.left) line = "今天沒有還沒到的定時工作。";
+  else line = `今天還有 ${m.left} 件，下一件 ${m.next.time}「${m.next.name}」`;
+  const chats = state.chats && Array.isArray(state.chats.chats) ? state.chats : null;
+  const routineIds = homeRoutineChatIds(state.routines);
+  const names = new Map((state.profiles || []).map((p) => [p.id, p.name || p.id]));
+  const seen = new Set();
+  const recent = [];
+  for (const c of chats ? chats.chats.slice().sort((a, b) => (Number(b.last_at) || 0) - (Number(a.last_at) || 0)) : []) {
+    if (!c || c.problem || routineIds.has(c.id) || !(c.turns > 0) || seen.has(c.profile_id) || !names.has(c.profile_id)) continue;
+    seen.add(c.profile_id);
+    recent.push(`${names.get(c.profile_id)}（${homeWhen(c.last_at, now)}）`);
+    if (recent.length >= 3) break;
+  }
+  return el("section", { class: "section home-block", "data-home": "today" },
+    sectionHead("今天", null),
+    el("p", { "data-home-today": "routines" }, line, " ", el("a", { class: "btn small", href: "#/routines" }, "看定時工作")),
+    chats ? (recent.length ? el("p", { class: "small", "data-home-today": "chats" }, "最近聊過：", recent.join("、")) : el("p", { class: "small muted", "data-home-today": "chats" }, "最近還沒聊過天。"))
+      : el("p", { class: "small muted", "data-home-today": "chats" }, "讀不到最近的對話。"));
+}
+
+// ---- 想做什麼？跟 CEO 說 ----
+function homeAsk(state) {
+  const ceo = homeCeoOf(state.profiles, state.conf);
+  const head = sectionHead("想做什麼？跟 CEO 說", null);
+  if (!ceo) {
+    return el("section", { class: "section home-block", "data-home": "ask" }, head,
+      el("p", null, "先建立一位 CEO，就能在這裡直接跟他說。"),
+      el("a", { class: "btn primary", href: "#/ceo", "data-home": "ask-ceo" }, "建立 CEO"));
+  }
+  const card = homeCardOf(state.chats, ceo.id);
+  if (card && card.can_chat === false) {
+    return el("section", { class: "section home-block", "data-home": "ask" }, head,
+      el("p", null, `${ceo.name || "CEO"} 現在還不能聊天：${plainWords(card.reason || "").text || "原因不明"}`),
+      el("a", { class: "btn primary", href: `#/chat?profile=${encodeURIComponent(ceo.id)}`, "data-home": "ask-prepare" }, "先把聊天準備好"));
+  }
+  const talked = state.chats && Array.isArray(state.chats.chats) ? state.chats.chats.some((c) => c && c.turns > 0 && !c.problem) : false;
+  const input = el("textarea", { rows: "3", maxlength: "20000", "data-home": "ask-input", "aria-label": "要對 CEO 說的話", placeholder: "例如：幫我把下個月的家庭開銷整理成表（Cmd/Ctrl + Enter 送出）",
+    on: { keydown: (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } } } });
+  const result = el("div", { "data-home": "ask-result", "aria-live": "polite" });
+  const button = el("button", { type: "button", class: "btn primary", "data-home": "ask-send", on: { click: () => send() } }, "送出");
+  let busy = false;
+  async function send() {
+    const text = input.value;
+    if (busy || !text.trim()) return;
+    if (state.lamp === "red") { setKids(result, limitReachedNotice(null)); return; }       // the limit would stop it: nothing is sent
+    busy = true; button.disabled = true; setKids(result);
+    let r;
+    try { r = await openChatWith(ceo.id, { text }); }
+    catch (e) { r = { ok: false, error: e }; }
+    busy = false; button.disabled = false;
+    if (r.error) {
+      const w = plainWords(r.error);
+      const limit = w.limit || HOME_LIMIT_KINDS.includes(r.error.code);
+      setKids(result, limit ? limitReachedNotice(r.error.message) : notice("bad", r.error.message || "沒有送出"));
+    } else if (r.kept) toast(HOME_BUSY_TEXT);
+    else if (r.reason) setKids(result, notice("warn", plainWords(r.reason).text));
+    else if (r.ok) input.value = "";
+  }
+  return el("section", { class: "section home-block", "data-home": "ask" }, head,
+    talked ? null : el("p", { class: "small" }, "跟 CEO 說第一句話吧。"),
+    el("div", { class: "home-ask-row" }, input, button),
+    el("p", { class: "small muted" }, HOME_CEO_ASK),
+    result);
+}
+
+// ---- the three steps of a person with no employee ----
+function homeFirstSteps(toolsRes) {
+  const rows = toolsRes && typeof toolsRes === "object" && Array.isArray(toolsRes.tools) ? toolsRes.tools : null;
+  const ready = !!rows && rows.some((t) => t && ["claude", "codex", "agy"].includes(t.id) && t.ready === true);
+  const step = (n, cls, title, line, action) => el("li", { class: `home-step ${cls}`, "data-home-step": String(n) },
+    el("span", { class: "home-step-mark", "aria-hidden": "true" }, cls.includes("done") ? "✓" : String(n)),
+    el("div", { class: "home-step-body" }, el("strong", null, title), el("span", { class: "small muted" }, line)), action || null);
+  return el("section", { class: "section home-block", "data-home": "first-steps" },
+    el("h2", null, "歡迎！三步就能開始。"),
+    el("ol", { class: "home-steps" },
+      step(1, ready ? "done" : "", "準備 AI 工具", ready ? "已經有可以聊天的 AI 工具就緒了。" : rows ? "還沒有就緒的 AI 工具。" : "讀不到 AI 工具的狀態。",
+        el("a", { class: "btn small", href: "#/setup" }, "看 AI 工具")),
+      step(2, "", "建立 CEO", "他會先問你幾個問題，再幫你整理計畫。", el("a", { class: "btn small primary", href: "#/ceo" }, "建立 CEO")),
+      step(3, "off", "說第一句話", "建立 CEO 之後就能說。", null)));
+}
+
+// ---- 員工 (#/employees) ----
+async function viewEmployees() {
+  const token = seq;
+  const [profilesRes, chatsRes, catalogRes] = await Promise.all([api.get("/api/agent-profiles").catch(() => null), api.get("/api/chats").catch(() => null),
+    api.get("/api/agent-builder/catalog").catch(() => null)]);
+  if (token !== seq) return;
+  const main = claim(token);
+  const profiles = profilesRes && Array.isArray(profilesRes.profiles) ? profilesRes.profiles.filter((p) => p && typeof p === "object" && typeof p.id === "string") : null;
+  const catalog = catalogRes && catalogRes.ok ? catalogRes : null;
+  const needCatalog = (fn) => () => { if (!catalog) { toast("現在還不能新增或設定員工，請稍後再試。"); return; } fn(); };
+  const chatCards = chatsRes && Array.isArray(chatsRes.cards) ? chatsRes.cards : null;
+  const newBtn = el("button", { type: "button", class: "btn primary", "data-employee-action": "new",
+    on: { click: needCatalog(() => openCardWizard({ catalog, profiles: profiles || [], existing: null, onSaved: () => route() })) } }, WORDS.newEmployee.use);
+  const person = (p) => {
+    const card = homeCardOf(chatsRes, p.id);
+    const off = !!card && card.can_chat === false;
+    const pos = cardPosition(p);
+    const tool = p.model && typeof p.model.tool === "string" ? CARD_TOOL_SHORT[p.model.tool] || p.model.tool : "";
+    return el("article", { class: `card home-employee${off ? " home-employee-off" : ""}`, "data-employee": p.id },
+      el("div", { class: "card-top" },
+        el("button", { type: "button", class: `home-avatar${off ? " home-avatar-off" : ""}`, "data-employee-action": "chat", "aria-label": `和 ${p.name || p.id} 聊天`,
+          on: { click: () => { openChatWith(p.id); } } }, el("span", { class: "home-avatar-art", "aria-hidden": "true" }, cardAvatar(p, 3))),
+        el("div", { style: "min-width:0" }, el("div", { class: "card-title" }, p.name || p.id),
+          el("div", { class: "card-sub" }, [pos ? CARD_POSITION_LABEL[pos] : "", tool].filter(Boolean).join("・")))),
+      p.enabled === false ? el("p", { class: "small muted" }, "這位員工目前停用。") : null,
+      off ? el("p", { class: "small muted", "data-employee-note": p.id }, plainWords(card.reason || "現在不能聊天").text) : null,
+      el("div", { class: "row" },
+        el("button", { type: "button", class: "btn small primary", "data-employee-action": "chat", disabled: off ? true : undefined, on: { click: () => { openChatWith(p.id); } } }, "聊天"), " ",
+        el("button", { type: "button", class: "btn small", "data-employee-action": "edit", on: { click: needCatalog(() => openCardWizard({ catalog, profiles, existing: p, onSaved: () => route() })) } }, "設定"), " ",
+        el("button", { type: "button", class: "btn small", "data-employee-action": "delete", on: { click: () => deleteCard(p, () => route()) } }, "刪除")));
+  };
+  const groupBtn = () => {
+    const cards = chatCards || [];
+    const usable = cards.filter((c) => c && c.can_chat === true).length;
+    return el("button", { type: "button", class: "btn small", "data-employee-action": "group", disabled: !chatCards || usable < GROUP_MIN ? true : undefined,
+      title: !chatCards ? "讀不到員工能不能聊天" : usable < GROUP_MIN ? `要有 ${GROUP_MIN} 位以上可以聊天的員工才能開群組` : undefined,
+      on: { click: () => openGroupDialog(cards, { onCreate: async (body) => {
+        const made = await api.post("/api/groups", body);
+        const notes = Array.isArray(made.notes) ? made.notes.filter((x) => typeof x === "string" && x) : [];
+        if (made.shared && made.shared.error && typeof made.shared.error.text === "string") notes.push("共用資料夾沒有全部打開：" + made.shared.error.text);
+        if (notes.length) toast(notes.join(" "));
+        location.hash = `#/chat/group/${encodeURIComponent(made.group.id)}`;
+        return made;
+      } }) } }, "開新群組");
+  };
+  const link = (href, label, line) => el("li", { class: "work-link" }, el("a", { href, class: "work-link-name" }, label), el("span", { class: "small muted" }, line));
+  setKids(main,
+    el("h1", null, "員工"),
+    el("p", { class: "lede" }, "你的 AI 員工都在這裡。點頭像或「聊天」就能和他說話。"),
+    runtimeNotice(),
+    el("section", { class: "section", "data-employees": "list" },
+      sectionHead(WORDS.employeeList.use, null, el("div", { class: "row" }, newBtn, " ", el("a", { class: "btn", href: "#/templates", "data-employee-action": "templates" }, "用團隊範本一次加好幾位"))),
+      profiles === null ? notice("warn", "讀不到員工的資料。重新整理看看。")
+        : profiles.length ? el("div", { class: "grid" }, profiles.map(person))
+          : emptyState("還沒有員工", "按「新增員工」，或用團隊範本一次加好幾位。")),
+    el("section", { class: "section", "data-employees": "shared" },
+      sectionHead("大家共用的", null),
+      el("ul", { class: "work-links" },
+        link("#/memory", "記憶", "每位員工都會知道的幾句話：關於你、你的工作、你的決定。"),
+        link("#/shared", "共用資料夾", "讓員工看同一個資料夾裡的檔案。"),
+        link("#/chat", "對話紀錄", "和員工聊過的對話，也能接著聊。"),
+        link("#/office", "辦公室", "像遊戲的樣子看大家。")),
+      el("div", { class: "row" }, groupBtn())));
+}
+
+// ---- 工作 (#/work) ----
+const WORK_LINKS = [
+  ["chat", "對話紀錄", "和員工聊過的對話，也能接著聊。"],
+  ["dispatch", "分配工作", "請 CEO 把一件事分成幾步交給員工；他提議、你確認才會做。"],
+  ["routines", "定時工作", "請員工在固定的時間做同一件事。"],
+  ["meetings", "會議", "各職位發言，CEO 做決定，重大的事交給你核准。"],
+  ["my-skills", "常用做法", "存下常用的做法，之後在對話裡一鍵放進輸入框。"],
+  ["actions", "AI 自己做了什麼", "CEO 和分配工作做過的每一件事，都列在這裡。"],
+];
+async function viewWork() {
+  setKids(claim(seq),
+    el("h1", null, "工作"),
+    el("p", { class: "lede" }, "請員工做事、安排時間、看做了什麼，都從這裡進去。"),
+    el("ul", { class: "work-links" }, WORK_LINKS.map(([route, name, line]) =>
+      el("li", { class: "work-link" }, el("a", { href: `#/${route}`, class: "work-link-name", "data-work": route }, name), el("span", { class: "small muted" }, line)))));
+}
+// ---------- end of plain pages ----------------------------------------------------------------------------------------------
 
 // ---------- the quest board (design lobby v1.2) ------------------------------------------------------------
 // The home page's first block. Every card is data VBear already has; nothing here invents progress. The grouping
@@ -12448,6 +12901,7 @@ function waitingBarText(rows) {
 async function refreshWaitingBar() {
   const bar = document.getElementById("waiting-bar");
   if (!bar) return;
+  if (navTop === "home") { bar.hidden = true; setKids(bar); return; }   // P47-2: the home page lists the same things itself, under 等你決定
   let rows = [];
   try { const r = await api.get("/api/waiting"); rows = r && Array.isArray(r.waiting) ? r.waiting : []; } catch (_) { rows = []; }
   const text = waitingBarText(rows);
@@ -12715,15 +13169,6 @@ function wireNavMenu() {
   });
 }
 
-// The two pages of the menu that P47-2 builds (the employees' page and the work page). Until then each has its name and one line.
-// They only read; they send nothing.
-async function viewEmployees() {
-  setKids(claim(seq), el("h1", null, "員工"), el("p", { class: "lede" }, "這一頁在下一張任務完成。"));
-}
-async function viewWork() {
-  setKids(claim(seq), el("h1", null, "工作"), el("p", { class: "lede" }, "這一頁在下一張任務完成。"));
-}
-
 let liveTimer = null;
 let liveTick = null;
 let routedHash = null;
@@ -12793,23 +13238,7 @@ async function route() {
   // is focused inside main, so typing and scrolling are never interrupted.
   // Home refreshes only its attention block, so the search box keeps focus.
   liveTick = null;
-  if (top === "home") {
-    liveTick = async () => {
-      await loadLive();
-      await loadFlows();
-      await loadMeetings();
-      await loadStaffingList();
-      await loadDispatchList();
-      await loadGroupList();
-      const box = document.getElementById("h-board");
-      if (!box) return;
-      const g = boardGroups(D.live, D.flows, D.meetings, D.staffing, D.dispatch, D.groups);
-      const key = boardKey(g, boardKeyContext());
-      if (key === boardShownKey) return;
-      boardShownKey = key;
-      setKids(box, boardSection(g));
-    };
-  }
+  if (top === "home") liveTick = homeTick;
   if (top === "team" || top === "projects") {
     liveTick = async () => {
       const before = JSON.stringify(D.live && D.live.sessions.map((s) => [s.terminal_id, s.status, s.skills_used.length]));

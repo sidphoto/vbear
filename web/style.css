@@ -106,6 +106,41 @@ button, input, select { font: inherit; color: inherit; }
 .side-foot { margin-top: auto; font-size: 12px; color: var(--ink-3); padding: 0 8px; }
 .side-foot button { margin-top: 6px; }
 
+/* P47-2 home: the home page, the employees' page and the work page (ADR 0013). Text only; every colour is a token of the theme. */
+.home-block { margin-top: 22px; }
+.home-rows { display: grid; gap: 8px; }
+.home-row-list { display: grid; gap: 8px; }
+.home-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 10px 12px; border: 1px solid var(--line); border-left: 4px solid var(--quest-edge); border-radius: 10px; background: var(--panel); }
+.home-row[data-home-row="limit"] { border-left-color: var(--bad); }
+.home-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--quest-edge); flex: none; }
+.home-row-text { flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; }
+.home-row-go { display: flex; gap: 8px; flex-wrap: wrap; }
+.home-people { display: flex; flex-wrap: wrap; gap: 14px; }
+.home-person { display: grid; justify-items: center; gap: 4px; width: 112px; }
+.home-avatar { display: grid; justify-items: center; gap: 2px; padding: 8px; min-width: 96px; min-height: 44px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--ink); font: inherit; cursor: pointer; }
+.home-avatar:hover, .home-avatar:focus-visible { border-color: var(--accent); background: var(--accent-soft); }
+.home-avatar-off { opacity: .6; }
+.home-avatar-name { font-weight: 650; overflow-wrap: anywhere; text-align: center; }
+.home-avatar-why { text-align: center; overflow-wrap: anywhere; }
+.home-ask-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.home-ask-row textarea { flex: 1 1 320px; min-width: 0; }
+.home-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.home-step { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+.home-step.done { border-color: var(--ok); }
+.home-step.off { opacity: .6; }
+.home-step-mark { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 700; flex: none; }
+.home-step.done .home-step-mark { background: var(--ok-soft); color: var(--ok); }
+.home-step-body { flex: 1 1 auto; display: grid; gap: 2px; min-width: 0; }
+.home-advanced { margin-top: 36px; padding-top: 12px; border-top: 1px solid var(--line); }
+.home-employee .card-top { align-items: center; justify-content: flex-start; gap: 12px; }
+.work-links { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 8px; }
+.work-link { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.work-link-name { font-weight: 650; min-width: 9em; }
+@media (max-width: 720px) {
+  .home-person { width: 96px; }
+  .home-step { flex-wrap: wrap; }
+}
+
 .stage { min-width: 0; }
 .waiting-bar { position: sticky; top: 0; z-index: 20; padding: 8px clamp(16px, 4vw, 44px); background: var(--warn-soft, var(--panel-2)); border-bottom: 1px solid var(--line); color: var(--ink); font-weight: 600; }
 .waiting-bar[hidden] { display: none; }

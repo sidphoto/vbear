@@ -16,6 +16,8 @@ const isEl = (tag) => (n) => n.tag === tag;
 global.document.querySelector = () => null;
 // the side panel's scan status is not part of this page; its first load (before a test's handler is set) leaves a
 // bare overview that it cannot draw
+// P47-2: the board, the task cards, the skill search and the first game are the "進階" part of the new home page, drawn only in the advanced mode
+// (a display only). These tests are about that part, so the config they serve has the mode on (setPage).
 const realGetById = global.document.getElementById.bind(global.document);
 global.document.getElementById = (id) => (id === "scan-status" ? null : realGetById(id));
 
@@ -399,7 +401,7 @@ test("flowCard and sessionCard keep their own structure for the other pages", ()
 
 let handlerState;
 function setPage(over = {}) {
-  handlerState = { live: live(), flows: flowsOf([]), liveError: null, ...over };
+  handlerState = { live: live(), flows: flowsOf([]), liveError: null, config: { advanced_mode: true }, ...over };
   setHandler((url) => {
     const p = url.split("?")[0];
     if (p === "/api/overview") return jsonResponse({ ok: true, totals: { active: 0 }, generated_at: Date.now() / 1000, stale: false, skills_with_problems: [] });
@@ -427,14 +429,16 @@ async function refresh() { assert(tick, "the home page registered a refresh"); t
 const board = (main) => main.find((n) => n.getAttribute && n.getAttribute("id") === "h-board");
 const headings = (main) => main.findAll(isEl("h2")).map(text);
 
-test("the page is the lobby: title, lede, and the board before the search", async () => {
+test("the page is the home page (P47-2): title, lede, 等你決定 first, and in the advanced part the board before the search", async () => {
   setPage({ flows: flowsOf([flow("awaiting_approval", { attention: true })]) });
   const main = await open();
-  assert.strictEqual(text(main.find(isEl("h1"))), "冒險者大廳");
-  assert(text(main).includes("這裡看哪些任務在等你、隊伍走到哪一步。"));
-  assert(!text(main).includes("先看告示板上輪到你的任務"));
+  assert.strictEqual(text(main.find(isEl("h1"))), "首頁");
+  assert(text(main).includes("這裡看有什麼等你決定、你的員工，和今天要做的事。"));
+  assert(!text(main).includes("先看告示板上輪到你的任務") && !text(main).includes("冒險者大廳"));
   const hs = headings(main);
-  assert.deepStrictEqual(hs.slice(0, 2), ["輪到你", "其他進行中的任務"]);
+  assert.strictEqual(hs[0], "等你決定", "what waits for the person is the first thing");
+  assert(hs.indexOf("進階") > 0 && hs.indexOf("輪到你") > hs.indexOf("進階"), "the old board is under 進階");
+  assert.deepStrictEqual(hs.slice(hs.indexOf("輪到你"), hs.indexOf("輪到你") + 2), ["輪到你", "其他進行中的任務"]);
   assert(hs.indexOf("找技能") > hs.indexOf("其他進行中的任務"), "the search stays after the board");
   assert(hs.includes("最近的專案"));
   assert(!text(main).includes("需要你處理"), "the old block is gone");
@@ -694,12 +698,12 @@ test("onboardingState: all three done folds to one line with the current step of
 });
 
 test("the page: the three steps sit above the board, the next undone step has the only button, 先不要 is there", async () => {
-  setPage({ profiles: [], catalog: catalogOf(), tasks: [], config: { onboarding_dismissed: false } });
+  setPage({ profiles: [], catalog: catalogOf(), tasks: [], config: { advanced_mode: true, onboarding_dismissed: false } });
   const main = await open();
   const host = onboard(main);
   assert(host, "the block is on the page");
   const hs = headings(main);
-  assert.strictEqual(hs[0], "新手第一局", "above the board");
+  assert(hs.indexOf("新手第一局") > hs.indexOf("進階") && hs.indexOf("新手第一局") < hs.indexOf("任務告示板"), "above the board (both in the advanced part, P47-2)");
   const html = main.findAll((n) => n.getAttribute && n.getAttribute("data-step")).map((n) => [n.getAttribute("data-step"), n.getAttribute("data-done")]);
   assert.deepStrictEqual(html, [["cards", "false"], ["task", "false"], ["team", "false"]]);
   assert(text(host).includes("1. 拿角色卡") && text(host).includes("2. 導入專案，建立任務卡") && text(host).includes("3. 把隊伍放上任務卡"));
@@ -711,11 +715,11 @@ test("the page: the three steps sit above the board, the next undone step has th
 });
 
 test("the page: steps tick from the server's data, and the button moves on to the step that is next", async () => {
-  setPage({ profiles: [mkCard("mine")], catalog: catalogOf(), tasks: [], config: { onboarding_dismissed: false } });
+  setPage({ profiles: [mkCard("mine")], catalog: catalogOf(), tasks: [], config: { advanced_mode: true, onboarding_dismissed: false } });
   let main = await open();
   assert.deepStrictEqual(main.findAll((n) => n.getAttribute && n.getAttribute("data-step")).map((n) => n.getAttribute("data-done")), ["true", "false", "false"]);
   assert.deepStrictEqual(onboard(main).findAll((n) => n.getAttribute && n.getAttribute("data-onboard-go")).map((n) => n.getAttribute("data-onboard-go")), ["task"]);
-  setPage({ profiles: [mkCard("mine")], catalog: catalogOf(), tasks: [taskOf("t-1", "/p/one")], config: { onboarding_dismissed: false } });
+  setPage({ profiles: [mkCard("mine")], catalog: catalogOf(), tasks: [taskOf("t-1", "/p/one")], config: { advanced_mode: true, onboarding_dismissed: false } });
   main = await open();
   const go = onboard(main).findAll((n) => n.getAttribute && n.getAttribute("data-onboard-go"));
   assert.deepStrictEqual(go.map((n) => n.getAttribute("data-onboard-go")), ["team"]);
@@ -724,12 +728,12 @@ test("the page: steps tick from the server's data, and the button moves on to th
 
 test("the page: 先不要 saves onboarding_dismissed and the block goes away; the board stays", async () => {
   const posts = [];
-  setPage({ profiles: [], catalog: catalogOf(), tasks: [], config: { onboarding_dismissed: false } });
+  setPage({ profiles: [], catalog: catalogOf(), tasks: [], config: { advanced_mode: true, onboarding_dismissed: false } });
   const inner = global.fetch;
   global.fetch = async (url, options) => {
     if (url === "/api/config" && options && options.method === "POST") {
       posts.push(JSON.parse(options.body));
-      return { ok: true, status: 200, json: async () => ({ ok: true, config: { onboarding_dismissed: true } }) };
+      return { ok: true, status: 200, json: async () => ({ ok: true, config: { advanced_mode: true, onboarding_dismissed: true } }) };
     }
     return inner(url, options);
   };
@@ -745,17 +749,18 @@ test("the page: 先不要 saves onboarding_dismissed and the block goes away; th
 });
 
 test("the page: a dismissed block, or a config that cannot be read, shows nothing", async () => {
-  setPage({ profiles: [], catalog: catalogOf(), tasks: [], config: { onboarding_dismissed: true } });
+  setPage({ profiles: [], catalog: catalogOf(), tasks: [], config: { advanced_mode: true, onboarding_dismissed: true } });
   assert.strictEqual(onboard(await open()).children.length, 0);
-  setPage({ profiles: [], catalog: catalogOf(), tasks: [] });   // /api/config answers nothing usable
+  app.syncAdvancedNav(true);   // the page falls back on the menu's own knowledge of the mode when the config cannot be read
+  setPage({ profiles: [], catalog: catalogOf(), tasks: [], config: null });   // /api/config answers nothing usable
   assert.strictEqual(onboard(await open()).children.length, 0);
-  setPage({ tasks: [], config: { onboarding_dismissed: false } });   // the cards could not be read
+  setPage({ tasks: [], config: { advanced_mode: true, onboarding_dismissed: false } });   // the cards could not be read
   assert.strictEqual(onboard(await open()).children.length, 0);
 });
 
 test("the page: with all three done it is one line, 你的小隊已就位 · 下一步", async () => {
   const waiting = flow("awaiting_approval", { attention: true });
-  setPage({ profiles: [mkCard("mine")], catalog: catalogOf(), tasks: [taskOf("t-1", "/p/one")], flows: flowsOf([waiting]), config: { onboarding_dismissed: false } });
+  setPage({ profiles: [mkCard("mine")], catalog: catalogOf(), tasks: [taskOf("t-1", "/p/one")], flows: flowsOf([waiting]), config: { advanced_mode: true, onboarding_dismissed: false } });
   const main = await open();
   const host = onboard(main);
   const line = host.find((n) => n.getAttribute && n.getAttribute("data-onboarding") === "done");

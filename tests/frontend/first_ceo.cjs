@@ -293,80 +293,72 @@ test("「開始使用」 on the start-up page leads to the step when there is no
 
 // ---- the lobby ---------------------------------------------------------------------------------------------------
 
-test("lobby: a person with no card to chat with is offered to make a CEO; one who has a card is not", async () => {
+// P47-2: the lobby's two doors (make a CEO / chat with the CEO that was made, once) are replaced by the new home page: the three steps for a person
+// with no employee (step 2 is 建立 CEO), and for a person who has a CEO the box 「想做什麼？跟 CEO 說」, which sends only on the person's own press.
+// What the doors did on pressing 聊聊看 (open the chat, the opening sentence in its box) is the work of 「建立 CEO，開始聊」 now (P47-4).
+const homeOf = (main, key) => byAttr(main, "data-home", key);
+test("home: a person with no card to chat with is offered to make a CEO (step 2 of the three); one who has a card is not", async () => {
   setPage();
   let main = await open("#/");
-  const door = ceo(main, "create-invite");
-  assert(door, "the door is on the lobby");
-  assert(/CEO/.test(text(door)));
-  assert.strictEqual(attr(door.find((n) => n.tag === "a"), "href"), "#/ceo");
-  setPage({ plan: plan({ needed: false, can_create: false, tool: null }) });
+  const steps = homeOf(main, "first-steps");
+  assert(steps, "the three steps are on the home page");
+  const step2 = byAttr(main, "data-home-step", "2");
+  assert(/CEO/.test(text(step2)));
+  assert.strictEqual(attr(step2.find((n) => n.tag === "a"), "href"), "#/ceo");
+  assert.strictEqual(posts("/api/chats").length + posts("/api/agent-profiles").length, 0, "showing it makes nothing");
+  setPage({ plan: plan({ needed: false, can_create: false, tool: null }), profiles: [profile()] });
   main = await open("#/");
-  assert.strictEqual(ceo(main, "create-invite"), null);
-  setPage({ plan: plan({ can_create: false, go: "setup", tool: null }) });
-  main = await open("#/");
-  assert.strictEqual(ceo(main, "create-invite"), null, "no ready tool: the start-up's job, not a door that leads nowhere");
+  assert.strictEqual(homeOf(main, "first-steps"), null, "a person who has a card is not shown the steps");
+  assert(homeOf(main, "ask"), "and has the box for the CEO");
   setPage({ planStatus: 503 });
   main = await open("#/");
-  assert.strictEqual(ceo(main, "create-invite"), null);
+  assert(homeOf(main, "first-steps"), "a plan that cannot be read does not change the steps: the page asks the start-up page's tool list, not the plan");
 });
 
-test("lobby: once the CEO is made it is offered once: a button opens the chat with the opening in the box, and the offer is put away", async () => {
+test("home: a CEO who was made and not yet talked to: the box says to say the first words; showing it opens nothing; the press opens the chat and sends the typed words", async () => {
   setPage({ plan: plan({ needed: false, can_create: false, tool: null }), profiles: [profile()], config: { setup_done: true, first_ceo_id: CARD_ID } });
   let main = await open("#/");
-  const door = ceo(main, "chat-invite");
-  assert(door);
-  assert(/跟你的 CEO 聊聊/.test(text(door)));
+  const ask = homeOf(main, "ask");
+  assert(ask && /第一句話/.test(text(ask)));
   assert.strictEqual(posts("/api/chats").length, 0, "showing it opens nothing");
-  await click(ceo(main, "chat-go"));
+  assert.strictEqual(posts("/api/config").length, 0, "and puts nothing away");
+  const box = byAttr(main, "data-home", "ask-input");
+  typeInto(box, "幫我整理下載資料夾");
+  assert.strictEqual(FETCH_LOG.filter((c) => c.method !== "GET").length, 0, "typing sends nothing");
+  await click(byAttr(main, "data-home", "ask-send"));
   assert.deepStrictEqual(posts("/api/chats").map((c) => c.body), [{ profile_id: CARD_ID }]);
+  assert.deepStrictEqual(FETCH_LOG.filter((c) => /\/messages$/.test(c.url)).map((c) => c.body), [{ text: "幫我整理下載資料夾" }]);
   assert.strictEqual(global.location.hash, `#/chat/${CHAT_ID}`);
-  assert.deepStrictEqual(posts("/api/config").map((c) => c.body), [{ first_ceo_id: "" }]);
-  main = await open(`#/chat/${CHAT_ID}`);
-  assert.strictEqual(byAttr(main, "data-chat", "input").value, OPENING);
-  assert.strictEqual(FETCH_LOG.filter((c) => /\/messages$/.test(c.url)).length, 0);
-  main = await open("#/");
-  assert.strictEqual(ceo(main, "chat-invite"), null, "shown once");
 });
 
-test("lobby: the offer re-uses the empty chat the first step already opened, and can be put away without opening anything", async () => {
-  setPage({ plan: plan({ needed: false, can_create: false, tool: null }), profiles: [profile()], chats: [chatRowOf()],
-    config: { setup_done: true, first_ceo_id: CARD_ID } });
-  let main = await open("#/");
-  await click(ceo(main, "chat-go"));
-  assert.strictEqual(posts("/api/chats").length, 0, "the empty chat is opened, not another one made");
+test("home: the box re-uses the empty chat the first step already opened (no second chat is made)", async () => {
+  setPage({ plan: plan({ needed: false, can_create: false, tool: null }), profiles: [profile()], chats: [chatRowOf()], config: { setup_done: true, first_ceo_id: CARD_ID } });
+  const main = await open("#/");
+  typeInto(byAttr(main, "data-home", "ask-input"), "你好");
+  await click(byAttr(main, "data-home", "ask-send"));
+  assert.strictEqual(posts("/api/chats").length, 0, "the empty chat is used, not another one made");
+  assert.strictEqual(FETCH_LOG.filter((c) => /\/messages$/.test(c.url)).length, 1);
   assert.strictEqual(global.location.hash, `#/chat/${CHAT_ID}`);
-  setPage({ plan: plan({ needed: false, can_create: false, tool: null }), profiles: [profile()], config: { setup_done: true, first_ceo_id: CARD_ID } });
-  main = await open("#/");
-  await click(ceo(main, "chat-dismiss"));
-  assert.strictEqual(posts("/api/chats").length, 0);
-  assert.deepStrictEqual(posts("/api/config").map((c) => c.body), [{ first_ceo_id: "" }]);
-  assert.strictEqual(ceo(main, "chat-invite"), null);
 });
 
-test("lobby: no offer when the person has already talked with that CEO, when the card is gone, or when it cannot chat", async () => {
-  setPage({ plan: plan({ needed: false, can_create: false, tool: null }), profiles: [profile()], chats: [chatRowOf({ turns: 2 })],
-    config: { setup_done: true, first_ceo_id: CARD_ID } });
+test("home: no first-words line once the person has talked with the CEO; a CEO whose card is gone or stopped is not the one to talk to", async () => {
+  setPage({ plan: plan({ needed: false, can_create: false, tool: null }), profiles: [profile()], chats: [chatRowOf({ turns: 2 })], config: { setup_done: true, first_ceo_id: CARD_ID } });
   let main = await open("#/");
-  assert.strictEqual(ceo(main, "chat-invite"), null);
-  assert.deepStrictEqual(posts("/api/config").map((c) => c.body), [{ first_ceo_id: "" }], "and it is not offered again");
-  setPage({ plan: plan({ needed: false, can_create: false, tool: null }), profiles: [], config: { setup_done: true, first_ceo_id: CARD_ID } });
-  main = await open("#/");
-  assert.strictEqual(ceo(main, "chat-invite"), null);
+  assert(!/第一句話/.test(text(homeOf(main, "ask"))), "they already talked");
   setPage({ plan: plan({ needed: false, can_create: false, tool: null }), profiles: [profile({ enabled: false })], config: { setup_done: true, first_ceo_id: CARD_ID } });
   main = await open("#/");
-  assert.strictEqual(ceo(main, "chat-invite"), null);
-  setPage({ plan: plan({ needed: false, can_create: false, tool: null }), profiles: [profile({ model: { tool: "grok", model_id: "" } })], config: { setup_done: true, first_ceo_id: CARD_ID } });
-  main = await open("#/");
-  assert.strictEqual(ceo(main, "chat-invite"), null);
+  assert(!byAttr(main, "data-home", "ask-input"), "a stopped card is not sent to");
+  assert(/先建立一位 CEO/.test(text(homeOf(main, "ask"))));
 });
 
-test("lobby: a chat that cannot open sends the person to the chat page with the CEO chosen", async () => {
+test("home: a chat that cannot open sends the person to the chat page with the CEO chosen, and nothing is sent", async () => {
   setPage({ plan: plan({ needed: false, can_create: false, tool: null }), profiles: [profile()], chatError: "還沒通過聊天驗證",
     config: { setup_done: true, first_ceo_id: CARD_ID } });
   const main = await open("#/");
-  await click(ceo(main, "chat-go"));
+  typeInto(byAttr(main, "data-home", "ask-input"), "你好");
+  await click(byAttr(main, "data-home", "ask-send"));
   assert.strictEqual(global.location.hash, `#/chat?profile=${CARD_ID}`);
+  assert.strictEqual(FETCH_LOG.filter((c) => /\/messages$/.test(c.url)).length, 0);
 });
 
 // ---- source -----------------------------------------------------------------------------------------------------

@@ -74,7 +74,7 @@ function setPage(over = {}) {
     if (p === "/api/flows") return jsonResponse({ ok: true, flows: [] });
     if (p === "/api/agent-profiles") return jsonResponse({ ok: true, profiles: page.profiles });
     if (p === "/api/tasks") return jsonResponse({ ok: true, tasks: page.tasks });
-    if (p === "/api/config") return jsonResponse({ ok: true, config: {} });
+    if (p === "/api/config") return jsonResponse({ ok: true, config: { advanced_mode: true } });   // P47-2: the board is the advanced part of the home page
     if (p === "/api/agent-builder/catalog") return jsonResponse({ ok: false });
     if (p === "/api/meetings" && method === "GET") return page.meetingsError ? jsonResponse({ error: page.meetingsError }, false, 500) : jsonResponse({ meetings: page.meetings });
     if (p === "/api/meetings/ledger") return jsonResponse(page.ledger);
@@ -264,6 +264,9 @@ test("home: a meeting that waits for the chairman is on the 'your turn' board, a
   assert(text(card).includes("沒有回報的呼叫以每次上限計"), text(card));
   assert.strictEqual(main.findAll((n) => n.tag === "img").length, 0);
   assert(text(main).includes("1 場會議等你"));
+  const row = main.find((n) => n.getAttribute && n.getAttribute("data-home-row") === "meeting");
+  assert(row && text(row).includes("要花錢的事") && text(row).includes(EVIL) && !/US\$/.test(text(row)), "and a row of 等你決定, without the amount");
+  assert.strictEqual(row.find((n) => n.tag === "a").getAttribute("href"), "#/meetings/" + MID);
   // the board's key changes when a meeting joins it, so the 5-second refresh repaints
   const k0 = app.boardKey(app.boardGroups({ runtime: { available: true } }, { flows: [] }, { meetings: [] }), { liveError: "", projects: [] });
   const k1 = app.boardKey(g, { liveError: "", projects: [] });
