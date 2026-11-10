@@ -9,6 +9,7 @@ chat with yet, to make one.
   still has to pass the check, which the plan says in ``chat_note``). A tool that is ready only because the person pressed
   「我登入好了」 (Grok, MCODE) cannot chat, so it is never chosen. With none ready the plan says to go back to the start-up
   (``go``), and nothing can be made.
+  P48-3: when the person picked the AI in the start-up, ``plan(..., wanted=...)`` looks at that tool only and never falls back to another.
 * the words to fill in: the name, the instructions and the opening sentence of the first chat. All three are only a
   starting point the person can change; the opening sentence is put in the chat's box and never sent by anything but the
   person's own press of the send button.

@@ -728,14 +728,15 @@ test("v0.21.0 chat: after 「到準備頁」 the person comes back to the same c
   assert.strictEqual(q(again, "input").value, "");
 });
 
-test("fix47 CEO: the page says 「已就緒」 only when a chat can start with the tool, and says what is true otherwise", async () => {
-  const cases = [[{ state: "verified" }, "已就緒"], [{ state: "policy" }, "管理員設定"], [{ state: "unverified" }, "安全檢查"]];
+test("fix47 CEO: the page says 「可以聊天了」 (P48-3: it was 「已就緒」) only when a chat can start with the tool, and says what is true otherwise", async () => {
+  const cases = [[{ state: "verified" }, "可以聊天了"], [{ state: "policy" }, "管理員設定"], [{ state: "unverified" }, "安全檢查"]];
   for (const [sup, word] of cases) {
     setPage({ extra: ceoExtra(), list: prepList({}, sup) });
     const main = await open("#/ceo");
     const line = text(main.find((n) => n.getAttribute && n.getAttribute("data-ceo") === "tool"));
     assert(line.includes(word), `${sup.state}: ${line}`);
-    assert.strictEqual(line.includes("已就緒"), sup.state === "verified", `${sup.state}: ${line}`);
+    assert.strictEqual(line.includes("可以聊天了"), sup.state === "verified", `${sup.state}: ${line}`);
+    assert(!line.includes("已就緒"), line);
   }
 });
 

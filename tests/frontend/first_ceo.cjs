@@ -103,7 +103,7 @@ test("with no card to chat with, #/ceo shows the step: a name, a plain sentence 
   assert.strictEqual(name.value, "CEO");
   assert.strictEqual(about.value, INSTRUCTIONS);
   assert.strictEqual(about.tag, "textarea");
-  assert(/Claude Code/.test(text(ceo(main, "tool"))) && /已就緒/.test(text(ceo(main, "tool"))));
+  assert(/Claude Code/.test(text(ceo(main, "tool"))) && /可以聊天了/.test(text(ceo(main, "tool"))));       // (P48-3) 「已就緒」 became 「可以聊天了」: said only when a chat can start
   assert(/每件事先問我/.test(text(ceo(main, "mode"))) && /先問你/.test(text(ceo(main, "mode"))), "safe mode, said in words");       // (P47-4) the new name of the mode
   const go = ceo(main, "create");
   assert.strictEqual(go.tag, "button");
@@ -178,7 +178,7 @@ test("AGY: the card can be made on a ready AGY (the last choice), and the page s
     chat_note: "AGY 聊天要先通過驗證：到聊天頁按「驗證聊天」（用你的 Google 方案）。" }), supportExtra: { agy: { state: "unverified" } } });
   const main = await open("#/ceo");
   // the tool is there, but its chat is not checked yet: the page does not say 「已就緒」 (fix47), it says the check comes first
-  assert(/AGY/.test(text(ceo(main, "tool"))) && /先做一次安全檢查/.test(text(ceo(main, "tool"))) && !/已就緒/.test(text(ceo(main, "tool"))));
+  assert(/AGY/.test(text(ceo(main, "tool"))) && /先做一次安全檢查/.test(text(ceo(main, "tool"))) && !/已就緒|可以聊天了/.test(text(ceo(main, "tool"))));
   const note = text(ceo(main, "agy-note"));
   assert(note.includes("送到 Google") && note.includes("AGY 技能") && note.includes("通過驗證"), note);
   assert(/驗證聊天/.test(text(ceo(main, "chat-note"))));

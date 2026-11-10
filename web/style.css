@@ -1933,3 +1933,14 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .btn[hidden] { display: none; }
 .home-ask-row textarea, input[data-limit-input] { padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); font: inherit; resize: vertical; }
 input[data-limit-input] { width: 100%; box-sizing: border-box; resize: none; }
+
+/* P48-3 (v0.22.0): the page that makes the CEO folds its long explanations; the CEO's conversation has two opening choices and a hint
+   under the plan. Plain boxes and the colours the page already has. */
+.ceo-more { margin: 8px 0 0; }
+.ceo-more > :not(summary) { margin-left: 14px; margin-right: 14px; }
+.ceo-more > :last-child { margin-bottom: 12px; }
+.chat-choices { display: flex; flex-wrap: wrap; gap: 6px 8px; }
+.chat-choices:empty { display: none; }
+.chat-hint { display: grid; gap: 8px; margin: 10px 0 0; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--panel); }
+.chat-hint p { margin: 0; }
+.chat-hint .row { display: flex; flex-wrap: wrap; gap: 6px 8px; }
