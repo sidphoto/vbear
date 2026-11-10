@@ -222,7 +222,7 @@ class ChangelogRelease(unittest.TestCase):
         # P46-6 wrote the v0.20.0 section and left the version number alone: the coordinator bumps it when the release is made, and it is
         # 0.19.0 until then and 0.20.0 after (the heading and the number must never disagree once it is bumped). P47-6 wrote the v0.21.0
         # section and again left the number: it stays 0.20.0 until the coordinator bumps it to 0.21.0 and this line is changed with it.
-        self.assertIn('__version__ = "0.20.0"', init)
+        self.assertIn('__version__ = "0.21.0"', init)
 
     def test_the_v090_section_covers_positions_professions_and_the_hover_box(self):
         section = self.text[self.text.index("## v0.9.0"):self.text.index("## v0.8.9")]
