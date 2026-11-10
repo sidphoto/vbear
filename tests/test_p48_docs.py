@@ -125,10 +125,11 @@ class ChangelogTests(unittest.TestCase):
                      "/logo.svg?r=1", "does not clear the stored pick", "revoked in System Settings", "ad-hoc", "33 to 42 minutes", "judge functions"):
             self.assertIn(word, self.first, word)
 
-    def test_the_real_machine_line_is_left_for_the_coordinator_and_what_was_not_tried_is_honest(self):
+    def test_the_real_machine_line_is_filled_in_and_what_was_not_tried_is_honest(self):
         line = next(l for l in self.text.splitlines() if l.startswith("- **On a real Mac:**") and "v0.22.0" in l)
-        for word in ("TO BE FILLED BY THE COORDINATOR", "administrator setting", "`--haiku` could not run", "permission window", "number on the Dock", "notification really appearing",
-                     "after upgrading"):
+        self.assertNotIn("TO BE FILLED", line)
+        for word in ("2026-11-11", "`tools/qa_p48.py --no-ai`", "**Not tried on a real machine:**", "administrator setting", "`--haiku` was not run", "permission window",
+                     "number on the Dock", "notification really appearing", "after upgrading", "Claude cost US$0"):
             self.assertIn(word, line, word)
 
     def test_going_back_to_v021_is_read_from_the_old_code_and_marks_what_is_not_known(self):
