@@ -749,6 +749,13 @@ class Console:
         # on its own thread over a connection this call holds. When the time is over the connection is shut and closed, which ends the
         # thread's read at once; the thread is then waited for (briefly) so nothing is left reading.
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
+        held = []                                           # the socket itself: an answer with "Connection: close" takes it from conn.sock
+        plain_connect = conn.connect
+
+        def connect():
+            plain_connect()
+            held.append(conn.sock)
+        conn.connect = connect
         box = []
 
         def run():
@@ -770,14 +777,17 @@ class Console:
         finally:
             late = worker.is_alive()
             if late:
-                sock = conn.sock
-                if sock is not None:
+                for sock in held + ([conn.sock] if conn.sock is not None else []):
                     try:
                         sock.shutdown(socket.SHUT_RDWR)
                     except OSError:
                         pass
+                    try:
+                        sock.close()
+                    except OSError:
+                        pass
             conn.close()
-            worker.join(1.0)
+            worker.join(1.0)                                # the read was cut: the thread ends at once
         if late or not box or self.budget() <= 0:
             return 0, None
         return box[0]

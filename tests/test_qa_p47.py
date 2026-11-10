@@ -992,8 +992,11 @@ class RunTests(unittest.TestCase):
             def __init__(inner, host, port, timeout=None):
                 seen.append(timeout)
 
-            def request(inner, *a, **k):
+            def connect(inner):
                 pass
+
+            def request(inner, *a, **k):
+                inner.connect()
 
             def getresponse(inner):
                 return Reply()
@@ -1065,6 +1068,9 @@ class RunTests(unittest.TestCase):
         replies = {
             "headers": b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Long: " + b"a" * 400 + b"\r\nContent-Length: 15\r\n\r\n" + b'{"ready": true}',
             "error": b"HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: 400\r\n\r\n" + b" " * 400,
+            # R6: the console's own way (HTTP/1.0, "Connection: close"): the answer takes the socket from the connection
+            "close 200": b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 400\r\n\r\n" + b" " * 400,
+            "close 409": b"HTTP/1.0 409 Conflict\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 400\r\n\r\n" + b" " * 400,
         }
         for name, raw in replies.items():
             srv = socket.socket()
@@ -1073,6 +1079,7 @@ class RunTests(unittest.TestCase):
             srv.settimeout(5.0)
             port = srv.getsockname()[1]
             slow_from = 0 if name == "headers" else raw.index(b"\r\n\r\n") + 4
+            # the server goes on sending long after the time left (400 bytes at 0.01 s: 4 s), unless the reader closes its end
             gone = threading.Event()
 
             def serve():
