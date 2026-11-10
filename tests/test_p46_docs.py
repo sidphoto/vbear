@@ -230,7 +230,8 @@ class ChangelogTests(unittest.TestCase):
 
     def test_the_release_heading_is_first_and_the_old_one_follows(self):
         headings = re.findall(r"(?m)^## (v\S+)", self.text)
-        self.assertEqual(headings[:2], ["v0.20.0", "v0.19.0"])
+        self.assertIn("v0.20.0", headings)
+        self.assertEqual(headings[headings.index("v0.20.0"):][:2], ["v0.20.0", "v0.19.0"])        # (v0.21.0 goes in front of it, P47-6)
 
     def test_it_says_what_was_done_what_an_agy_employee_can_and_cannot_do_and_that_it_is_an_estimate(self):
         for phrase in ("P46-1 to P46-6", "AGY employees can chat", "Can:", "Cannot:", SHARED_SENTENCE, "AGY skills you installed yourself", "**The cost is an estimate:**",

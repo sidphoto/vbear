@@ -25,6 +25,15 @@ allowed to do, or what several agents are up to. VBear puts that on one screen. 
 armor, and only then send it in. If you give a job to a team, VBear shows who is on it and stops at the gates
 where you decide.
 
+> **Since v0.21 the screens use plain company words, and the menu has four items.** **首頁** (home): what waits for your decision (等你決定), your
+> employees (點頭像就聊), today, and a box 「想做什麼？跟 CEO 說」. **員工**: add, set up, chat with and delete employees, plus memory, the shared
+> folder, team templates and the office. **工作**: conversations, 分配工作, 定時工作, meetings, 常用做法 and 「AI 自己做了什麼」. **設定**. The engineering
+> pages (指令視窗, 工作台, 流程, 專案資料夾, AI 工具的外掛清單, 員工詳細資料) are behind **進階模式** in 設定 → 顯示: it only adds them to the menu and shows
+> paths and diagnostics, it changes no permission, and every old address still opens. A new person sees three steps on the home page: get an AI tool
+> ready, create a CEO, say the first sentence. The daily spending limit is in 設定 → **用量與上限** (closed until you open it; you can type your own
+> amount). The game words and the pictures in the rest of this page describe the engineering view of v0.20; [GLOSSARY.md](GLOSSARY.md) says which
+> word is now which.
+
 The game words below are only a way to read VBear's screens. Each one points at something VBear really has.
 
 | In a game | In VBear | Where you see it |
@@ -473,10 +482,13 @@ install and login for you.
    Applications. The first time, macOS refuses to open it: go to **System Settings → Privacy & Security**, scroll
    down and click **Open Anyway** next to VBear. Homebrew and running from source are in [Install](#install).
 2. **Open VBear.** The first time, the app shows a short page, 第一次打開 VBear, with these same steps and a picture, then the
-   start-up page (see [The start-up page](#the-start-up-page-開始設定)). Once an AI tool is ready the app opens its own window on the quest board, 冒險者大廳. The menu on the left has 冒險者大廳, 辦公室, 會議, 終端機, 終端工作台, 流程,
-   技能庫, 角色卡池, 專案 and 設定 (on a phone-width window it folds into one menu button that names the page you are on). VBear lists the skills and agent roles it finds on your Mac (read-only; it
-   changes none of them). The top of the home page walks you through the first game in three steps.
-3. **Collect, bring in a project, and play.**
+   start-up page (see [The start-up page](#the-start-up-page-開始設定)). Once an AI tool is ready the app opens its own window on the home page, 首頁. The menu on the left has 首頁, 員工, 工作 and 設定
+   (with 進階模式 on, also 指令視窗, 工作台, 流程, 專案資料夾, AI 工具的外掛清單 and 員工詳細資料; on a phone-width window the four items sit in one row at the top, and
+   the advanced ones are behind a button 進階). VBear lists the skills and agent roles it finds on your Mac (read-only; it
+   changes none of them). With no employee yet, the home page shows three steps: get an AI tool ready, create a CEO (建立 CEO，開始聊 opens the chat
+   with him, the opening sentence already in the box; you press 送出 yourself), and say the first sentence.
+3. **Collect, bring in a project, and play.** This is the engineering route with git task cards: it is on the 進階 part of the home page and in the
+   進階 menu once 進階模式 is on (the card pool is 員工詳細資料 there). The everyday route is 員工 → 新增員工 → 聊天.
    - Open **角色卡池** and press **用起手牌組開始** for three ready cards (CEO, 全端工程師 and 審查員 for the review gate),
      or **＋ 新角色卡** for a three-step wizard (name and look; tool, position, instructions and launch mode; skill
      cards). Pressing **起手牌組** needs no typing; the reviewer card is left unticked when Codex is not on this Mac. The
@@ -507,7 +519,7 @@ install and login for you.
 The first time you open VBear, the page 開始設定 lists the **AI tools** VBear can borrow (Claude Code, Codex, Antigravity (AGY)
 and Grok; MCODE only if you switched it on). They are programs that run on your own Mac with your own account and plan;
 VBear has no account of its own. Pick the ones you have a plan for. One ready tool is enough to start. You can come back
-any time from 「開始設定」 in the left menu.
+any time from 設定 → AI 工具 (看 AI 工具).
 
 - **Each tool shows where it stands:** 還沒安裝 (not installed), 還沒登入 (installed, not signed in) or **就緒** (ready: installed and
   signed in). The button next to it is the next step.
@@ -520,9 +532,10 @@ any time from 「開始設定」 in the left menu.
 - **試一下 (try it).** A button on each installed tool sends one short fixed sentence to it, to see that it really answers. Before
   you confirm, the page says it costs about under US$0.01, and the cost counts toward your daily limit. Nothing the tool says
   back is kept.
-- **Pick a daily limit (每天上限).** The page asks how much all of VBear's AI spending (chats, meetings, staffing meetings and
-  tries together) may cost per day: US$1, US$3 or US$10, with US$3 chosen to start. It starts counting again at midnight.
-  You can choose again on the same page later. This is VBear's own limit; the usage limit of a tool's paid plan (方案用量上限)
+- **Pick a daily limit (每天上限).** The page has a closed part, 「每天最多花 US$3（預設，可以不用動）」. Open it to choose how much all of
+  VBear's AI spending (chats, meetings, staffing meetings and tries together) may cost per day: US$1, US$3 or US$10 (US$3 is chosen to start), or
+  type your own amount from US$0.01 to US$50. It starts counting again at midnight. You can change it later in 設定 → 用量與上限, which is closed until you open it;
+  when the limit stops something, the screen says so in plain words and has a button to that place. This is VBear's own limit; the usage limit of a tool's paid plan (方案用量上限)
   is a different thing that the tool itself explains.
 - **Some pages need Claude Code** (meetings, staffing meetings, the skill translations; chats work with Claude Code, Codex or AGY). Where it is missing, the page
   says 「這個功能目前需要 Claude Code」 and how to get it, with a button to the start-up page.

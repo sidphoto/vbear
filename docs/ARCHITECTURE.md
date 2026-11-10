@@ -606,6 +606,35 @@ matches this connection, without another token file or token-bearing subprocess 
 writing the user's defaults. `macos/test_browser_mode.sh` exercises the Swift launch decision and failure paths;
 `macos/smoke_test.sh <dmg> --browser` also checks detached server startup and reuse.
 
+## Plain navigation — `web/index.html`, `web/app.js` (v0.21)
+
+v0.21.0 (ADR 0013) changes what the page shows and nothing on the server: Python changed only in the Chinese wording of `vbear/autonomy.py` and
+`vbear/first_ceo.py`, and there is no new route, setting, data file or kind of chat event (guard rule 15b).
+
+- **Menu.** `web/index.html` has four static items (首頁, 員工, 工作, 設定) and an 進階 block whose `li` carry `data-advanced` and `hidden`.
+  `syncAdvancedNav(on)` shows or hides that block: it reads `advanced_mode` from `/api/config` once at start, and the switch in the settings page calls it
+  when it changes. `advanced_mode` is a display flag only (rule 15a). `NAV_PARENT` maps the first part of an address to the menu item that is lit
+  (`employees`, `chat`, `ceo`, `memory`, `shared`, `templates`, `office` → 員工; `work`, `dispatch`, `routines`, `meetings`, `actions`, `my-skills` → 工作;
+  `settings`, `setup`, `welcome` → 設定; the rest → 進階); every route of v0.20.0 still draws, and an advanced page opened while advanced mode is off gets one
+  line saying so. `navPageName` and `wireNavMenu` keep the phone's row of four items and the 進階 button.
+- **Pages.** `viewHome` draws 等你決定 (`homeWaiting`, the same entries in both modes), 我的員工 (`homeTeam`), 今天 (`homeToday`) and the box 「想做什麼？跟 CEO 說」
+  (`homeAsk`), or the three steps (`homeFirstSteps`) when there is no employee; in advanced mode the old home's sections are drawn below, by the same functions.
+  `viewEmployees` (`#/employees`) and `viewWork` (`#/work`) read only existing GET routes. `openChatWith(profileId, { text })` finds or opens the one-to-one chat of
+  an employee and, from the home box, makes the one `POST …/messages` of the person's press; if the employee is busy, has a card waiting or cannot chat yet it
+  sends nothing and leaves the words in that chat's box (rule 15c).
+- **Words.** The `vocabulary` part has `WORDS` (what to say, what not, in which pages), `PLAIN_ERRORS` with `plainWords()` / `plainNotice()` (a known sentence of the
+  server is said in plain words with a next step and kept whole behind 「技術細節」; an unknown one is shown as it came) and `limitReachedNotice()` (the sentence
+  and the button 「到設定調高」 for a stop by the day's limit). `toast()` and `notice()` apply it to a string.
+- **Spending, folded.** `dailyLimitEditor` is the one editor (US$1 / 3 / 10 or an amount from 0.01 to 50) used by the settings section 「用量與上限」 (closed by default;
+  `#/settings?open=limits` opens it; `viewSettings(params)`) and by the start-up page's closed part; it calls `POST /api/setup/daily-limit` only on 儲存 (rule 15d).
+  Every limit is still checked and enforced by the server as before.
+- **Chat page.** One line (position・tool・「每件事先問你」・the company the chat goes to), 「詳細資訊」, a 「⋯」 menu whose items open the same preview and
+  confirmation boxes as the buttons they replaced, an input box fixed at the bottom, and permission cards in plain words with the tool names behind 「技術細節」
+  (rule 15e). A chat that cannot start yet leads to `#/chat?profile=<id>`, one reason and one action (`chatPrepState`).
+- **Tests and the real-machine walk.** `tests/frontend/p47_nav.cjs`, `p47_words.cjs`, `p47_home.cjs`, `p47_settings.cjs`, `p47_chat.cjs` (and the sweep of the words);
+  `tests/test_autonomy_guard.py` (15a, 15b); `tools/qa_p47.py` drives a headless Chrome over `--remote-debugging-pipe` (no TCP port) through five tasks on v0.20.0 and v0.21.0
+  and compares steps, stuck steps, the characters to read and where the chat box sits on a phone (`tests/test_qa_p47.py` tests only its pure functions and an in-memory page).
+
 ## Front end — `web/`
 
 Plain HTML, CSS and JavaScript with no framework. The only dependency is the bundled xterm.js 5.5.0 with
