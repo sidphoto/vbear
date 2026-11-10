@@ -224,6 +224,15 @@ if [ -f "$HERE/test_browser_mode.sh" ] && /usr/bin/xcrun --find swiftc >/dev/nul
   fi
 fi
 
+# The waiting-count bridge's decisions (what the page may say, the words of the title, the Dock and the notification, when to tell), no window and no notification center.
+if [ -f "$HERE/test_waiting_bridge.sh" ] && /usr/bin/xcrun --find swiftc >/dev/null 2>&1; then
+  if bash "$HERE/test_waiting_bridge.sh" >"$ROOT/waiting-unit.log" 2>&1; then
+    pass "waiting-count bridge decisions (origin, keys, number, words, when to notify) pass"
+  else
+    fail "waiting-count bridge decisions pass"; tail -5 "$ROOT/waiting-unit.log"
+  fi
+fi
+
 if [ "${2:-}" = "--browser" ]; then
   check_browser_requests() {
     "$PY" -B - "$ROOT/browser-requests.log" "$VBEAR_HOME/open.html" "$1" <<'PYEOF'
