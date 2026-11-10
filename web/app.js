@@ -2432,7 +2432,8 @@ function homeAdvanced({ tasksRes, profilesRes, catalogRes, configRes, board }) {
 const HOME_CEO_ASK = "CEO 要動手前都會先問你。";
 const HOME_BUSY_TEXT = "CEO 還在回上一則（或有卡片在等你決定），所以這句話沒有送出。字已經放在他的對話的輸入框裡，按「送出」才會送。";
 const HOME_LIMIT_KINDS = ["red", "budget"];
-const HOME_UNREAD_TEXT = "讀不到這位員工現在能不能聊天的狀態，所以沒有開對話，也沒有送出任何字。";
+const HOME_UNREAD_TEXT = "讀不到這位員工現在能不能聊天的狀態。";            // only what is known: it says nothing about what was or was not done
+const HOME_UNREAD_NOTHING_DONE = "所以沒有開對話，也沒有送出任何字。";    // said only where nothing was made or sent before the state was read
 
 // The chats a routine opened (they are not "a chat with" anyone for the home page): the ids in the routines' runs.
 function homeRoutineChatIds(routinesRes) {
@@ -2492,7 +2493,7 @@ async function openChatWith(profileId, opts = {}) {
   // Reading a chat that is already there (no words to send) is still allowed.
   // Only a state that was read and says "start" opens a chat or sends: a read that failed or a card that is not in the list is not a go (R2 Q1).
   const prep = chatPrepState(card, chatsRes);
-  if ((!prep || prep.kind !== "start") && (!chat || text.trim())) { prepare(); return { ok: false, sent: false, kept: false, error: null, chatId: "", reason: prep ? prep.reason : HOME_UNREAD_TEXT }; }
+  if ((!prep || prep.kind !== "start") && (!chat || text.trim())) { prepare(); return { ok: false, sent: false, kept: false, error: null, chatId: "", reason: prep ? prep.reason : HOME_UNREAD_TEXT + HOME_UNREAD_NOTHING_DONE }; }
   if (!chat) {
     try {
       const r = await api.post("/api/chats", { profile_id: profileId });

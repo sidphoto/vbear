@@ -417,6 +417,19 @@ function check15c(log, phase, typed, messages) {
     assert.strictEqual(evalIn(page, 'ceoDrafts.get("p-ceo")'), "請幫我整理", "and wait under the employee's id when the link is followed");
   });
 
+  await test("R3 ask: a chat made, then the send refused and the state unreadable: the notice does not say no chat was made", async () => {
+    const W = world({ chats: [] });
+    W.posts["POST /api/chats/c-new/messages"] = () => { W.support = undefined; return { status: 409, body: { ok: false, error: "還沒通過驗證", code: "unverified" } }; };
+    const page = await home(W);
+    askBox(page).value = "請幫我整理"; sendBtn(page).click(); await tick(40);
+    assert.strictEqual(postsTo(page, /^\/api\/chats$/).length, 1, "the chat was made");
+    assert.strictEqual(postsTo(page, /messages/).length, 1, "the one send that was refused");
+    const shown = text(page.main);
+    assert.ok(shown.includes("讀不到這位員工現在能不能聊天的狀態"), shown);
+    assert.ok(!shown.includes("沒有開對話"), "it must not deny the chat that was made");
+    assert.strictEqual(askBox(page).value, "請幫我整理", "the words stay in the box");
+  });
+
   await test("fix47 ask: an employee's avatar with a chat already there still opens it (reading is free), but one with none and a tool that cannot chat goes to the page that prepares it", async () => {
     const W = world({ support: { state: "unverified", detected: "2.1.318" }, chats: [chatRow("c-old", "p-acc")] });
     const page = await home(W);

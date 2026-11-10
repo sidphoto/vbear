@@ -993,12 +993,16 @@ class RunTests(unittest.TestCase):
             def __exit__(inner, *a):
                 return False
 
-            def read(inner):
-                return b"{}"
+            body = [b"{}"]
+
+            def read(inner, n=-1):                         # a real response: the body once, then nothing
+                return inner.body.pop() if inner.body else b""
 
         def fake_urlopen(req, timeout=None):
             seen.append(timeout)
-            return Reply()
+            r = Reply()
+            r.body = [b"{}"]
+            return r
         run, page, _ = self.run_for(console=console)
         page.b = b
         run.clock = lambda: b.now
@@ -1008,6 +1012,57 @@ class RunTests(unittest.TestCase):
             self.assertLessEqual(seen[-1], 7.0, "inside a wait the call is held to what is left")
             console.call("/api/x")
             self.assertEqual(seen[-1], console.timeout, "outside a wait (the clean-up) it is the normal limit")
+
+    def test_an_answer_that_trickles_in_past_the_five_minutes_is_not_taken(self):
+        # R3: each read is quick, but together they go past what is left; the answer must not be taken as a success.
+        import unittest.mock as mock
+        b = qa.Browser.__new__(qa.Browser)
+        b.now, b.started, b.proc = qa.CHROME_CAP_S - 1.0, 0.0, None
+        b.clock = lambda: b.now
+        console = qa.Console(qa.DEFAULT_PORT, "t")
+
+        class Slow:
+            status = 200
+
+            def __init__(inner):
+                inner.pieces = [b"{", b'"ready"', b":", b"true", b"}"]
+
+            def __enter__(inner):
+                return inner
+
+            def __exit__(inner, *a):
+                return False
+
+            def read(inner, n=-1):
+                if n is None or n < 0:                      # the whole body at once: all the pieces' time together
+                    b.now += 0.4 * len(inner.pieces)
+                    out, inner.pieces = b"".join(inner.pieces), []
+                    return out
+                b.now += 0.4                                # every piece takes a little time
+                return inner.pieces.pop(0) if inner.pieces else b""
+        run, page, _ = self.run_for(console=console)
+        page.b = b
+        run.clock = lambda: b.now
+        run.started = b.now
+        run.sleep = lambda sec: None
+        with mock.patch.object(qa.urllib.request, "urlopen", lambda req, timeout=None: Slow()):
+            with self.assertRaises(qa.Stop):
+                run.wait("an answer", lambda: (console.call("/api/x")[1] or {}).get("ready"))
+
+    def test_a_probe_that_answers_after_the_deadline_is_not_taken(self):
+        b = qa.Browser.__new__(qa.Browser)
+        b.now, b.started, b.proc = qa.CHROME_CAP_S - 1.0, 0.0, None
+        b.clock = lambda: b.now
+        run, page, console = self.run_for()
+        page.b = b
+        run.clock = lambda: b.now
+        run.started = b.now
+
+        def late():
+            b.now += 5.0                                    # the answer comes, but only after the 5 minutes
+            return True
+        with self.assertRaises(qa.Stop):
+            run.wait("a late answer", late)
 
     def test_the_chat_check_does_not_ask_for_more_than_one_wait(self):
         source = SOURCE.read_text(encoding="utf-8")

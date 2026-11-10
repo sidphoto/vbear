@@ -743,7 +743,20 @@ class Console:
             headers={"X-VBear": "1", "Content-Type": "application/json", "Authorization": f"Bearer {self.token}"})
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return resp.status, json.loads(resp.read() or b"null")
+                if not callable(self.budget):
+                    return resp.status, json.loads(resp.read() or b"null")
+                # inside a wait the whole answer, not each socket read, is held to what is left: read in pieces and give up past it
+                parts = []
+                while True:
+                    if self.budget() <= 0:
+                        return 0, None
+                    piece = resp.read1(65536) if hasattr(resp, "read1") else resp.read(65536)
+                    if not piece:
+                        break
+                    parts.append(piece)
+                if self.budget() <= 0:
+                    return 0, None
+                return resp.status, json.loads(b"".join(parts) or b"null")
         except urllib.error.HTTPError as exc:
             try:
                 data = json.loads(exc.read() or b"null")
@@ -1096,6 +1109,8 @@ class Run:
                     raise Stop(f"timed out waiting for {what}")
                 got = probe()
                 if got:
+                    if room() <= 0 or self.over():          # an answer that came in after the deadline is not taken
+                        raise Stop(f"timed out waiting for {what}")
                     return got
                 left = room()
                 if left <= 0 or self.over():
