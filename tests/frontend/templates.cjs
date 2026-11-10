@@ -630,10 +630,11 @@ test("names and words are shown as text: a name with a tag stays a name", async 
   assert.strictEqual(d.findAll((n) => ["script", "img", "b"].includes(n.tag)).length, 0);
 });
 
-test("the nav has the page right under the routines, with a plain symbol", () => {
-  assert(/<a href="#\/templates" data-nav="templates"><span aria-hidden="true">[^<]*<\/span>團隊範本<\/a>/.test(HTML));
-  assert(HTML.indexOf('data-nav="routines"') < HTML.indexOf('data-nav="templates"') && HTML.indexOf('data-nav="templates"') < HTML.indexOf('data-nav="actions"'));
-  const line = HTML.split("\n").find((l) => l.includes('data-nav="templates"'));
+test("(P47-1) the page is a page of the 員工 item of the menu (it lights it), with a plain symbol", () => {
+  assert(/<a href="#\/employees" data-nav="employees"><span aria-hidden="true">[^<]*<\/span>員工<\/a>/.test(HTML));
+  const appSrc = fs.readFileSync(path.join(__dirname, "..", "..", "web", "app.js"), "utf8");
+  assert(/\btemplates: "employees"/.test(appSrc.slice(appSrc.indexOf("const NAV_PARENT = {"), appSrc.indexOf("const ADVANCED_NAV"))), "the team templates light 員工");
+  const line = HTML.split("\n").find((l) => l.includes('data-nav="employees"'));
   assert(!/\p{Extended_Pictographic}/u.test(line), "no emoji in the nav");
 });
 

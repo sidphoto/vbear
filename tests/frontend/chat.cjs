@@ -976,15 +976,15 @@ test("shared_unverified: a version that already passed is not waited for", async
   assert(!q(h.dom().mainEl, "shared-unverified"));
 });
 
-test("the nav has the chat between the meetings and the terminals, and the code keeps its rules", () => {
+test("(P47-1) the chat is a page of the 員工 item of the menu (it lights it), and the code keeps its rules", () => {
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
-  assert(html.includes('data-nav="chat"'));
-  assert(html.indexOf('data-nav="meetings"') < html.indexOf('data-nav="chat"') && html.indexOf('data-nav="chat"') < html.indexOf('data-nav="terminals"'));
+  assert(html.includes('data-nav="employees"'));
   const source = fs.readFileSync(path.join(root, "app.js"), "utf8");
+  assert(/\bchat: "employees"/.test(source.slice(source.indexOf("const NAV_PARENT = {"), source.indexOf("const ADVANCED_NAV"))), "the chat lights 員工");
   const css = fs.readFileSync(path.join(root, "style.css"), "utf8");
   assert(!/\.innerHTML\s*=|insertAdjacentHTML\s*\(/.test(source));
   const emoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}]/u;
-  assert(!emoji.test(css) && !emoji.test(html.split("data-nav=\"chat\"")[1].split("</li>")[0]));
+  assert(!emoji.test(css) && !emoji.test(html.split("data-nav=\"employees\"")[1].split("</li>")[0]));
   const chatPart = source.slice(source.indexOf("chat with role cards (P36-2)"), source.indexOf("// ---------- meetings (P34-5)"));
   assert(chatPart.length > 5000 && !emoji.test(chatPart));
   assert(!/https?:\/\//.test(chatPart), "no external address");

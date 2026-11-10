@@ -1104,12 +1104,14 @@ test("the page's code uses only what a real DOM has (the test's fake nodes have 
   }
 });
 
-test("the nav has the office after the lobby, and the route exists", () => {
+test("(P47-1) the office is a page of the 員工 item of the menu (it lights it, after the first item), and the route exists", () => {
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
   const a = html.indexOf('data-nav="home"');
-  const b = html.indexOf('data-nav="office"');
-  assert(a > 0 && b > a, "office comes after the lobby");
-  assert(html.includes('href="#/office" data-nav="office"><span aria-hidden="true">▦</span>辦公室</a>'));
+  const b = html.indexOf('data-nav="employees"');
+  assert(a > 0 && b > a, "the 員工 item comes after the first item");
+  assert(html.includes('href="#/employees" data-nav="employees"><span aria-hidden="true">◎</span>員工</a>'));
+  const appSrc = fs.readFileSync(path.join(root, "app.js"), "utf8");
+  assert(/\boffice: "employees"/.test(appSrc.slice(appSrc.indexOf("const NAV_PARENT = {"), appSrc.indexOf("const ADVANCED_NAV"))), "the office lights 員工");
   assert.strictEqual(typeof app.viewOffice, "function");
 });
 

@@ -956,10 +956,12 @@ test("a speaker the meeting's clock skipped reads 時間到沒發言", () => {
 
 // ---- navigation, wording, rules of the code -------------------------------------------------------------------------
 
-test("the nav has the meetings, and the code keeps its rules", () => {
+test("(P47-1) the meetings are a page of the 工作 item of the menu (it lights it), and the code keeps its rules", () => {
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
-  assert(html.includes('data-nav="meetings"'));
-  assert(html.indexOf('data-nav="office"') < html.indexOf('data-nav="meetings"') && html.indexOf('data-nav="meetings"') < html.indexOf('data-nav="terminals"'));
+  assert(html.includes('data-nav="work"'));
+  const appSrc = fs.readFileSync(path.join(root, "app.js"), "utf8");
+  const parents = appSrc.slice(appSrc.indexOf("const NAV_PARENT = {"), appSrc.indexOf("const ADVANCED_NAV"));
+  assert(/\bmeetings: "work"/.test(parents), "the meetings light 工作");
   const source = fs.readFileSync(path.join(root, "app.js"), "utf8");
   assert(!/\.innerHTML\s*=|insertAdjacentHTML\s*\(/.test(source));
   assert(!/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}]/u.test(fs.readFileSync(path.join(root, "style.css"), "utf8")));

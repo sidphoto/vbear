@@ -451,11 +451,11 @@ test("opening the lobby does not put the cursor in the skill search (it would sc
   assert(!/setTimeout\(\(\) => input\.focus\(\)/.test(fs.readFileSync(path.join(__dirname, "..", "..", "web", "app.js"), "utf8")), "no deferred focus call on the lobby search");
 });
 
-test("the nav's first item is renamed and the others are not", () => {
+test("(P47-1) the nav's first item is 首頁 (it was 冒險者大廳), and the pages that were in the nav are still named there or reached from it", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "..", "web", "index.html"), "utf8");
-  assert(/data-nav="home"><span aria-hidden="true">⌂<\/span>冒險者大廳</.test(html));
-  assert(!html.includes("我的工作台"));
-  for (const label of ["終端機", "終端工作台", "流程", "技能庫", "角色卡池", "專案", "設定"]) assert(html.includes(`</span>${label}</a>`), label);
+  assert(/data-nav="home"><span aria-hidden="true">⌂<\/span>首頁</.test(html));
+  assert(!html.includes("我的工作台") && !html.includes("冒險者大廳"));
+  for (const label of ["指令視窗", "工作台", "流程", "AI 工具的外掛清單", "員工詳細資料", "專案資料夾", "設定"]) assert(html.includes(`</span>${label}</a>`), label);
 });
 
 test("flows and agents share the first block: the flows come first, in API order", async () => {

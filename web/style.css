@@ -98,6 +98,11 @@ button, input, select { font: inherit; color: inherit; }
 .nav a:hover { background: var(--mute-soft); color: var(--ink); }
 .nav a[aria-current="page"] { background: var(--accent-soft); color: var(--ink); font-weight: 600; }
 .nav a[aria-current="page"] span { color: var(--accent); }
+/* P47-1 nav: the advanced part of the menu shows only when the advanced mode is on (the page takes the hidden attribute off) */
+.nav [hidden] { display: none; }
+.nav .nav-sep { margin: 10px 10px 2px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-3); }
+.advanced-note { margin: 0; padding: 10px clamp(16px, 4vw, 44px) 0; font-size: 13px; color: var(--ink-3); }
+.advanced-note[hidden] { display: none; }
 .side-foot { margin-top: auto; font-size: 12px; color: var(--ink-3); padding: 0 8px; }
 .side-foot button { margin-top: 6px; }
 
@@ -1625,12 +1630,22 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 /* the phone menu (design card-play 3.9, #11): one button that names the page; the list opens under it */
 .nav-toggle { display: none; align-items: center; gap: 10px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--panel); color: var(--ink); font: inherit; cursor: pointer; }
 .nav-toggle-bars { width: 16px; height: 2px; background: currentColor; box-shadow: 0 -5px 0 currentColor, 0 5px 0 currentColor; }
+/* P47-1 phone menu (ADR 0013): the four items are one row at the top, not folded. With the advanced mode on, the 進階 button at the end of
+   that row opens the advanced list under it. */
 @media (max-width: 720px) {
-  .nav-toggle { display: inline-flex; margin-left: auto; max-width: 100%; min-width: 0; }
+  .nav-toggle { display: none; }
+  .side .brand { flex: 0 0 100%; }
+  .side .nav { order: 1; flex: 1 1 0; min-width: 0; width: auto; flex-wrap: wrap; overflow: visible; }
+  .side .nav a { padding: 10px 8px; gap: 6px; }
+  .side .nav li[data-advanced] { display: none; }
+  .side.nav-open .nav li[data-advanced]:not([hidden]) { display: block; }
+  .side.nav-open .nav li.nav-sep[data-advanced]:not([hidden]) { display: none; }
+  .side.adv-on .nav-toggle { order: 2; display: inline-flex; flex: 0 0 auto; margin-left: auto; max-width: 9em; min-width: 0; padding: 8px 10px; align-self: flex-start; }
+  .nav-toggle-bars { display: none; }
   #nav-toggle-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .side .nav { display: none; }
-  .side.nav-open .nav { display: grid; width: 100%; overflow: visible; }
-  .side.nav-open .nav a { padding: 12px 10px; }
+}
+@media (max-width: 820px) {
+  .nav .nav-sep { display: none; }
 }
 
 /* the translation bar folds away (design card-play 3.4): a finished job leaves, a failed one becomes a dot */

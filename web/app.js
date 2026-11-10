@@ -936,7 +936,8 @@ function authRequiredView() {
 let toastTimer;
 function toast(msg) {
   const t = document.getElementById("toast");
-  t.textContent = msg;
+  // a line that already carries its original in brackets (the terminal words, P19) is not said again
+  t.textContent = typeof msg === "string" && !msg.includes("（原文：") ? plainLine(msg) : msg;
   t.classList.add("show");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
@@ -959,6 +960,136 @@ function categoryZh(label) {
   const k = label.trim().toLowerCase();
   return Object.prototype.hasOwnProperty.call(CATEGORY_ZH, k) ? CATEGORY_ZH[k] : label;
 }
+
+// ---------- plain words (v0.21, P47-1) -------------------------------------------------------------------------------------
+// One company's way of speaking (ADR 0013): WORDS is the table of the words a person sees (what to say, what not to say any more, and
+// where). It is data only: a test (and the sweep of P47-5) reads it; nothing here changes a program name, an API path, a data field,
+// an event kind or a `data-*` attribute. Each entry: use (what the screen says), avoid (words that must not be on a page the person
+// sees, searched literally), loose (words too common to search literally, for a human to look at), scope ("all": every page of the
+// normal mode; "title": an advanced page changes only its menu name and its h1; "new": a new word, nothing to avoid), note.
+const WORDS = {
+  home:          { use: "首頁", avoid: ["冒險者大廳", "大廳"], loose: [], scope: "all", note: "" },
+  employee:      { use: "員工", avoid: ["角色卡"], loose: ["角色"], scope: "all", note: "指那份設定時寫「員工設定」" },
+  employeeList:  { use: "我的員工", avoid: ["角色卡池", "我的角色卡", "名冊"], loose: [], scope: "all", note: "首頁區塊；選單與頁名是「員工」；舊 #/team 在進階叫「員工詳細資料」" },
+  newEmployee:   { use: "新增員工", avoid: ["新角色卡", "拿卡", "起手牌組"], loose: [], scope: "all", note: "起手牌組 = 一次新增幾位常用的員工" },
+  startWork:     { use: "開始工作", avoid: ["出發"], loose: [], scope: "all", note: "進階頁的「出發」標題級改「開指令視窗」" },
+  preflight:     { use: "開始前的檢查", avoid: ["出發通行證"], loose: [], scope: "title", note: "進階頁內文暫時沿用" },
+  tool:          { use: "用哪個 AI", avoid: ["陣營"], loose: [], scope: "all", note: "也可以說「AI 工具」" },
+  look:          { use: "外觀", avoid: ["種族"], loose: [], scope: "all", note: "" },
+  positionName:  { use: "職位名稱", avoid: [], loose: ["planner", "executor", "reviewer"], scope: "all", note: "CEO、執行者、審查者……（CARD_POSITION_LABEL），不寫英文代號" },
+  safeMode:      { use: "每件事先問我", avoid: ["安全模式"], loose: [], scope: "all", note: "只在自己的工作資料夾裡做；跑指令、改檔案前都先問你" },
+  fullMode:      { use: "完全交給他（有風險）", avoid: ["完整模式"], loose: [], scope: "all", note: "ADR 0002 的白話警告與「我了解」一字不減" },
+  sandbox:       { use: "保護範圍", avoid: ["沙盒"], loose: [], scope: "all", note: "第一次出現寫「保護範圍（沙盒）」" },
+  project:       { use: "專案", avoid: ["任務卡"], loose: [], scope: "all", note: "一個專案就是你電腦上的一個資料夾" },
+  addFolder:     { use: "加入一個資料夾", avoid: ["導入專案"], loose: [], scope: "all", note: "" },
+  terminal:      { use: "指令視窗", avoid: ["終端機", "終端工作台"], loose: ["終端", "Agent"], scope: "title", note: "進階；一般頁出現時寫「指令視窗」" },
+  workbench:     { use: "工作台", avoid: [], loose: ["終端工作台"], scope: "title", note: "進階" },
+  projectFolder: { use: "專案資料夾", avoid: [], loose: ["專案"], scope: "title", note: "進階；舊 #/projects 頁名" },
+  pluginList:    { use: "AI 工具的外掛清單", avoid: ["技能庫", "技能卡"], loose: [], scope: "title", note: "進階；一般頁出現時寫「AI 工具的外掛」" },
+  recipe:        { use: "常用做法", avoid: ["存成技能", "用技能", "整理成技能", "從技能帶入"], loose: ["技能"], scope: "all", note: "用的人存的技能；AI 工具自己的技能不是它" },
+  assign:        { use: "分配工作", avoid: ["派工"], loose: [], scope: "all", note: "「所有派工」改「所有分配工作」" },
+  routine:       { use: "定時工作", avoid: ["例行工作", "排程", "定時任務"], loose: [], scope: "all", note: "" },
+  spendLimit:    { use: "花費上限", avoid: ["每天上限", "每日上限", "亮紅燈"], loose: ["額度", "預算"], scope: "all", note: "「每回合最多」與「方案用量上限」照舊" },
+  limitReached:  { use: "今天的用量到你設的上限了", avoid: ["額度用完", "額度已用完"], loose: [], scope: "all", note: "一定接「明天 0 點重新算；可以到設定調高」" },
+  toolBash:      { use: "執行指令", avoid: ["Bash"], loose: [], scope: "all", note: "英文名收進卡片「技術細節」" },
+  toolEdit:      { use: "修改檔案", avoid: ["Edit"], loose: [], scope: "all", note: "" },
+  toolWrite:     { use: "建立或覆蓋檔案", avoid: ["Write"], loose: [], scope: "all", note: "" },
+  toolRead:      { use: "讀取檔案", avoid: ["Read"], loose: [], scope: "all", note: "" },
+  toolGrep:      { use: "搜尋檔案內容", avoid: ["Grep"], loose: [], scope: "all", note: "" },
+  toolGlob:      { use: "找檔名", avoid: ["Glob"], loose: [], scope: "all", note: "" },
+  oldText:       { use: "原本的內容", avoid: ["原本的字串"], loose: [], scope: "all", note: "其他欄位：要寫入的內容、改成、指令、檔案、位置、要找的字、員工的說明" },
+  history:       { use: "對話紀錄", avoid: ["工作階段"], loose: ["session"], scope: "all", note: "" },
+  chatList:      { use: "對話紀錄", avoid: [], loose: ["聊天"], scope: "all", note: "清單；單頁是「和 {名字} 的對話」；動詞「聊天」「開始聊天」照用" },
+  deleteChat:    { use: "刪除這個對話", avoid: ["刪除這個聊天"], loose: [], scope: "all", note: "" },
+  runtime:       { use: "VBear 的背景程式", avoid: ["VBear runtime", "背景程序"], loose: ["daemon"], scope: "all", note: "伺服器的原句不改，只在畫面翻成白話（plainWords）" },
+  aiTool:        { use: "AI 工具", avoid: ["Agent CLI"], loose: [], scope: "all", note: "" },
+  manualReview:  { use: "要你檢查", avoid: ["manual_review", "待人工處理"], loose: [], scope: "all", note: "VBear 不確定這件事有沒有收尾，先停下來等你看" },
+  orphan:        { use: "找不到原技能的翻譯", avoid: ["孤兒翻譯"], loose: [], scope: "all", note: "設定的進階區" },
+  setupBlock:    { use: "AI 工具", avoid: [], loose: [], scope: "new", note: "設定裡的區塊名；頁名「開始設定」保留" },
+  console:       { use: "VBear", avoid: ["主控台"], loose: [], scope: "all", note: "對用的人說時" },
+  brandSub:      { use: "你的 AI 員工", avoid: ["技能與團隊主控台"], loose: [], scope: "all", note: "品牌小字" },
+  advancedMode:  { use: "進階模式", avoid: [], loose: [], scope: "new", note: "設定裡的開關；打開後選單多出工程頁並顯示路徑與診斷；不改變任何權限" },
+  waiting:       { use: "等你決定", avoid: [], loose: [], scope: "new", note: "首頁最上面一塊：所有要用的人決定的事" },
+  limits:        { use: "用量與上限", avoid: [], loose: [], scope: "new", note: "設定裡預設收起的一塊：今天已花、花費上限（可自填）、狀態" },
+};
+// -> [{ key, term, use }] for the words a page of that scope must not say (`avoid` only, searched literally). scope "all": the pages of
+// the normal mode; "title": the menu names and the h1 of the advanced pages (and, for a page of scope "all", nothing of this).
+function wordsToAvoid(scope) {
+  const out = [];
+  for (const [key, w] of Object.entries(WORDS)) {
+    if (w.scope !== scope) continue;
+    for (const term of w.avoid) out.push({ key, term, use: w.use });
+  }
+  return out;
+}
+
+const LIMIT_SETTINGS_HREF = "#/settings?open=limits";
+const LIMIT_REACHED_TEXT = "今天的用量到你設的上限了，所以這則沒有送出（沒有花錢）。明天 0 點會重新算；要現在繼續，可以調高上限。";
+// The sentences the server and the screen really say, said in plain words with what to do next (ADR 0013 decision 8). The server's own
+// text and codes are not changed (a test finds each sentence in the Python sources). `re`: finds it; `text` (+ `next`): the plain words
+// that take the place of the whole sentence; `swaps`: instead, change only some words of it and keep the rest; `limit`: the day's
+// spending limit stopped it (it gets limitReachedNotice's sentence and a way to the settings); `label`: a vocabulary change only,
+// nothing to hide, so no 「技術細節」. The original is kept whole in `detail`. A sentence this table does not know is shown as it is.
+const PLAIN_ERRORS = [
+  { key: "limit_red", limit: true, re: /今天的額度已用完（亮紅燈）|額度用完（亮紅燈）/ },
+  { key: "limit_budget", limit: true, re: /今天剩下的額度不到 US\$0\.01|^額度不夠，沒有送出[。.]?$/ },
+  { key: "runtime_down", re: /無法連線到 VBear runtime|VBear runtime 背景程序(?:無法連線|無法使用|無法啟動或連線|沒有在執行)|VBear runtime (?:未連線|未啟動或無法連線|無法連線)|與 VBear runtime 的連線中斷/,
+    text: "VBear 的背景程式沒有在跑，員工現在不能回話。", next: "關掉 VBear 再打開通常就好。" },
+  { key: "cli_version", re: /Agent CLI 版本檢查/, text: "VBear 沒能確認這個 AI 工具的版本，所以先不啟動它。", next: "請到「AI 工具」看看它有沒有裝好、能不能開。" },
+  { key: "manual_review", re: /manual_review|(?:待|需要|等待)人工處理/, next: "VBear 不確定這件事有沒有收尾，先停下來等你看。",
+    swaps: [[/[（(]\s*manual_review\s*[）)]/g, ""], [/manual_review/g, "要你檢查"], [/(?:等待|需要|待)人工處理/g, "要你檢查"]] },
+  { key: "orphan", re: /孤兒翻譯/, label: true, swaps: [[/孤兒翻譯/g, "找不到原技能的翻譯"]] },
+];
+// x: the original (a string, or an Error or a server answer that carries it).
+// -> { text, next, detail, known, limit }. Known: `text` is the plain words and `detail` the original, whole. Not known: `text` is the
+// original as it came, `detail` is empty, and nothing is guessed.
+function plainWords(x) {
+  const raw = typeof x === "string" ? x.trim()
+    : x && typeof x.message === "string" ? x.message.trim()
+    : x && typeof x.error === "string" ? x.error.trim() : "";
+  const none = { text: raw, next: "", detail: "", known: false, limit: false };
+  if (!raw) return none;
+  const hit = PLAIN_ERRORS.find((e) => e.re.test(raw));
+  if (!hit) return none;
+  if (hit.limit) return { text: LIMIT_REACHED_TEXT, next: "", detail: raw, known: true, limit: true };
+  if (hit.swaps) {
+    const swapped = hit.swaps.reduce((s, [re, to]) => s.replace(re, to), raw);
+    return { text: swapped, next: hit.next || "", detail: hit.label ? "" : raw, known: true, limit: false };
+  }
+  return { text: hit.text, next: hit.next || "", detail: raw, known: true, limit: false };
+}
+function plainTechFold(detail) {
+  return el("details", { class: "small term-tech plain-tech", "data-plain": "tech" },
+    el("summary", null, "技術細節"), el("code", { class: "term-tech-raw" }, detail));
+}
+// The plain words as a line of text: for a toast, which holds one line, the plain words then the original in brackets.
+function plainLine(x) {
+  const w = plainWords(x);
+  return w.known ? `${w.text}${w.next}${w.detail ? `（原文：${w.detail}）` : ""}` : w.text;
+}
+// A notice whose words are the plain words, with the original behind 「技術細節」. A sentence that is not known is shown as it is.
+function plainNotice(kind, x) {
+  const w = plainWords(x);
+  if (!w.known) return noticeBox(kind, w.text);
+  if (w.limit) return limitReachedNotice(w.detail, { kind });
+  return noticeBox(kind, [`${w.text}${w.next}`, w.detail ? plainTechFold(w.detail) : null]);
+}
+// What the person sees when the day's spending limit stopped something: what happened (nothing was sent, nothing was spent), when it
+// counts again, and a button to the place that raises it. `raw`: the original sentence, kept whole in 「技術細節」. opts.text: another
+// first sentence for a place where it is not one message that stopped (a routine, a group); opts.kind: "warn" (default) or "info".
+// The limit itself is never changed here: this only says that it stopped something.
+function limitReachedNotice(raw, opts) {
+  const o = opts || {};
+  const detail = typeof raw === "string" ? raw.trim() : raw && typeof raw.message === "string" ? raw.message.trim() : "";
+  const text = typeof o.text === "string" && o.text ? o.text : LIMIT_REACHED_TEXT;
+  const node = noticeBox(o.kind || "warn", [text,
+    el("p", { class: "plain-limit-go", style: "margin:8px 0 0" },
+      el("a", { class: "btn small", href: LIMIT_SETTINGS_HREF, "data-limit": "go" }, "到設定調高")),
+    detail ? plainTechFold(detail) : null]);
+  node.setAttribute("data-limit", "reached");
+  return node;
+}
+// ---------- end of plain words ----------------------------------------------------------------------------------------------
 
 const TOOL = { claude: "Claude Code", codex: "Codex CLI", shared: "skills CLI", agy: "Antigravity（AGY）", grok: "Grok", mcode: "MCODE" };
 const ACT = {
@@ -2015,7 +2146,12 @@ function roleCard(r) {
 function emptyState(title, detail) {
   return el("div", { class: "empty-state" }, el("strong", null, title), detail ? el("span", null, detail) : null);
 }
+// A message in a box. A text that is a string goes through plainWords (P47-1): a sentence the table knows is said in plain words with the
+// original behind 「技術細節」; any other text is shown as it is. A text that is nodes (or a list) is the caller's own words.
 function notice(kind, text) {
+  return typeof text === "string" ? plainNotice(kind, text) : noticeBox(kind, text);
+}
+function noticeBox(kind, text) {
   const ico = { warn: "!", info: "i", bad: "×" }[kind] || "i";
   return el("div", { class: `notice ${kind}`, role: kind === "bad" ? "alert" : "note" }, el("span", { class: "ico", "aria-hidden": "true" }, ico), el("div", null, text));
 }
@@ -6754,7 +6890,7 @@ function sourceRow(s, advanced, saveConf) {
       issues.map((x) => el("div", { class: "small cw-error", "data-src": "issue" }, x))));
 }
 
-async function viewSettings() {
+async function viewSettings(params) {   // params: the address's ?key=value (P47-3 reads ?open=limits)
   const token = seq;
   await loadStatic();
   await refreshTranslations();
@@ -6807,7 +6943,7 @@ async function viewSettings() {
         el("div", { class: "panel pad" },
           el("h2", { style: "margin-bottom:6px" }, "顯示"),
           el("label", { class: "switch" },
-            el("input", { type: "checkbox", checked: advanced, on: { change: (e) => saveConf({ advanced_mode: e.target.checked }).then(viewSettings) } }),
+            el("input", { type: "checkbox", checked: advanced, on: { change: (e) => saveConf({ advanced_mode: e.target.checked }).then((r) => { if (r) syncAdvancedNav(e.target.checked); return viewSettings(); }) } }),
             el("div", null, el("div", { class: "t" }, "進階模式"), el("div", { class: "small muted" }, "顯示檔案路徑與診斷資訊。機密值在任何模式下都不會顯示。"))),
           el("label", { class: "switch" },
             el("input", { type: "checkbox", checked: conf.show_mcode === true, "data-setting": "show-mcode",
@@ -12493,11 +12629,30 @@ async function viewRoutines() {
 
 // ---------- router ---------------------------------------------------------
 
-// The phone menu (design card-play 3.9, #11): at 720px and narrower the nav folds behind one button that names the page
-// you are on, instead of a row that scrolls sideways. The button only toggles a class; the CSS does the folding, so a
-// wide window never sees it.
+// The menu is four items (首頁、員工、工作、設定); every other page belongs to one of them, and the engineering pages to the advanced part
+// that shows only when the advanced mode (a switch in the settings) is on (ADR 0013). NAV_PARENT says which `data-nav` item a page
+// (the first part of its address) lights. A page that is not in it lights nothing. All the old addresses still open.
+const NAV_PARENT = {
+  home: "home",
+  employees: "employees", chat: "employees", ceo: "employees", memory: "employees", shared: "employees", templates: "employees", office: "employees",
+  work: "work", dispatch: "work", routines: "work", meetings: "work", actions: "work", "my-skills": "work",
+  settings: "settings", setup: "settings", welcome: "settings",
+  terminals: "terminals", term: "terminals", workbench: "workbench", flows: "flows", projects: "projects", skills: "skills", armory: "skills",
+  team: "team", staffing: "team",
+};
+// the pages of the advanced part (their menu items are the ones with `data-advanced`)
+const ADVANCED_NAV = new Set(["terminals", "workbench", "flows", "projects", "skills", "team"]);
+function navOf(top) { return Object.prototype.hasOwnProperty.call(NAV_PARENT, top) ? NAV_PARENT[top] : null; }
+// The advanced mode only decides what is shown: the advanced part of the menu, the scan status and the one line on an advanced page.
+// It is read once from the console's config (and when the switch in the settings is turned); nothing else in the page asks for it or sends it.
+let navAdvanced = false;
+let navAdvancedKnown = false;
+let navTop = "";
+// The phone: the four items are one row at the top; with the advanced mode on, one more button (進階) opens the advanced list. The
+// button only toggles a class; the CSS does the rest, so a wide window never sees it.
 function navPageName(top) {
-  const link = Array.from(document.querySelectorAll("[data-nav]")).find((a) => a.dataset && a.dataset.nav === top);
+  const want = navOf(top) || top;
+  const link = Array.from(document.querySelectorAll("[data-nav]")).find((a) => a.dataset && a.dataset.nav === want);
   if (!link) return "";
   const kids = link.childNodes ? Array.from(link.childNodes) : [];
   const own = kids.filter((n) => n.nodeType === 3).map((n) => n.textContent).join("").trim();
@@ -12511,9 +12666,45 @@ function setNavMenu(open) {
 }
 function syncNavMenu(top) {
   const label = document.getElementById("nav-toggle-label");
-  const name = navPageName(top);
-  if (label) label.textContent = name ? `選單：${name}` : "選單";
+  const name = ADVANCED_NAV.has(navOf(top)) ? navPageName(top) : "";
+  if (label) label.textContent = name ? `進階：${name}` : "進階";
   setNavMenu(false);   // going to a page puts the menu away
+}
+function showHidden(node, hidden) {
+  if (!node) return;
+  if (hidden) node.setAttribute("hidden", ""); else node.removeAttribute("hidden");
+}
+// The line at the top of an advanced page that was opened by its address while the advanced mode is off (it is not blocked).
+function syncAdvancedNote(top) {
+  const box = document.getElementById("advanced-note");
+  if (!box) return;
+  const show = navAdvancedKnown && !navAdvanced && ADVANCED_NAV.has(navOf(top));
+  if (show && !box.childNodes.length) {
+    setKids(box, "這是進階頁面。要在選單看到它，到設定打開進階模式。", " ", el("a", { href: "#/settings" }, "到設定"));
+  }
+  showHidden(box, !show);
+}
+// on: whether the advanced mode is on. Shows or hides the advanced part of the menu; makes no request.
+function syncAdvancedNav(on) {
+  navAdvanced = !!on;
+  navAdvancedKnown = true;
+  document.querySelectorAll("[data-advanced]").forEach((li) => showHidden(li, !navAdvanced));
+  const side = document.querySelector("nav.side");
+  if (side && side.classList) side.classList.toggle("adv-on", navAdvanced);
+  showHidden(document.getElementById("scan-status"), !navAdvanced);
+  if (!navAdvanced) setNavMenu(false);
+  syncAdvancedNote(navTop);
+}
+let advancedNavLoading = null;
+function loadAdvancedNav() {
+  if (navAdvancedKnown) return Promise.resolve(navAdvanced);
+  if (!advancedNavLoading) {
+    advancedNavLoading = api.get("/api/config").then((c) => {
+      const conf = c && typeof c === "object" ? c.config : null;
+      syncAdvancedNav(!!(conf && conf.advanced_mode));
+    }).catch(() => { /* not read: the menu stays at the four, no line is shown */ }).finally(() => { advancedNavLoading = null; });
+  }
+  return advancedNavLoading.then(() => navAdvanced);
 }
 function wireNavMenu() {
   const btn = document.getElementById("nav-toggle");
@@ -12522,6 +12713,15 @@ function wireNavMenu() {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && btn.getAttribute("aria-expanded") === "true") { setNavMenu(false); if (btn.focus) btn.focus(); }
   });
+}
+
+// The two pages of the menu that P47-2 builds (the employees' page and the work page). Until then each has its name and one line.
+// They only read; they send nothing.
+async function viewEmployees() {
+  setKids(claim(seq), el("h1", null, "員工"), el("p", { class: "lede" }, "這一頁在下一張任務完成。"));
+}
+async function viewWork() {
+  setKids(claim(seq), el("h1", null, "工作"), el("p", { class: "lede" }, "這一頁在下一張任務完成。"));
 }
 
 let liveTimer = null;
@@ -12542,14 +12742,20 @@ async function route() {
   routedHash = location.hash;
   const { parts, params } = parseHash();
   const top = parts[0] || "home";
+  const lit = navOf(top);
   document.querySelectorAll("[data-nav]").forEach((a) => {
-    if (a.dataset.nav === top) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+    if (a.dataset.nav === lit) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   });
+  navTop = top;
   syncNavMenu(top);
+  syncAdvancedNote(top);
+  loadAdvancedNav();   // the first page reads the advanced mode once; it only decides what the menu shows
   setupTick = null;
   clearInterval(liveTimer);
   try {
     if (top === "home") await viewHome();
+    else if (top === "employees") await viewEmployees();
+    else if (top === "work") await viewWork();
     else if (top === "workbench") await viewWorkbench(parts[1] ? decodeURIComponent(parts[1]) : null, params.task, params.profile, params.launch === "1", params.step, params.meeting);
     else if (top === "ceo") await viewCeo();
     else if (top === "chat" && parts[1] === "group") await viewGroup(parts[2] ? decodeURIComponent(parts[2]) : null);
@@ -12569,7 +12775,7 @@ async function route() {
     else if (top === "team" && parts[1] === "role") await viewRole(parts[2]);
     else if (top === "team") await viewTeam(params);
     else if (top === "projects") await viewProjects(parts[1]);
-    else if (top === "settings") await viewSettings();
+    else if (top === "settings") await viewSettings(params);
     else if (top === "setup") await viewSetup();
     else if (top === "welcome") await viewWelcome();
     else if (top === "term" && parts[1]) await viewTerminal(decodeURIComponent(parts[1]));
@@ -19366,6 +19572,17 @@ async function viewTemplates() {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    WORDS,
+    NAV_PARENT,
+    syncAdvancedNav,
+    PLAIN_ERRORS,
+    plainWords,
+    plainNotice,
+    plainLine,
+    limitReachedNotice,
+    LIMIT_REACHED_TEXT,
+    LIMIT_SETTINGS_HREF,
+    wordsToAvoid,
     base64ToUint8Array,
     createSSEParser,
     createInputBatcher,

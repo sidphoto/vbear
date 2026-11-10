@@ -896,15 +896,14 @@ test("on the employee's chat page the note gets the dispatch's name and who deci
   assert.strictEqual(desk(main), null, "an employee's page has no desk");
 });
 
-test("the nav has the dispatch and the actions between the chat and the terminals, and the settings page links to the actions", async () => {
+test("(P47-1) the dispatch and the actions are pages of the 工作 item of the menu (it lights it), and the menu has no emoji", async () => {
   const html = fs.readFileSync(path.join(ROOT, "web", "index.html"), "utf8");
-  for (const [k, label] of [["dispatch", "派工"], ["actions", "AI 自己做了什麼"]]) {
-    assert(html.includes(`data-nav="${k}"`), k);
-    assert(new RegExp(`data-nav="${k}"><span aria-hidden="true">[^<]*</span>${label}</a>`).test(html), label);
-  }
-  assert(html.indexOf('data-nav="chat"') < html.indexOf('data-nav="dispatch"') && html.indexOf('data-nav="actions"') < html.indexOf('data-nav="terminals"'));
-  assert(!/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{FE0F}]/u.test(html.split('data-nav="dispatch"')[1].split("</li>")[0]));
-  assert(!/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{FE0F}]/u.test(html.split('data-nav="actions"')[1].split("</li>")[0]));
+  const appSource = fs.readFileSync(path.join(ROOT, "web", "app.js"), "utf8");
+  const parents = appSource.slice(appSource.indexOf("const NAV_PARENT = {"), appSource.indexOf("const ADVANCED_NAV"));
+  for (const k of ["dispatch", "actions"]) assert(new RegExp(`\\b${k}: "work"`).test(parents), k);
+  assert(/data-nav="work"><span aria-hidden="true">[^<]*<\/span>工作<\/a>/.test(html), "the 工作 item");
+  assert(!/[\u{1F000}-\u{1FFFF}\u{FE0F}]/u.test(html.split('data-nav="work"')[1].split("</li>")[0]));
+  assert(!/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{FE0F}]/u.test(html.split('data-nav="employees"')[1].split("</li>")[0]));
 });
 
 // ---- the source -------------------------------------------------------------------------------------------------------------------------
