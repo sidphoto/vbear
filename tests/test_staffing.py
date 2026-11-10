@@ -923,6 +923,9 @@ class StoreTests(Isolated):
         self.assertEqual(st.load(rec["id"]), rec)
         self.assertEqual(st.record_ids(), [rec["id"]])
         self.assertFalse((Path(os.environ["VBEAR_HOME"]) / "meetings").exists())
+        for turn in rec["turns"]:
+            turn["state"] = "cancelled"
+        self.save(rec)
         st.delete(rec["id"])
         self.assertEqual(st.record_ids(), [])
         with self.assertRaises(st.StaffingError) as caught:
@@ -955,6 +958,9 @@ class StoreTests(Isolated):
         self.assertEqual(st.record_ids(), [good["id"], bad["id"]])  # still listed, blocked
         with self.assertRaises(st.StaffingError):
             st.delete(bad["id"])
+        for turn in good["turns"]:
+            turn["state"] = "cancelled"
+        self.save(good)
         st.delete(good["id"])
         # a meeting's record put in the staffing folder is not a staffing record
         meeting = json.loads(json.dumps(staffing_record("s-cccccccccccc")))

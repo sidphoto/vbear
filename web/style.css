@@ -276,7 +276,7 @@ details.fold > .fold-body { padding: 0 14px 14px; }
 .term-history-notice { flex-basis: 100%; overflow-wrap: anywhere; }
 .switch { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
 .switch:first-child { border-top: 0; }
-.switch input { margin-top: 4px; width: 17px; height: 17px; accent-color: var(--accent); }
+.switch input { margin-top: 4px; accent-color: var(--accent); }
 .switch .t { font-weight: 600; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .spacer { flex: 1; }
@@ -1933,6 +1933,38 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .btn[hidden] { display: none; }
 .home-ask-row textarea, input[data-limit-input] { padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); font: inherit; resize: vertical; }
 input[data-limit-input] { width: 100%; box-sizing: border-box; resize: none; }
+
+/* P48-1: the start-up page asks first which AI to use (three cards), opens only the chosen tool, and lists its checks item by item. */
+.setup-picker { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0 0 8px; }
+.setup-pick { border: 1px solid var(--line-2); border-radius: var(--radius); background: var(--panel); padding: 14px; display: grid; gap: 6px; align-content: start; min-width: 0; }
+.setup-pick h2 { margin: 0; font-size: 17px; overflow-wrap: anywhere; }
+.setup-pick p { margin: 0; overflow-wrap: anywhere; }
+.setup-pick .btn { justify-self: end; margin-top: 4px; }
+.setup-pick-state { padding-top: 4px; }
+.setup-pick-state[data-setup-status="ready"] { color: var(--ok); }
+.setup-pick-state[data-setup-status="policy"], .setup-pick-state[data-setup-status="blocked"] { color: var(--bad); }
+.setup-picked { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; justify-content: space-between; margin: 0 0 12px; }
+.setup-picked p { margin: 0; overflow-wrap: anywhere; }
+.setup-others { margin: 0 0 16px; }
+.setup-check { display: grid; gap: 8px; min-width: 0; border-top: 1px solid var(--line-2); padding-top: 8px; }
+.setup-check-title { margin: 0; font-size: 14px; color: var(--ink-2); }
+.setup-check-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; min-width: 0; }
+.setup-check-item { display: grid; gap: 2px; min-width: 0; }
+.setup-check-head { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; min-width: 0; }
+.setup-check-label { overflow-wrap: anywhere; }
+.setup-check-text, .setup-check-item .plain-tech { margin: 0 0 0 4px; overflow-wrap: anywhere; }
+.setup-check-confirm { display: grid; gap: 6px; min-width: 0; border: 1px solid var(--line-2); border-radius: var(--radius); padding: 10px 12px; }
+.setup-check-confirm p { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .setup-picker { grid-template-columns: 1fr; }
+  .setup-check .setup-actions .btn { flex: 1 1 100%; }
+}
+
+/* P48-6: one size for every tick box (also inside .switch); the team-template preview's name box looks like the other boxes; the dialog's bottom bar
+   stays in view when the dialog scrolls. */
+input[type="checkbox"] { width: 18px; height: 18px; flex: none; accent-color: var(--accent); }
+.modal-box .input, .tpl-list .input { padding: 6px 9px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel); color: var(--ink); font: inherit; max-width: 100%; box-sizing: border-box; }
+.modal-box [data-templates="preview-foot"] { position: sticky; bottom: 0; background: var(--panel); padding-block: 10px; margin-top: 0; z-index: 1; }
 
 /* P48-2 home page frame, progress line and the mark's letters */
 .home-loading { margin: 6px 0 0; }
