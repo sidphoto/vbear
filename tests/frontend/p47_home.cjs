@@ -368,6 +368,55 @@ function check15c(log, phase, typed, messages) {
     }
   });
 
+  // ---- fix47b (review R2, Q1/Q2): only a state that was read and says "start" may open a chat or send ---------------------------------------
+  await test("fix47b ask: a state that cannot be read, or a missing employee card, is not a go: nothing is opened or sent, the words wait under the employee's id and the page that says so is shown", async () => {
+    const unreadable = (W) => { W.fail["GET /api/chats"] = { status: 503, body: { error: "壞了" } }; };
+    const noCard = (W) => { W.cards = []; };
+    const noSupport = (W) => { W.support = undefined; };
+    for (const [name, spoil] of [["GET fails", unreadable], ["no card", noCard], ["no support", noSupport]]) {
+      for (const chats of [[], [chatRow("c1", "p-ceo")]]) {
+        const W = world({ chats });
+        const page = await home(W);
+        spoil(W);
+        askBox(page).value = "幫我排下週的事"; sendBtn(page).click(); await tick(30);
+        assert.strictEqual(posts(page).length, 0, `${name} (${chats.length} chats): no chat opened, no message sent`);
+        assert.strictEqual(page.location.hash, "#/chat?profile=p-ceo", name);
+        assert.strictEqual(evalIn(page, 'ceoDrafts.get("p-ceo")'), "幫我排下週的事", name);
+      }
+    }
+  });
+
+  await test("fix47b employees: a click on an employee when the state cannot be read opens no chat; it goes to the page that says so", async () => {
+    const W = world();
+    const page = await home(W);
+    W.fail["GET /api/chats"] = { status: 503, body: { error: "壞了" } };
+    one(page.main, "data-employee", "p-ceo").click(); await tick(30);
+    assert.strictEqual(posts(page).length, 0);
+    assert.strictEqual(page.location.hash, "#/chat?profile=p-ceo");
+  });
+
+  await test("fix47b ask: read as ready, then refused by the server as 'not checked for chat': the state is read again, the real reason (the administrator's policy) is said in plain words with a link to the page that prepares it, the server's sentence is behind 「技術細節」, and the words stay in the box", async () => {
+    const SERVER = "這個版本的聊天模式還沒有在這台 Mac 上通過驗證，不會啟動。（Claude Code 2.1.318 的聊天模式還沒有通過驗證。處理方式：先執行聊天模式的驗證（會花一點額度）。）";
+    const W = world({ chats: [chatRow("c1", "p-ceo")] });
+    W.posts["POST /api/chats/c1/messages"] = () => { W.support = { state: "policy", detected: "2.1.318" }; return { status: 409, body: { ok: false, error: SERVER, code: "unverified" } }; };
+    const page = await home(W);
+    askBox(page).value = "請幫我整理"; sendBtn(page).click(); await tick(40);
+    assert.strictEqual(postsTo(page, /messages/).length, 1, "the one send that was refused");
+    assert.strictEqual(postsTo(page, /^\/api\/chats$/).length, 0);
+    const n = one(page.main, "data-home", "not-ready");
+    assert.ok(n, "a notice");
+    const outside = text(n).split(SERVER).join("");
+    assert.ok(outside.includes("這台電腦的 Claude Code 有管理員設定，VBear 不能用它聊天"), outside);
+    assert.ok(!/先執行聊天模式的驗證|還沒有在這台 Mac/.test(outside.split("技術細節").join("")), "the server's sentence is only in the fold");
+    assert.ok(text(n).includes(SERVER), "kept whole");
+    assert.ok(all(n, (x) => x.tag === "details").length === 1, "behind the fold");
+    const links = all(n, (x) => x.tag === "a" && x.getAttribute("href") === "#/chat?profile=p-ceo");
+    assert.strictEqual(links.length, 1);
+    assert.strictEqual(askBox(page).value, "請幫我整理", "the words stay in the box");
+    links[0].click();
+    assert.strictEqual(evalIn(page, 'ceoDrafts.get("p-ceo")'), "請幫我整理", "and wait under the employee's id when the link is followed");
+  });
+
   await test("fix47 ask: an employee's avatar with a chat already there still opens it (reading is free), but one with none and a tool that cannot chat goes to the page that prepares it", async () => {
     const W = world({ support: { state: "unverified", detected: "2.1.318" }, chats: [chatRow("c-old", "p-acc")] });
     const page = await home(W);

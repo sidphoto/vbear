@@ -729,13 +729,20 @@ class Page:
 class Console:
     def __init__(self, port: int, token: str, timeout: float = 60.0):
         self.port, self.token, self.timeout = port, token, timeout
+        self.budget = None            # a function: seconds this call may still use (set only inside a wait; None = the normal limit)
 
     def call(self, path: str, method: str = "GET", body=None):
+        timeout = self.timeout
+        if callable(self.budget):
+            left = self.budget()
+            if left <= 0:
+                return 0, None
+            timeout = min(timeout, left)
         req = urllib.request.Request(
             f"http://127.0.0.1:{self.port}{path}", method=method, data=json.dumps(body).encode() if body is not None else None,
             headers={"X-VBear": "1", "Content-Type": "application/json", "Authorization": f"Bearer {self.token}"})
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return resp.status, json.loads(resp.read() or b"null")
         except urllib.error.HTTPError as exc:
             try:
@@ -1054,6 +1061,7 @@ class Run:
         self.notice = {}
         self.spent_calls = 0
         self.other = None
+        self.marker_kept = None                      # None until the start marker is tried; False when it could not be written (nothing is spent then)
         self.other_state = "none"                    # "none" (the first of the pair), "known" (its result was read) or "unknown" (it began and left no usable result)
         self.last_look = None
         self.dead_end = None
@@ -1064,15 +1072,37 @@ class Run:
     def over(self) -> bool:
         return self.clock() - self.started > WALL_CAP_S
 
+    def chrome_left(self) -> float | None:
+        """What is left of the Chrome's 5 minutes (None when there is no Chrome to ask, as in a test of the walk alone)."""
+        left = getattr(getattr(self.page, "b", None), "left", None)
+        return left() if callable(left) else None
+
     def wait(self, what: str, probe, cap: float = WAIT_CAP_S, every: float = 1.0):
+        """Poll ``probe`` until it answers. The wait is never longer than 2 minutes, nor than what is left of the whole run or of the Chrome's 5
+        minutes: that is looked at before every probe and before every sleep, and the probe's own HTTP call (through ``Console.budget``) and
+        every sleep are held to what is left. A wait that begins after the deadline probes nothing."""
         end = self.clock() + min(cap, WAIT_CAP_S)           # no single wait is longer than 2 minutes, whatever asks for more
-        while True:
-            got = probe()
-            if got:
-                return got
-            if self.clock() > end or self.over():
-                raise Stop(f"timed out waiting for {what}")
-            self.sleep(every)
+
+        def room() -> float:                                # seconds this wait may still use; <= 0 means: stop
+            left = end - self.clock()
+            chrome = self.chrome_left()
+            return left if chrome is None else min(left, chrome)
+
+        before = getattr(self.c, "budget", None)
+        self.c.budget = lambda: max(0.0, room())
+        try:
+            while True:
+                if self.over() or (self.chrome_left() is not None and self.chrome_left() <= 0):
+                    raise Stop(f"timed out waiting for {what}")
+                got = probe()
+                if got:
+                    return got
+                left = room()
+                if left <= 0 or self.over():
+                    raise Stop(f"timed out waiting for {what}")
+                self.sleep(min(every, left))
+        finally:
+            self.c.budget = before
 
     def ledger(self) -> float | None:
         code, data = self.c.call("/api/meetings/ledger")
@@ -1101,6 +1131,8 @@ class Run:
     def money_ok(self, step_cap: float, checks: int | None = None) -> bool:
         """The cap before a step that spends: the day's ledger of this folder, the other folder's day (from its result file), the chat checks
         (kept at US$0.05 each) and this step's own limit."""
+        if self.marker_kept is False:
+            return False
         other = self.other if isinstance(self.other, dict) else {}
         ledgers = [self.ledger(), self.other_ledger()]
         others_checks = 1 if other and other.get("mode") == "haiku" else 0
@@ -1141,26 +1173,37 @@ class Run:
         """Find out what the other version spent. Its result file is read (and has to hold a readable amount of money); without one, its start
         marker says whether it ever began: if it did, the amount is unknown, and if it did not, this is the first of the pair."""
         other = self.other_label()
-        try:
-            with open(self.out_dir / f"qa47-{other}.json", encoding="utf-8") as fh:
-                data = json.load(fh)
-        except (OSError, ValueError):
-            data = None
-        if data is not None:
-            self.other = data
-            self.other_state = "known" if result_ok(data) and data.get("label") == other and money((data.get("money") or {}).get("ledger_end")) is not None else "unknown"
-        elif (self.out_dir / f"started-{other}.txt").exists():
-            self.other, self.other_state = None, "unknown"
+        path = self.out_dir / f"qa47-{other}.json"
+        if not os.path.lexists(path):
+            # no result file at all: the marker tells whether the other version ever began
+            if (self.out_dir / f"started-{other}.txt").exists():
+                self.other, self.other_state = None, "unknown"
+            else:
+                self.other, self.other_state = None, "none"
         else:
-            self.other, self.other_state = None, "none"
+            # a file that is there but cannot be read, parsed or checked is never "the first of the pair": what it spent is unknown
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    data = json.load(fh)
+            except (OSError, ValueError):
+                data = None
+            if data is None:
+                self.other, self.other_state = None, "unknown"
+            else:
+                self.other = data
+                self.other_state = "known" if result_ok(data) and data.get("label") == other and money((data.get("money") or {}).get("ledger_end")) is not None else "unknown"
         if self.other_state == "unknown":
             self.check.warn(f"what the {other} run spent is not known, so no step that spends Claude's money will be done")
 
     def mark_started(self) -> None:
+        """The marker that tells the other version this one began. When it cannot be kept, the next run could take this one for never started and
+        count its day as zero, so this run spends nothing."""
         try:
             (self.out_dir / f"started-{self.label}.txt").write_text("started\n", encoding="utf-8")
+            self.marker_kept = True
         except OSError:
-            self.check.warn("the start marker could not be written")
+            self.marker_kept = False
+            self.check.warn("the start marker could not be written, so no step that spends Claude's money will be done")
 
     def verify_chat(self) -> None:
         """The chat check of Claude Code (the person's own login; about US$0.01 to 0.05, not counted in the day's limit): reserved first."""

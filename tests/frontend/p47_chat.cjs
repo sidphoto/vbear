@@ -508,7 +508,7 @@ const prepList = (cardOver, supOver = {}) => listing({ cards: [newCard(cardOver)
 async function press(key, root) { q(root || h.dom().mainEl, key).click(); await settle(80); }
 
 test("CEO: 「建立 CEO，開始聊」 makes the employee and opens the conversation; the opening sentence is only in the box, and nothing is sent", async () => {
-  setPage({ extra: ceoExtra(), created: { ok: true, chat: { id: CID, profile_id: NEW_ID, created_at: 1 } }, detail: detail({ card: newCard(), chat: { id: CID, profile_id: NEW_ID, created_at: 1, engine: "claude-chat" } }) });
+  setPage({ extra: ceoExtra(), list: prepList({}), created: { ok: true, chat: { id: CID, profile_id: NEW_ID, created_at: 1 } }, detail: detail({ card: newCard(), chat: { id: CID, profile_id: NEW_ID, created_at: 1, engine: "claude-chat" } }) });
   let main = await open("#/ceo");
   const go = main.find((n) => n.getAttribute && n.getAttribute("data-ceo") === "create");
   assert.strictEqual(text(go), "建立 CEO，開始聊");
@@ -652,6 +652,63 @@ test("fix47 CEO: a tool not checked for chat yet goes to the page too, with no c
   await createCeo();
   assert.strictEqual(calls("POST", "/api/chats").length, 1);
   assert.strictEqual(global.location.hash, "#/chat/" + CID);
+});
+
+// ---- fix47b (review R2): a state that was not read is not a go ----------------------------------------------------------------
+
+const unreadableExtra = () => (p, method, opts) => (p === "/api/chats" && method === "GET" && page.listFail ? jsonResponse({ ok: false, error: "壞了" }, false, 503) : ceoExtra()(p, method, opts));
+
+for (const [name, spoil] of [["the state cannot be read", () => { page.listFail = true; }], ["the employee's card is not in the list", () => { page.list = listing({ cards: [] }); }],
+  ["the chat support is missing", () => { page.list = listing({ cards: [newCard()], support: undefined }); }]]) {
+  test(`fix47b CEO: ${name}: no conversation is made, the opening waits under the employee's id, and the page says it could not read the state; once it can be read the chat starts from there`, async () => {
+    setPage({ extra: unreadableExtra(), list: readyList() });
+    const mainCeo = await open("#/ceo");
+    spoil();
+    mainCeo.find((n) => n.getAttribute && n.getAttribute("data-ceo") === "create").click();
+    await settle(80);
+    assert.strictEqual(calls("POST", "/api/chats").length, 0, "no conversation was made");
+    assert.strictEqual(global.location.hash, "#/chat?profile=" + NEW_ID);
+    let main = await open(global.location.hash);
+    const reason = text(q(main, "prep-reason"));
+    assert(reason.includes("讀不到") || reason.includes("狀態"), "says the state could not be read: " + reason);
+    assert.strictEqual(calls("POST", "/api/chats").length, 0);
+    assert.strictEqual(calls("POST", "/messages").length, 0);
+    // the state can be read again: the same page starts the chat, and the opening is in the box (never sent)
+    page.listFail = false; page.list = readyList();
+    page.created = { ok: true, chat: { id: CID, profile_id: NEW_ID, created_at: 1 } };
+    page.detail = detail({ card: newCard(), chat: { id: CID, profile_id: NEW_ID, created_at: 1, engine: "claude-chat" } });
+    await press("prep-action", main);
+    main = h.dom().mainEl;
+    if (global.location.hash !== "#/chat/" + CID) await press("prep-action", main);
+    assert.strictEqual(global.location.hash, "#/chat/" + CID);
+    assert.strictEqual(q(await open(global.location.hash), "input").value, OPENING);
+    assert.strictEqual(calls("POST", "/messages").length, 0);
+  });
+}
+
+test("fix47b chat: the link 「到準備頁」 keeps the words of the box under the employee's id; after the preparation and the start they are in the new box and nothing was sent again", async () => {
+  const SERVER = "這個版本的聊天模式還沒有在這台 Mac 上通過驗證，不會啟動。";
+  setPage({ detail: detail(), sendStatus: 409, sendBody: { ok: false, error: SERVER, code: "unverified" },
+    list: listing({ support: support({ state: "policy", message: "管理員政策", codex: codexSupport(), agy: agySupport() }) }) });
+  const main = await open("#/chat/" + CID);
+  q(main, "input").value = "請幫我整理";
+  await press("send", main);
+  const link = q(main, "not-ready") && q(q(main, "not-ready"), "prep-go");
+  assert(link, "the link");
+  assert.strictEqual(q(main, "input").value, "請幫我整理");
+  link.click();                                   // a real anchor then changes the address; the stub does it by hand
+  const prep = await open(link.getAttribute("href"));
+  assert.strictEqual(text(q(prep, "prep-action")), "到 AI 工具看看");
+  // the tool is made ready; the person starts the chat from the prepared page
+  page.list = listing({ support: support({ codex: codexSupport(), agy: agySupport() }) });
+  page.created = { ok: true, chat: { id: CID2, profile_id: "emp-1", created_at: 1 } };
+  page.detail = detailFor("emp-1", CID2);
+  const again = await open(link.getAttribute("href"));
+  await press("prep-action", again);
+  assert.strictEqual(global.location.hash, "#/chat/" + CID2);
+  const chat = await open(global.location.hash);
+  assert.strictEqual(q(chat, "input").value, "請幫我整理", "the words are still there");
+  assert.strictEqual(calls("POST", "/messages").length, 1, "only the one that was refused; the draft is not sent by itself");
 });
 
 test("fix47 CEO: the page says 「已就緒」 only when a chat can start with the tool, and says what is true otherwise", async () => {
