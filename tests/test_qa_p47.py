@@ -981,7 +981,7 @@ class RunTests(unittest.TestCase):
         b = qa.Browser.__new__(qa.Browser)
         b.now, b.started, b.proc = qa.CHROME_CAP_S - 7.0, 0.0, None
         b.clock = lambda: b.now
-        console = qa.Console(7802, "t")                         # the real class: only the network call underneath is replaced
+        console = qa.Console(qa.DEFAULT_PORT, "t")                         # the real class: only the network call underneath is replaced
         seen = []
 
         class Reply:
