@@ -13864,7 +13864,7 @@ async function viewSetup() {
 // send button is the only thing that sends it, so nothing here spends money. The lobby has two doors, one to make the CEO
 // (while there is none) and one, shown once, to chat with the CEO that was made (config first_ceo_id).
 const CEO_TITLE = "建立你的 CEO";
-const CEO_LEDE = "你的 AI 工具已經準備好了。接下來先請一位 CEO：你把想做的事告訴他，他會先問你幾個簡單的問題，再幫你把想法整理成一份計畫。";
+const CEO_LEDE = "先請一位 CEO：你把想做的事告訴他，他會先問你幾個簡單的問題，再幫你把想法整理成一份計畫。";
 const CEO_LIMITS = "CEO 可以和你聊天、幫你整理想法。要把工作分配給其他員工時，在對話右上角的「⋯」選「請幕僚長安排」：幕僚長會先提議，你確認了才會做。";
 const CEO_COST = "建立員工不花錢，也不會讓 CEO 開始做任何事。你按「送出」送出第一句話之後，才會用到你的 AI 方案。";
 const CEO_AGY_NOTE = "這位 CEO 會用 AGY：和它的對話內容會送到 Google，它會用到你自己裝的 AGY 技能。AGY 的聊天要先通過驗證，才能開始聊。";
