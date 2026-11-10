@@ -70,9 +70,11 @@ from __future__ import annotations
 import argparse
 import base64
 import fcntl
+import http.client
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import threading
@@ -744,12 +746,39 @@ class Console:
         if not callable(self.budget):
             return self._once(req, timeout)
         # Inside a wait the whole call (status line, headers, body, an error's body) is held to what is left, not each socket read: it runs
-        # on its own thread and is given up when the time is over (the thread ends by itself at its socket timeout; nothing waits for it).
+        # on its own thread over a connection this call holds. When the time is over the connection is shut and closed, which ends the
+        # thread's read at once; the thread is then waited for (briefly) so nothing is left reading.
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
         box = []
-        worker = threading.Thread(target=lambda: box.append(self._once(req, timeout)), daemon=True)
+
+        def run():
+            try:
+                conn.request(req.get_method(), req.selector, body=req.data, headers=dict(req.header_items()))
+                resp = conn.getresponse()
+                raw = resp.read()
+                try:
+                    data = json.loads(raw or b"null")
+                except ValueError:
+                    data = None
+                box.append((resp.status, data))
+            except Exception:                               # a read cut short by the closing below ends here, whatever it raised
+                box.append((0, None))
+        worker = threading.Thread(target=run, daemon=True)
         worker.start()
-        worker.join(max(0.0, self.budget()))
-        if worker.is_alive() or not box or self.budget() <= 0:
+        try:
+            worker.join(max(0.0, self.budget()))
+        finally:
+            late = worker.is_alive()
+            if late:
+                sock = conn.sock
+                if sock is not None:
+                    try:
+                        sock.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+            conn.close()
+            worker.join(1.0)
+        if late or not box or self.budget() <= 0:
             return 0, None
         return box[0]
 

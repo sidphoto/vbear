@@ -977,13 +977,38 @@ class RunTests(unittest.TestCase):
             run.wait("anything", lambda: probes.append(1) or True)
         self.assertEqual(probes, [])
 
+    @staticmethod
+    def fake_connection(seen, read):
+        """A stand-in for http.client.HTTPConnection, the connection a call inside a wait holds (so that it can close it when time is over)."""
+        class Reply:
+            status = 200
+
+            def read(inner, n=-1):
+                return read()
+
+        class Conn:
+            sock = None
+
+            def __init__(inner, host, port, timeout=None):
+                seen.append(timeout)
+
+            def request(inner, *a, **k):
+                pass
+
+            def getresponse(inner):
+                return Reply()
+
+            def close(inner):
+                pass
+        return Conn
+
     def test_the_http_call_of_a_wait_never_waits_longer_than_what_is_left_and_is_back_to_normal_after_it(self):
         import unittest.mock as mock
         b = qa.Browser.__new__(qa.Browser)
         b.now, b.started, b.proc = qa.CHROME_CAP_S - 7.0, 0.0, None
         b.clock = lambda: b.now
-        console = qa.Console(qa.DEFAULT_PORT, "t")                         # the real class: only the network call underneath is replaced
-        seen = []
+        console = qa.Console(qa.DEFAULT_PORT, "t")                         # the real class: only the network underneath is replaced
+        seen, plain = [], []
 
         class Reply:
             status = 200
@@ -994,25 +1019,22 @@ class RunTests(unittest.TestCase):
             def __exit__(inner, *a):
                 return False
 
-            body = [b"{}"]
-
-            def read(inner, n=-1):                         # a real response: the body once, then nothing
-                return inner.body.pop() if inner.body else b""
+            def read(inner, n=-1):
+                return b"{}"
 
         def fake_urlopen(req, timeout=None):
-            seen.append(timeout)
-            r = Reply()
-            r.body = [b"{}"]
-            return r
+            plain.append(timeout)
+            return Reply()
         run, page, _ = self.run_for(console=console)
         page.b = b
         run.clock = lambda: b.now
         run.started = b.now
-        with mock.patch.object(qa.urllib.request, "urlopen", fake_urlopen):
+        with mock.patch.object(qa.http.client, "HTTPConnection", self.fake_connection(seen, lambda: b"{}")), \
+                mock.patch.object(qa.urllib.request, "urlopen", fake_urlopen):
             run.wait("an answer", lambda: console.call("/api/x")[0] == 200)
             self.assertLessEqual(seen[-1], 7.0, "inside a wait the call is held to what is left")
             console.call("/api/x")
-            self.assertEqual(seen[-1], console.timeout, "outside a wait (the clean-up) it is the normal limit")
+            self.assertEqual(plain[-1], console.timeout, "outside a wait (the clean-up) it is the normal limit")
 
     def test_an_answer_that_trickles_in_past_the_five_minutes_is_not_taken(self):
         # R3: each read is quick, but together they go past what is left; the answer must not be taken as a success.
@@ -1022,74 +1044,71 @@ class RunTests(unittest.TestCase):
         b.clock = lambda: b.now
         console = qa.Console(qa.DEFAULT_PORT, "t")
 
-        class Slow:
-            status = 200
-
-            def __init__(inner):
-                inner.pieces = [b"{", b'"ready"', b":", b"true", b"}"]
-
-            def __enter__(inner):
-                return inner
-
-            def __exit__(inner, *a):
-                return False
-
-            def read(inner, n=-1):
-                if n is None or n < 0:                      # the whole body at once: all the pieces' time together
-                    b.now += 0.4 * len(inner.pieces)
-                    out, inner.pieces = b"".join(inner.pieces), []
-                    return out
-                b.now += 0.4                                # every piece takes a little time
-                return inner.pieces.pop(0) if inner.pieces else b""
+        def slow_body():
+            b.now += 2.0                                    # the whole body comes, but only after what was left
+            return b'{"ready": true}'
         run, page, _ = self.run_for(console=console)
         page.b = b
         run.clock = lambda: b.now
         run.started = b.now
         run.sleep = lambda sec: None
-        with mock.patch.object(qa.urllib.request, "urlopen", lambda req, timeout=None: Slow()):
+        with mock.patch.object(qa.http.client, "HTTPConnection", self.fake_connection([], slow_body)):
             with self.assertRaises(qa.Stop):
                 run.wait("an answer", lambda: (console.call("/api/x")[1] or {}).get("ready"))
 
     def test_a_real_http_answer_that_trickles_is_given_up_when_the_time_left_is_over(self):
-        # R4: a real urllib call against a little local server (a random loopback port, not VBear) that sends its status line and headers,
-        # or an error's body, a byte at a time: each byte is quicker than the socket timeout, the whole is not. The call must end near the
-        # time left, whatever part of the answer is slow.
+        # R4/R5: a real call against a little local server (a random loopback port, not VBear) that sends its status line and headers, or an
+        # error's body, a byte at a time and would go on long after: each byte is quicker than the socket timeout, the whole is not. The call
+        # must end near the time left, and its connection must be closed so that nothing is left reading.
         import socket
         import time as _time
         replies = {
-            "headers": b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\n\r\n" + b'{"ready": true}',
-            "error": b"HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: 40\r\n\r\n" + b'{"ok": false, "error": "x", "code": "y"}',
+            "headers": b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Long: " + b"a" * 400 + b"\r\nContent-Length: 15\r\n\r\n" + b'{"ready": true}',
+            "error": b"HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: 400\r\n\r\n" + b" " * 400,
         }
         for name, raw in replies.items():
             srv = socket.socket()
             srv.bind(("127.0.0.1", 0))
             srv.listen(1)
+            srv.settimeout(5.0)
             port = srv.getsockname()[1]
             slow_from = 0 if name == "headers" else raw.index(b"\r\n\r\n") + 4
+            gone = threading.Event()
 
             def serve():
-                conn, _ = srv.accept()
+                try:
+                    conn, _ = srv.accept()
+                except OSError:
+                    return
                 try:
                     conn.recv(65536)
                     for i, byte in enumerate(raw):
                         conn.sendall(bytes([byte]))
                         if i >= slow_from:
-                            _time.sleep(0.02)
+                            _time.sleep(0.01)
                 except OSError:
-                    pass
+                    gone.set()                              # the reader closed its end: the server stops sending
                 finally:
                     conn.close()
             t = threading.Thread(target=serve, daemon=True)
+            before = threading.active_count()
             t.start()
-            console = qa.Console(port, "t", timeout=5.0)
-            end = _time.monotonic() + 0.2
-            console.budget = lambda: end - _time.monotonic()
-            began = _time.monotonic()
-            code, data = console.call("/api/x")
-            took = _time.monotonic() - began
-            srv.close()
-            self.assertEqual((code, data), (0, None), name)
-            self.assertLess(took, 0.45, f"{name}: the call ended near the time left, not when the answer was done ({took:.3f} s)")
+            try:
+                console = qa.Console(port, "t", timeout=5.0)
+                end = _time.monotonic() + 0.2
+                console.budget = lambda: end - _time.monotonic()
+                began = _time.monotonic()
+                code, data = console.call("/api/x")
+                took = _time.monotonic() - began
+                self.assertEqual((code, data), (0, None), name)
+                self.assertLess(took, 1.5, f"{name}: the call ended near the time left ({took:.3f} s)")
+                t.join(3.0)
+                self.assertFalse(t.is_alive(), f"{name}: the server saw the connection closed and stopped")
+                self.assertTrue(gone.is_set(), f"{name}: it was the reader that closed it, before the answer was done")
+                self.assertLessEqual(threading.active_count(), before, f"{name}: no thread of the call is left reading")
+            finally:
+                srv.close()
+                t.join(3.0)
 
     def test_a_probe_that_answers_after_the_deadline_is_not_taken(self):
         b = qa.Browser.__new__(qa.Browser)
