@@ -2432,6 +2432,7 @@ function homeAdvanced({ tasksRes, profilesRes, catalogRes, configRes, board }) {
 const HOME_CEO_ASK = "CEO 要動手前都會先問你。";
 const HOME_BUSY_TEXT = "CEO 還在回上一則（或有卡片在等你決定），所以這句話沒有送出。字已經放在他的對話的輸入框裡，按「送出」才會送。";
 const HOME_LIMIT_KINDS = ["red", "budget"];
+const HOME_UNREAD_TEXT = "讀不到這位員工現在能不能聊天的狀態，所以沒有開對話，也沒有送出任何字。";
 
 // The chats a routine opened (they are not "a chat with" anyone for the home page): the ids in the routines' runs.
 function homeRoutineChatIds(routinesRes) {
@@ -2489,8 +2490,9 @@ async function openChatWith(profileId, opts = {}) {
   // The AI tool of this employee cannot chat yet (not checked for chat, held back by an administrator's policy, not logged in...): a new chat would be
   // opened for nothing and a send would be refused, so the person goes to the page that says why, and the words wait under the employee's id.
   // Reading a chat that is already there (no words to send) is still allowed.
-  const prep = card ? chatPrepState(card, chatsRes) : null;
-  if (prep && prep.kind !== "start" && (!chat || text.trim())) { prepare(); return { ok: false, sent: false, kept: false, error: null, chatId: "", reason: prep.reason }; }
+  // Only a state that was read and says "start" opens a chat or sends: a read that failed or a card that is not in the list is not a go (R2 Q1).
+  const prep = chatPrepState(card, chatsRes);
+  if ((!prep || prep.kind !== "start") && (!chat || text.trim())) { prepare(); return { ok: false, sent: false, kept: false, error: null, chatId: "", reason: prep ? prep.reason : HOME_UNREAD_TEXT }; }
   if (!chat) {
     try {
       const r = await api.post("/api/chats", { profile_id: profileId });
@@ -2510,7 +2512,16 @@ async function openChatWith(profileId, opts = {}) {
     return { ok: true, sent: false, kept: true, error: null, chatId: chat.id };
   }
   try { await api.post(`/api/chats/${encodeURIComponent(chat.id)}/messages`, { text }); }
-  catch (e) { return { ok: false, sent: false, kept: false, error: e, chatId: chat.id }; }
+  catch (e) {
+    // The server says this AI tool cannot chat after all (the state changed since it was read): read the real state now, so the person is told the real
+    // reason and gets the way to the page that prepares it (R2 Q2); the words stay where they are.
+    let fresh = null;
+    if (CHAT_NOT_READY_CODES.includes(e.code)) {
+      const data = await api.get("/api/chats").catch(() => null);
+      fresh = data ? chatPrepState(homeCardOf(data, profileId), data) : null;
+    }
+    return { ok: false, sent: false, kept: false, error: e, chatId: chat.id, prep: fresh };
+  }
   go();
   return { ok: true, sent: true, kept: false, error: null, chatId: chat.id };
 }
@@ -2729,7 +2740,8 @@ function homeAsk(state) {
     if (r.error) {
       const w = plainWords(r.error);
       const limit = w.limit || HOME_LIMIT_KINDS.includes(r.error.code);
-      setKids(result, limit ? limitReachedNotice(r.error.message) : notice("bad", r.error.message || "沒有送出"));
+      if (!limit && CHAT_NOT_READY_CODES.includes(r.error.code)) setKids(result, chatNotReadyNotice(r.error, ceo.id, r.prep, { scope: "home", go: "ask-prepare", keep: () => input.value }));
+      else setKids(result, limit ? limitReachedNotice(r.error.message) : notice("bad", r.error.message || "沒有送出"));
     } else if (r.kept) toast(HOME_BUSY_TEXT);
     else if (r.reason) setKids(result, notice("warn", plainWords(r.reason).text));
     else if (r.ok) input.value = "";
@@ -13904,16 +13916,18 @@ async function ceoOpenChat(profileId, opening, reuseId) {
   let chatId = reuseId || "";
   // The AI tool must be able to chat before the conversation is opened: when it is not (not checked for chat yet, held back by an administrator's policy,
   // not logged in), the person goes to the page that says why and has one action, and the opening waits under the employee's id.
-  // A read that fails does not block: the old way (open, and go to that page if the server refuses) then applies.
+  // Only a state that was read and says "start" opens it: a read that fails, a card that is not in the list and a missing chat support are not a go
+  // either (R2 Q1); the page for this employee then says the state could not be read, and has a button to read it again.
+  let prep = null;
   try {
     const data = await api.get("/api/chats");
-    const prep = chatPrepState(homeCardOf(data, profileId), data);
-    if (prep && prep.kind !== "start") {
-      if (opening) ceoDrafts.set(profileId, opening);
-      location.hash = `#/chat?profile=${encodeURIComponent(profileId)}`;
-      return false;
-    }
-  } catch (_) { /* the old way */ }
+    prep = chatPrepState(homeCardOf(data, profileId), data);
+  } catch (_) { prep = null; }
+  if (!prep || prep.kind !== "start") {
+    if (opening) ceoDrafts.set(profileId, opening);
+    location.hash = `#/chat?profile=${encodeURIComponent(profileId)}`;
+    return false;
+  }
   if (!chatId) {
     try {
       const r = await api.post("/api/chats", { profile_id: profileId });
@@ -14403,6 +14417,8 @@ function chatPrepState(card, data) {
   if (card.can_chat !== true) {
     return { kind: "link", label: "到員工頁看看", href: "#/employees", reason: typeof card.reason === "string" && card.reason ? card.reason : `${name}現在不能聊天。` };
   }
+  // No chat support in the answer at all: the state of the tool was not read, so nothing is said of it and nothing is started (R2 Q1)
+  if (!(data && data.support && typeof data.support === "object")) return { kind: "retry", label: "再讀一次", reason: `${HOME_UNREAD_TEXT}` };
   const engine = card.engine;
   const part = engine === "codex-chat" ? sup.codex : engine === "agy-chat" ? sup.agy : sup;
   const tool = engine === "codex-chat" ? "Codex" : engine === "agy-chat" ? "AGY" : "Claude Code";
@@ -14422,6 +14438,34 @@ function chatPrepState(card, data) {
   }
   if (engine === "codex-chat" && state === "not_logged_in") return linkSetup("到 AI 工具登入聊天用的 Codex", why);
   return linkSetup("到 AI 工具看看", why);
+}
+
+// The page of an employee whose chat state could not be read (the read failed, or the employee is not in the list): nothing was opened or sent, the words
+// that wait under the employee's id are still kept, and one button reads the state again (R2 Q1).
+function chatUnreadPage(profileId, name) {
+  const kept = typeof ceoDrafts.get(profileId) === "string" && ceoDrafts.get(profileId) !== "";
+  return [el("h1", null, name ? `準備和 ${name} 聊天` : "準備聊天"),
+    el("div", { class: "chat-prep", "data-chat": "prep" },
+      el("p", { class: "lede", "data-chat": "prep-reason" }, HOME_UNREAD_TEXT + (kept ? "你打的字還留著。" : "")),
+      el("button", { type: "button", class: "btn primary", "data-chat": "prep-action", on: { click: () => route() } }, "再讀一次"),
+      el("p", { class: "small" }, el("a", { href: "#/chat" }, "看所有對話紀錄")))];
+}
+
+// The notice for a send the server refused because the AI tool of this employee cannot chat (not checked for chat, an administrator's policy, not logged
+// in...), on the chat page and on the home page. `st`: chatPrepState of the state read again just now (null when it could not be read): its reason is the
+// real one (the server's sentence may name only the first thing it found); without it the table's plain words say it. The server's sentence is kept whole
+// behind 「技術細節」. The link goes to the page that prepares the chat, and keeps the words of the box (opts.keep()) under the employee's id when it is followed
+// (R2 Q3), so they are there when the chat is started and are never sent by themselves.
+function chatNotReadyNotice(e, profileId, st, opts) {
+  const reason = plainWords(e);
+  const text = st && st.kind !== "start" ? st.reason : reason.text + reason.next;
+  const raw = typeof e.message === "string" ? e.message.trim() : "";
+  const keep = () => { const t = typeof opts.keep === "function" ? opts.keep() : ""; if (profileId && typeof t === "string" && t.trim()) ceoDrafts.set(profileId, t); };
+  const node = noticeBox("warn", [text,
+    profileId ? el("p", { style: "margin:8px 0 0" }, el("a", { class: "btn small", href: `#/chat?profile=${encodeURIComponent(profileId)}`, [`data-${opts.scope}`]: opts.go, on: { click: keep } }, opts.scope === "chat" ? "到準備頁" : "先把聊天準備好")) : null,
+    raw ? plainTechFold(raw) : null]);
+  node.setAttribute(`data-${opts.scope}`, "not-ready");
+  return node;
 }
 
 // ---- the list ----
@@ -14445,7 +14489,11 @@ async function viewChat(id, params) {
   if (id) return viewChatDetail(token, id);
   let data;
   try { data = await api.get("/api/chats"); }
-  catch (e) { setKids(claim(token), el("h1", null, "對話紀錄"), notice("bad", "讀不到對話紀錄：" + e.message)); return; }
+  catch (e) {
+    const want = typeof (params && params.profile) === "string" ? params.profile : "";
+    if (want) { setKids(claim(token), chatUnreadPage(want, "")); return; }       // sent here to prepare a chat: say that the state could not be read, and offer to read it again
+    setKids(claim(token), el("h1", null, "對話紀錄"), notice("bad", "讀不到對話紀錄：" + e.message)); return;
+  }
   const readGroups = async () => {
     try { const r = await api.get("/api/groups"); return Array.isArray(r.groups) ? r.groups : []; } catch (_) { return []; }
   };
@@ -14463,6 +14511,7 @@ async function viewChat(id, params) {
   const pick = typeof (params && params.profile) === "string" ? params.profile : "";
   let chosen = pick;
   const chosenCard = () => (Array.isArray(cur.cards) ? cur.cards.find((c) => c && c.id === chosen) : null) || null;
+  if (pick && !chosenCard()) { setKids(main, chatUnreadPage(pick, "")); return; }           // an employee that is not in the list: nothing to prepare, nothing is opened
   // The notice for the chosen card's AI tool; with no card chosen, Claude Code's (unless it is not there and Codex is) and
   // Codex's once Codex is installed.
   const drawSupport = () => {
@@ -14621,6 +14670,8 @@ async function viewChat(id, params) {
       action = el("button", { type: "button", class: "btn primary", "data-chat": "prep-action", disabled: lampRed || prepStarting, on: { click: () => prepStart() } }, st.label);
     } else if (st && st.kind === "verify") {
       action = el("button", { type: "button", class: "btn primary", "data-chat": "prep-action", on: { click: () => prepVerify(st) } }, st.label);
+    } else if (st && st.kind === "retry") {
+      action = el("button", { type: "button", class: "btn primary", "data-chat": "prep-action", on: { click: () => refresh() } }, st.label);
     } else if (st) action = el("a", { class: "btn primary", href: st.href, "data-chat": "prep-action" }, st.label);
     setKids(prepBox,
       el("p", { class: "lede", "data-chat": "prep-reason" }, st ? st.reason : "找不到這位員工。"),
@@ -14929,6 +14980,7 @@ async function viewChatDetail(token, id) {
     if (r && token === seq) { limits = r.limits; ledger = r.ledger; draw(); }
   };
 
+  const boxText = () => input.value;       // what is typed in the box (read only; the link to the page that prepares the chat keeps it)
   async function send() {
     const text = input.value;
     if (busy || !text.trim()) return;
@@ -14952,16 +15004,9 @@ async function viewChatDetail(token, id) {
   // prepares it; the server's own sentence is kept whole behind 「技術細節」, and the words stay in the box.
   async function notReadyNote(e) {
     const pid = (view.card && typeof view.card.id === "string" && view.card.id) || (view.chat && view.chat.profile_id) || "";
-    let reason = plainWords(e);
     const data = pid ? await api.get("/api/chats").catch(() => null) : null;
     const st = data ? chatPrepState(homeCardOf(data, pid), data) : null;
-    const text = st && st.kind !== "start" ? st.reason : reason.text + reason.next;
-    const raw = typeof e.message === "string" ? e.message.trim() : "";
-    const node = noticeBox("warn", [text,
-      pid ? el("p", { style: "margin:8px 0 0" }, el("a", { class: "btn small", href: `#/chat?profile=${encodeURIComponent(pid)}`, "data-chat": "prep-go" }, "到準備頁")) : null,
-      raw ? plainTechFold(raw) : null]);
-    node.setAttribute("data-chat", "not-ready");
-    setKids(limitBox, node);
+    setKids(limitBox, chatNotReadyNotice(e, pid, st, { scope: "chat", go: "prep-go", keep: boxText }));
   }
   async function stop() {
     try { await api.post(`/api/chats/${encodeURIComponent(id)}/stop`, {}); await pollOnce(); }
