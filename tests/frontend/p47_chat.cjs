@@ -711,6 +711,23 @@ test("fix47b chat: the link 「到準備頁」 keeps the words of the box under 
   assert.strictEqual(calls("POST", "/messages").length, 1, "only the one that was refused; the draft is not sent by itself");
 });
 
+test("v0.21.0 chat: after 「到準備頁」 the person comes back to the same chat (back button, or the list): the words are in its box again and nothing was sent", async () => {
+  const SERVER = "這個版本的聊天模式還沒有在這台 Mac 上通過驗證，不會啟動。";
+  setPage({ detail: detail(), sendStatus: 409, sendBody: { ok: false, error: SERVER, code: "unverified" },
+    list: listing({ support: support({ state: "policy", message: "管理員政策", codex: codexSupport(), agy: agySupport() }) }) });
+  const main = await open("#/chat/" + CID);
+  q(main, "input").value = "請幫我整理";
+  await press("send", main);
+  const link = q(q(main, "not-ready"), "prep-go");
+  link.click();
+  await open(link.getAttribute("href"));
+  const back = await open("#/chat/" + CID);      // the tool still cannot chat: the person simply goes back
+  assert.strictEqual(q(back, "input").value, "請幫我整理", "the words came back to the same chat");
+  assert.strictEqual(calls("POST", "/messages").length, 1, "only the one that was refused");
+  const again = await open("#/chat/" + CID);     // taken once: opening it again does not paste it twice
+  assert.strictEqual(q(again, "input").value, "");
+});
+
 test("fix47 CEO: the page says 「已就緒」 only when a chat can start with the tool, and says what is true otherwise", async () => {
   const cases = [[{ state: "verified" }, "已就緒"], [{ state: "policy" }, "管理員設定"], [{ state: "unverified" }, "安全檢查"]];
   for (const [sup, word] of cases) {

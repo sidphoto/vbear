@@ -1476,7 +1476,7 @@ function renderTranslationActivity() {
   const closeKey = T.error ? T.error : job ? job.id : null;
   setKids(box,
     el("span", { role: "status", "aria-live": "polite", "aria-atomic": "true" },
-      T.error ? `翻譯狀態未知：${T.error}` : job ? `${job.automatic ? "自動重翻" : "技能翻譯"} ${status} · ${job.done}/${job.total} · 失敗 ${job.failed}` : ""),
+      T.error ? "暫時讀不到翻譯的進度" : job ? `${job.automatic ? "自動重翻" : "技能翻譯"} ${status} · ${job.done}/${job.total} · 失敗 ${job.failed}` : ""),
     T.waiting ? el("span", { class: "small" }, `${T.waiting} 個等待下次掃描`) : null,
     job && job.error ? el("span", { class: "small", "data-bar": "reason" }, job.error.message) : null,
     active ? el("button", { class: "btn small", type: "button", "aria-disabled": String(job.status === "cancelling"),
@@ -14820,6 +14820,9 @@ async function viewChatDetail(token, id) {
   const noteBox = el("div", { class: "chat-notes" });
   const input = el("textarea", { rows: "3", "data-chat": "input", "aria-label": "要對員工說的話", maxlength: "20000", placeholder: "要對員工說什麼？（Cmd/Ctrl + Enter 送出）",
     on: { keydown: (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } } } });
+  // v0.21.0: words kept under the employee's id (the 「到準備頁」 link, a refused first send) come back to this chat when it has none of its own
+  const ownerId = (all && all.card && typeof all.card.id === "string" && all.card.id) || (all && all.chat && all.chat.profile_id) || "";
+  if (ownerId) { if (ceoDrafts.has(id)) ceoDrafts.delete(ownerId); else ceoMoveDraft(ownerId, id); }   // one set of words per chat, the newest; never pasted twice
   const opening = ceoTakeDraft(id);        // P38-8: the first CEO's opening sentence: put in the box, sent only by the send button
   if (opening) input.value = opening;
   const openingNote = opening ? el("p", { class: "small", "data-ceo": "opening-note" }, CEO_OPENING_NOTE) : null;
