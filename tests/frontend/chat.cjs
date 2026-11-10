@@ -31,7 +31,7 @@ const CID = "c-0123456789abcdef";
 let seqNo = 0;
 const rec = (kind, data = {}) => ({ seq: ++seqNo, at: 1790000000 + seqNo, kind, ...data });
 const card = (over = {}) => ({ card_id: "k-" + "a".repeat(16), token: "t".repeat(32), turn: 1, tool: "Bash", input: { command: "ls -a", description: "list" },
-  editable: "command", reason: "Bash 每次都問", expires_in: 290, ...over });
+  editable: "command", reason: "每個指令都要你允許才會執行", expires_in: 290, ...over });
 const live = (over = {}) => ({ state: "idle", turn: null, partial: "", partial_truncated: false, model: "haiku", cards: [], ...over });
 const support = (over = {}) => ({ detected: "2.1.318", verified: ["2.1.318"], state: "verified", message: "", policy: { ok: true, found: [], problems: [], reason: "" },
   verify: { running: false }, money: "x", ...over });
@@ -192,7 +192,9 @@ test("a permission card shows what is asked and has three honest buttons, and a 
   const edit = { open: false, text: undefined };
   const node = app.chatCardNode(card(), { edit, onAnswer: (c, d, v) => calls.push([c.card_id, d, v]), redraw: () => {} });
   const all = text(node);
-  for (const w of ["員工想執行指令（Bash）", "ls -a", "指令", "約 290 秒後會過期", "視為拒絕", "再檢查一次"]) assert(all.includes(w), w);
+  for (const w of ["員工想執行指令", "ls -a", "指令", "約 290 秒後會過期", "視為拒絕", "再檢查一次"]) assert(all.includes(w), w);
+  assert(!all.replace(text(q(node, "card-tech")), "").includes("Bash"), "(P47-4) the English name is only in 「技術細節」");
+  assert(text(q(node, "card-tech")).includes("Bash"));
   assert(q(node, "allow") && q(node, "deny") && q(node, "modify"));
   assert.strictEqual(text(q(node, "allow")), "允許這一次");
   q(node, "allow").click();
@@ -200,7 +202,7 @@ test("a permission card shows what is asked and has three honest buttons, and a 
   assert.deepStrictEqual(calls, [["k-" + "a".repeat(16), "allow", null], ["k-" + "a".repeat(16), "deny", null]]);
   const fixed = app.chatCardNode(card({ tool: "Write", editable: null, input: { file_path: "/w/a", content: "x" } }), { edit: { open: false }, onAnswer() {} });
   assert.strictEqual(q(fixed, "modify"), null);
-  assert(text(fixed).includes("寫入檔案（Write）") && text(fixed).includes("要寫的內容"));
+  assert(text(fixed).includes("建立或覆蓋檔案") && text(fixed).includes("要寫入的內容"));
   noMarkup(app.chatCardNode(card({ input: { command: EVIL } }), { edit: { open: false }, onAnswer() {} }));
   assert.strictEqual(qa(app.chatCardNode(card(), { edit: { open: false }, busy: true, onAnswer() {} }), "allow")[0].disabled, true);
 });
@@ -260,7 +262,7 @@ test("the list: the lamp and limits, cards that cannot chat say why, and a chat 
     { id: "c-2222222222222222", profile_id: null, created_at: 0, last_at: 0, last_kind: null, last_text: "", turns: 0, spent_usd: "0", open: false, waiting: false, problem: "壞了" }], more: 3 }) });
   const main = await open("#/chat");
   const all = text(main);
-  for (const w of ["跟員工聊天", "每回合最多 US$0.5", "今天已花 US$0.12", "聊天、會議和組隊會議合計", "還有 3 個較舊的聊天", "等你回覆卡片", "無法讀取的聊天", "請看這個"]) assert(all.includes(w), w);
+  for (const w of ["對話紀錄", "每回合最多 US$0.5", "今天已花 US$0.12", "聊天、會議和組隊會議合計", "還有 3 個較舊的對話", "等你回覆卡片", "無法讀取的聊天", "請看這個"]) assert(all.includes(w), w);
   noMarkup(main);
   assert.strictEqual(FETCH_LOG.filter((c) => c.method !== "GET").length, 0, "opening the page sends nothing");
   const sel = q(main, "card");
@@ -286,19 +288,20 @@ test("the list: the lamp and limits, cards that cannot chat say why, and a chat 
   assert.strictEqual(global.location.hash, "#/chat/" + CID);
 });
 
-test("an unverified version, a red lamp or a refusing server keeps the open button shut and says why", async () => {
+test("an unverified version, a red lamp or a refusing server keeps the conversation from starting and says why", async () => {
+  // (P47-4) a card sent here by its own button (#/chat?profile=) gets the one page that says why, with one action; it did a form with a shut button
   setPage({ list: listing({ support: support({ state: "unverified", message: "還沒有通過驗證" }) }) });
   let main = await open("#/chat?profile=emp-1");
-  assert.strictEqual(q(main, "card").value, "emp-1", "the role card's button preselects it");
-  assert.strictEqual(q(main, "open").disabled, true);
-  assert(text(main).includes("通過聊天驗證之前，不能開始聊天"));
+  assert(text(q(main, "prep-reason")).includes("還沒通過聊天驗證"), "says why: " + text(q(main, "prep-reason")));
+  assert.strictEqual(text(q(main, "prep-action")), "先做一次安全檢查", "the action is the check, not a start button");
+  assert(text(main).includes("虛構員工"), "names the card that was chosen");
   setPage({ list: listing({ ledger: { spent_usd: "3", daily_usd: "3", lamp: "red" } }) });
   main = await open("#/chat?profile=emp-1");
-  assert.strictEqual(q(main, "open").disabled, true);
-  assert(text(main).includes("額度用完了") || text(main).includes("亮紅燈"));
-  setPage({ createStatus: 409, createBody: { error: "這張角色卡已停用，啟用之後才能聊天。", code: "card_disabled" } });
+  assert.strictEqual(q(main, "prep-action").disabled, true);
+  assert(text(main).includes("今天的用量到你設的上限了") && main.find((n) => n.getAttribute && n.getAttribute("data-limit") === "reached"));
+  setPage({ createStatus: 409, createBody: { error: "這位員工已停用，啟用之後才能聊天。", code: "card_disabled" } });
   main = await open("#/chat?profile=emp-1");
-  q(main, "open").click();
+  q(main, "prep-action").click();
   await settle();
   assert(text(h.dom().toastEl).includes("已停用"), text(h.dom().toastEl));
   assert.notStrictEqual(global.location.hash, "#/chat/" + CID);
@@ -327,18 +330,17 @@ test("the verify button asks first, then posts once with the version, and the pa
   assert(text(h.dom().mainEl).includes("已通過聊天驗證"));
 });
 
-test("the first visit opens the explainer; 'I know' closes it and is remembered", async () => {
+test("the explainer is behind 「了解更多」, closed even on the first visit, says the same things, and nothing is remembered in the browser", async () => {
+  // (P47-4) it used to open itself the first time and had an 「我知道了」 button that remembered; the page is lighter now: it is only there when asked for
   setPage();
   delete global.localStorage._store["vbear-chat-intro-seen"];
-  let main = await open("#/chat");
+  const main = await open("#/chat");
   const intro = q(main, "intro");
-  assert(intro.hasAttribute("open"));
+  assert(!intro.hasAttribute("open"), "closed on the first visit");
+  assert(!q(main, "more-info").hasAttribute("open"));
   for (const w of ["會花錢", "不會自己動手", "員工的指示", "沒有「以後都允許」", "5 分鐘沒回覆就過期", "沒有在真機上確認"]) assert(text(intro).includes(w), w);
-  q(main, "intro-ok").click();
-  assert(!intro.hasAttribute("open"));
-  assert.strictEqual(global.localStorage.getItem("vbear-chat-intro-seen"), "1");
-  main = await open("#/chat");
-  assert(!q(main, "intro").hasAttribute("open"), "not shown again");
+  assert.strictEqual(q(main, "intro-ok"), null);
+  assert.strictEqual(global.localStorage.getItem("vbear-chat-intro-seen"), null);
 });
 
 // ---- one chat -------------------------------------------------------------------------------------------------------
@@ -354,7 +356,7 @@ test("a chat is drawn from its record in order, with the cost of each turn, and 
   const log = q(main, "log");
   assert.deepStrictEqual(log.children.map((c) => c.getAttribute("data-chat")), ["user", "process", "reply", "cost"]);
   const all = text(main);
-  for (const w of ["虛構員工", "你好，我是虛構員工。", "帶著角色卡自己寫的指示", "這回合花了 US$0.0015（Claude Code 回報的估值）", "員工上線"]) assert(all.includes(w), w);
+  for (const w of ["虛構員工", "你好，我是虛構員工。", "帶著員工自己寫的指示", "這回合花了 US$0.0015（Claude Code 回報的估值）", "員工上線"]) assert(all.includes(w), w);
   assert.strictEqual(FETCH_LOG.filter((c) => c.method !== "GET").length, 0);
   assert.strictEqual(q(main, "send").disabled, false);
   assert.strictEqual(q(main, "stop").hidden, true);
@@ -373,7 +375,6 @@ test("sending posts the text once, clears the box, and shows the server's own se
     restarting: "員工的程序正在換新的，你的訊息還沒有送出，請幾秒後再按一次送出。",
     spend_unknown: "VBear 無法確認今天已經花了多少，現在不送出。",
     damaged: "這個聊天的紀錄有問題，VBear 不會再動它。",
-    red: "今天的額度已用完（亮紅燈）。",
     busy: "員工還在處理上一則訊息。",
   };
   for (const [code, sentence] of Object.entries(sentences)) {
@@ -385,6 +386,15 @@ test("sending posts the text once, clears the box, and shows the server's own se
     assert(text(q(h.dom().mainEl, "send-note")).includes(sentence), code + " stays on the page");
     assert.strictEqual(box.value, "再說一次 " + code, "the text is kept so it can be sent again");
   }
+  // (P47-4) the day's limit is not a toast and a grey line any more: it is said in plain words with a way to the settings (the server's sentence
+  // is whole behind 「技術細節」); the words stay in the box here too
+  page.sendStatus = 409; page.sendBody = { error: "今天的額度已用完（亮紅燈），今天不能再送訊息，本機日期隔天才會重算。", code: "red" };
+  box.value = "再說一次 red";
+  q(h.dom().mainEl, "send").click();
+  await settle();
+  const limit = h.dom().mainEl.find((n) => n.getAttribute && n.getAttribute("data-limit") === "reached");
+  assert(limit && text(limit).includes("今天的用量到你設的上限了") && text(limit).includes("今天的額度已用完（亮紅燈），今天不能再送訊息，本機日期隔天才會重算。"));
+  assert.strictEqual(box.value, "再說一次 red");
 });
 
 test("a blank message is not sent, and one in flight cannot be sent twice", async () => {
@@ -572,7 +582,7 @@ test("Codex: a command card shows the whole command, the folder and what it does
 });
 
 test("Codex: a command card says in plain words that an allowed command may run outside the sandbox; a file card and a Claude card do not", () => {
-  const WARN = "允許後，這個指令可能在沙盒外執行：能改到工作資料夾以外的檔案，也能連網。只允許你看得懂、確定沒問題的指令。";
+  const WARN = "允許後，這個指令可能在保護範圍（沙盒）外執行：能改到工作資料夾以外的檔案，也能連網。只允許你看得懂、確定沒問題的指令。";
   const opts = () => ({ edit: { open: false }, onAnswer() {}, redraw() {} });
   const cmd = app.chatCardNode(codexCommand(), opts());
   const warn = q(cmd, "sandbox-warning");
@@ -585,7 +595,7 @@ test("Codex: a command card says in plain words that an allowed command may run 
   assert(q(editing, "sandbox-warning"), "the warning stays while changing and asking again");
   assert(!q(app.chatCardNode(codexFile(), opts()), "sandbox-warning"), "a file card is not that: VBear refuses outside files itself");
   assert(!q(app.chatCardNode(card(), opts()), "sandbox-warning"), "a Claude card is unchanged");
-  assert(!text(app.chatCardNode(card({ tool: "Write", editable: null, input: { file_path: "/w/a", content: "x" } }), opts())).includes("沙盒外"));
+  assert(!text(app.chatCardNode(card({ tool: "Write", editable: null, input: { file_path: "/w/a", content: "x" } }), opts())).includes("保護範圍（沙盒）外"));
   noMarkup(cmd);
 });
 
@@ -725,12 +735,13 @@ test("Codex: the list tells each chat's AI tool, shows the Codex notice for a Co
   assert.deepStrictEqual(posts("/api/chats").map((c) => c.body), [{ profile_id: "emp-4" }]);
   setPage({ list: listing({ support: support({ codex: codexSupport({ state: "not_logged_in", logged_in: false, why: "聊天用的 Codex 還沒有登入。請到「開始設定」按「讓聊天用的 Codex 登入」。" }) }) }) });
   main = await open("#/chat?profile=emp-4");
-  assert.strictEqual(q(main, "open").disabled, true);
+  // (P47-4) the card's own button leads to the one page: the reason, and one action that is a way to the login, not a start button
+  assert.strictEqual(text(q(main, "prep-action")), "到 AI 工具登入聊天用的 Codex");
   assert(text(main).includes("讓聊天用的 Codex 登入") && q(main, "setup-go"));
   assert(!text(main).includes("這個 Claude Code 版本通過聊天驗證之前"), "the Claude sentence is not shown for a Codex card");
   sel.value = "emp-1";
   main = await open("#/chat?profile=emp-1");
-  assert.strictEqual(q(main, "open").disabled, false, "a Claude card does not wait for Codex");
+  assert.strictEqual(text(q(main, "prep-action")), "開始聊天", "a Claude card does not wait for Codex");
   assert(q(main, "support") && !q(main, "codex-support"));
 });
 
@@ -779,16 +790,16 @@ test("Codex: a chat shows its tool, the one-line plan use, the money rule and th
   const log = q(main, "log");
   assert.deepStrictEqual(log.children.map((c) => c.getAttribute("data-chat")), ["user", "process", "reply", "cost"], "the Codex-only records are not lines");
   const all = text(main);
-  for (const w of ["Codex 員工", "工具：Codex", "估計 US$0.02", "不是帳單", "ChatGPT 方案：5 小時內已用 7%、本週已用 27%（Codex 回報）",
+  for (const w of ["Codex 員工", "Codex・每件事先問你・對話會送到 OpenAI", "估計 US$0.02", "不是帳單", "ChatGPT 方案：5 小時內已用 7%、本週已用 27%（Codex 回報）",
     "不擋「讀」", "每個指令都會先問你"]) assert(all.includes(w), w);
   assert.strictEqual(text(q(main, "plan-usage")).includes("已用 6%"), false, "the last report is the one shown");
-  assert(!all.includes("工具：Claude Code"));
+  assert(!all.includes("Claude Code"));
   assert(q(main, "codex-note"));
   assert.strictEqual(FETCH_LOG.filter((c) => c.method !== "GET").length, 0);
   // a Claude chat has none of it
   setPage();
   const other = await open("#/chat/" + CID);
-  assert(!q(other, "codex-note") && !q(other, "plan-usage") && text(other).includes("工具：Claude Code"));
+  assert(!q(other, "codex-note") && !q(other, "plan-usage") && text(q(other, "line")).includes("Claude Code・每件事先問你・對話會送到 Anthropic"));
 });
 
 test("Codex: the plan line follows the live stream, and the limit message names the reset", async () => {

@@ -141,24 +141,25 @@ async function ready(over = {}, v = view()) {
 
 // ---- the button and the dialog -------------------------------------------------------------------------------------------------
 
-test("a one-to-one chat page has the button, a CEO's or an employee's; a chat a group opened has none", async () => {
+test("a one-to-one chat page has the item 「整理要記住的事」 (in the 「⋯」 menu), a CEO's or an employee's; a chat a group opened has none", async () => {
+  const item = (main) => find(main, "data-msuggest", "open");           // (P47-4) the button is an item of the menu; the desk keeps only what came back
   serve();
   let main = await open("#/chat/" + CHAT);
   assert(desk(main), "a desk on an employee's page");
-  assert(button(desk(main), "整理要記住的事"));
+  assert(item(main) && text(item(main)).includes("整理要記住的事") && find(main, "data-chat-menu", "memory") === item(main));
   serve({ detail: ceo() });
   main = await open("#/chat/" + CHAT);
-  assert(button(desk(main), "整理要記住的事"), "and on a CEO's page");
+  assert(item(main) && text(item(main)).includes("整理要記住的事"), "and on a CEO's page");
   serve({ detail: inGroup() });
   main = await open("#/chat/" + CHAT);
   assert.strictEqual(desk(main), null, "none in a group's chat");
-  assert.strictEqual(button(main, "整理要記住的事"), null);
+  assert.strictEqual(item(main), null);
 });
 
-test("the desk says what the button does and that nothing is saved by itself, and pressing it asks nothing of the model", async () => {
+test("the menu item says what it does and that nothing is saved by itself, and pressing it asks nothing of the model", async () => {
   serve();
   const main = await open("#/chat/" + CHAT);
-  const words = text(desk(main));
+  const words = text(find(main, "data-msuggest", "open"));       // (P47-4) the sentence that stood on the desk stands under the item
   for (const w of ["最近的對話", "US$0.10", "Anthropic", "勾選", "存進記憶"]) assert(words.includes(w), w);
   assert.strictEqual(posts("/api/memory/suggest").length, 0);
   await click(find(main, "data-msuggest", "open"));

@@ -104,7 +104,7 @@ test("with no card to chat with, #/ceo shows the step: a name, a plain sentence 
   assert.strictEqual(about.value, INSTRUCTIONS);
   assert.strictEqual(about.tag, "textarea");
   assert(/Claude Code/.test(text(ceo(main, "tool"))) && /已就緒/.test(text(ceo(main, "tool"))));
-  assert(/安全模式/.test(text(ceo(main, "mode"))) && /先問你/.test(text(ceo(main, "mode"))), "safe mode, said in words");
+  assert(/每件事先問我/.test(text(ceo(main, "mode"))) && /先問你/.test(text(ceo(main, "mode"))), "safe mode, said in words");       // (P47-4) the new name of the mode
   const go = ceo(main, "create");
   assert.strictEqual(go.tag, "button");
   assert(/建立/.test(text(go)));
@@ -114,12 +114,14 @@ test("with no card to chat with, #/ceo shows the step: a name, a plain sentence 
   assert.strictEqual(FETCH_LOG.filter((c) => /\/messages$/.test(c.url)).length, 0);
 });
 
-test("the page promises no more than there is: it chats and plans, it does not hand out work yet", async () => {
+test("the page promises no more than there is: it chats and plans, and work is handed out only by the chief of staff's proposal that the person confirms", async () => {
   setPage();
   const main = await open("#/ceo");
   const said = text(main);
   assert(/整理成計畫|整理成一份計畫|整理想法/.test(said));
-  assert(/還沒有/.test(text(ceo(main, "limits"))) && /分派|分給/.test(text(ceo(main, "limits"))), text(ceo(main, "limits")));
+  // (P47-4) it used to say the assignment feature was not there; it is (the chief of staff), and the page says where and that it only proposes
+  assert(/請幕僚長安排/.test(text(ceo(main, "limits"))) && /分配|分給/.test(text(ceo(main, "limits"))) && /提議/.test(text(ceo(main, "limits"))) && /你確認/.test(text(ceo(main, "limits"))), text(ceo(main, "limits")));
+  assert(!/還沒有/.test(text(ceo(main, "limits"))));
   for (const bad of ["終端機", "CLI", "sandbox", "token", "agent", "orchestrator"]) assert(!said.includes(bad), bad);
 });
 
@@ -207,7 +209,7 @@ test("a card made but a chat that cannot open yet (not verified, not logged in�
   assert.deepStrictEqual(posts("/api/config").map((c) => c.body), [{ first_ceo_id: CARD_ID }], "the lobby will still offer it");
   assert.strictEqual(global.location.hash, `#/chat?profile=${CARD_ID}`);
   const t = h.dom().toastEl ? text(h.dom().toastEl) : "";
-  assert(/CEO/.test(t) || t === "", "the toast, if the harness keeps it");
+  assert(/員工/.test(t) || t === "", "the toast, if the harness keeps it");
 });
 
 test("the second press while it is being made does nothing", async () => {

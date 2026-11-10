@@ -58,7 +58,7 @@ async function open(hash) {
 const notes = (main) => byAttr(main, "data-needs-claude", "note");
 
 // every page that works only through Claude Code, and a word that proves the page itself still drew
-const PAGES = [["meetings", "#/meetings", "會議"], ["staffing", "#/staffing", "組隊會議"], ["chat", "#/chat", "跟員工聊天"], ["skills (translation)", "#/skills", "技能庫"]];
+const PAGES = [["meetings", "#/meetings", "會議"], ["staffing", "#/staffing", "組隊會議"], ["chat", "#/chat", "對話紀錄"], ["skills (translation)", "#/skills", "技能庫"]];
 
 const tests = [];
 const test = (name, fn) => tests.push([name, fn]);
@@ -134,7 +134,7 @@ test("chat page: a Codex that has its chat login is a way to chat, so the note a
   const codexChat = (login) => ({ ok: true, tools: [row("claude", "not_installed"), row("codex", "ready", { chat_login: { state: login, problem: "" } })], any_ready: true, setup_done: true });
   setServer(codexChat("logged_in"));
   let main = await open("#/chat");
-  assert(text(main).includes("跟員工聊天"));
+  assert(text(main).includes("對話紀錄"));       // (P47-4) the list page's new name
   assert.strictEqual(notes(main).length, 0, "Codex can chat");
   setServer(codexChat("not_logged_in"));
   main = await open("#/chat");

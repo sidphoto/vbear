@@ -123,21 +123,24 @@ async function click(node) { node.dispatch("click"); await settle(); }
 async function type(node, value) { node.value = value; node.dispatch("input"); await settle(); }
 async function pick(node, value) { node.value = value; node.dispatch("change"); await settle(); }
 const desk = (main) => find(main, "data-chief", "desk");
+const chiefItem = (main) => find(main, "data-chief", "open");        // (P47-4) the button is the item 「請幕僚長安排」 of the 「⋯」 menu
 const card = (main) => find(main, "data-dispatch", "proposal");
 const stepRows = (main) => findAll(card(main), "data-dispatch", "step");
 const costLine = (main) => text(find(card(main), "data-dispatch", "cost"));
 
 // ---- the button and the dialog ------------------------------------------------------------------------------------------
 
-test("only a CEO's chat page has the button 「請幕僚長安排」", async () => {
+test("only a CEO's chat page has the item 「請幕僚長安排」 (in the 「⋯」 menu)", async () => {
   serve();
   let main = await open("#/chat/" + CHAT);
   assert(desk(main), "a desk on the CEO's page");
-  assert(button(desk(main), "請幕僚長安排"));
+  assert(chiefItem(main) && text(chiefItem(main)).includes("請幕僚長安排"));
+  assert.strictEqual(find(main, "data-chat-menu", "chief"), chiefItem(main));
   serve({ detail: employee() });
   main = await open("#/chat/" + CHAT);
   assert.strictEqual(desk(main), null, "none on an employee's page");
-  assert.strictEqual(button(main, "請幕僚長安排"), null);
+  assert.strictEqual(chiefItem(main), null);
+  assert.strictEqual(find(main, "data-chat-menu", "chief"), null);
 });
 
 test("opening the page asks for no preview and starts nothing", async () => {
@@ -147,20 +150,20 @@ test("opening the page asks for no preview and starts nothing", async () => {
   assert.strictEqual(FETCH_LOG.filter((c) => c.method === "POST").length, 0);
 });
 
-test("a Codex CEO: beside the button it says the conversation goes to Claude Code", async () => {
+test("a Codex CEO: under the item it says the conversation goes to Claude Code", async () => {
   serve({ detail: codexCeo() });
   const main = await open("#/chat/" + CHAT);
-  const t = text(desk(main));
+  const t = text(chiefItem(main));
   assert(t.includes("Claude Code") && t.includes("Anthropic") && t.includes("對話"), t);
   serve();
   const claude = await open("#/chat/" + CHAT);
-  assert(!text(desk(claude)).includes("Anthropic"), "a Claude CEO needs no such line beside the button");
+  assert(!text(chiefItem(claude)).includes("Anthropic"), "a Claude CEO needs no such line beside the button");
 });
 
 test("the dialog says what is read, the most it costs and what is left today, before anything is sent", async () => {
   serve();
   const main = await open("#/chat/" + CHAT);
-  await click(button(desk(main), "請幕僚長安排"));
+  await click(chiefItem(main));
   const d = dialog();
   assert(d, "a dialog");
   const t = text(d);
@@ -177,21 +180,21 @@ test("the dialog says what is read, the most it costs and what is left today, be
 test("the cap shown is the preview's (less than US$0.30 when the day has less left)", async () => {
   serve({ preview: preview({ cap_usd: "0.07", day_left_usd: "0.07" }) });
   const main = await open("#/chat/" + CHAT);
-  await click(button(desk(main), "請幕僚長安排"));
+  await click(chiefItem(main));
   assert(text(dialog()).includes("最多花 US$0.07"), text(dialog()));
 });
 
 test("a Codex CEO's dialog carries the server's notice that the conversation goes to Claude Code", async () => {
   serve({ detail: codexCeo(), preview: preview({ ceo_tool: "codex", notice: CODEX_NOTICE }) });
   const main = await open("#/chat/" + CHAT);
-  await click(button(desk(main), "請幕僚長安排"));
+  await click(chiefItem(main));
   assert(text(dialog()).includes(CODEX_NOTICE), text(dialog()));
 });
 
 test("starting sends the preview id and the note (200 characters at most), and nothing else", async () => {
   serve();
   const main = await open("#/chat/" + CHAT);
-  await click(button(desk(main), "請幕僚長安排"));
+  await click(chiefItem(main));
   const note = find(dialog(), "data-chief", "note");
   assert(note && note.tag === "textarea" && attr(note, "maxlength") === "200", "a note box of 200 characters");
   await type(note, "週末要擺攤");
@@ -203,7 +206,7 @@ test("starting sends the preview id and the note (200 characters at most), and n
 test("an empty note is not sent", async () => {
   serve();
   const main = await open("#/chat/" + CHAT);
-  await click(button(desk(main), "請幕僚長安排"));
+  await click(chiefItem(main));
   await click(button(dialog(), "請幕僚長安排"));
   assert.deepStrictEqual(posts("/api/chief").map((c) => c.body), [{ preview_id: "p" + "0".repeat(23) }]);
 });
@@ -211,7 +214,7 @@ test("an empty note is not sent", async () => {
 test("cancelling sends nothing", async () => {
   serve();
   const main = await open("#/chat/" + CHAT);
-  await click(button(desk(main), "請幕僚長安排"));
+  await click(chiefItem(main));
   await click(button(dialog(), "取消"));
   assert.strictEqual(dialog(), null);
   assert.strictEqual(FETCH_LOG.filter((c) => c.method === "POST").length, 0);
@@ -220,7 +223,7 @@ test("cancelling sends nothing", async () => {
 test("no Claude Code: 「幕僚長目前需要 Claude Code」, how to get it, a link to the start-up page, and no way to start", async () => {
   serve({ preview: preview({ ok: false, preview_id: null, blockers: [{ code: "cli_not_found", message: "幕僚長目前需要 Claude Code，請到「開始設定」安裝並登入" }], cli: { version: null, verified: false } }) });
   const main = await open("#/chat/" + CHAT);
-  await click(button(desk(main), "請幕僚長安排"));
+  await click(chiefItem(main));
   const d = dialog();
   assert(text(d).includes("幕僚長目前需要 Claude Code"), text(d));
   assert(text(d).includes("Anthropic") && text(d).includes("開始設定"));
@@ -232,7 +235,7 @@ test("no Claude Code: 「幕僚長目前需要 Claude Code」, how to get it, a 
 test("a Claude Code that has not passed the tool-less check: a check button, said what it costs, then the preview again", async () => {
   serve({ preview: preview({ ok: false, preview_id: null, blockers: [{ code: "boundary_unverified", message: "這個 Claude Code 版本還沒通過無工具安全檢查，請先檢查" }] }) });
   const main = await open("#/chat/" + CHAT);
-  await click(button(desk(main), "請幕僚長安排"));
+  await click(chiefItem(main));
   const verify = find(dialog(), "data-chief", "verify");
   assert(verify, "a check button");
   assert(text(verify).includes("不到 1 美分"), text(verify));
@@ -249,7 +252,7 @@ test("a Claude Code that has not passed the tool-less check: a check button, sai
 test("other blockers are said in the server's words and keep the start button away", async () => {
   serve({ preview: preview({ ok: false, preview_id: null, blockers: [{ code: "no_conversation", message: "你和 CEO 還沒有對話，先跟 CEO 說說想做什麼" }, { code: "budget", message: "額度不夠" }] }) });
   const main = await open("#/chat/" + CHAT);
-  await click(button(desk(main), "請幕僚長安排"));
+  await click(chiefItem(main));
   const t = text(dialog());
   assert(t.includes("你和 CEO 還沒有對話") && t.includes("額度不夠"), t);
   assert.strictEqual(button(dialog(), "請幕僚長安排"), null);
@@ -258,7 +261,7 @@ test("other blockers are said in the server's words and keep the start button aw
 test("a preview the server refuses (not a CEO, the card cannot chat) is said and no dialog opens", async () => {
   serve({ previewFail: "只有 CEO 職位的角色卡的聊天，才能請幕僚長安排" });
   const main = await open("#/chat/" + CHAT);
-  await click(button(desk(main), "請幕僚長安排"));
+  await click(chiefItem(main));
   assert.strictEqual(dialog(), null);
   assert(text(h.dom().toastEl).includes("只有 CEO 職位"), text(h.dom().toastEl));
 });
@@ -868,10 +871,10 @@ test("the home page asks for the dispatches and puts them on the board", async (
 const ORIGIN = { dispatch: DID, step: 2 };
 test("a message VBear sent for a dispatch is said so over it and is not shown as the person's", () => {
   const plain = app.chatLine({ seq: 1, at: 1790000000, kind: "user_message", turn: 1, text: "你好" });
-  assert(text(plain).includes("你・") && !text(plain).includes("VBear 依派工"));
+  assert(text(plain).includes("你・") && !text(plain).includes("VBear 依分配工作"));
   const line = app.chatLine({ seq: 2, at: 1790000000, kind: "user_message", turn: 1, text: "請算成本", origin: ORIGIN });
   const t = text(line);
-  assert(t.includes("VBear 依派工送出的第 2 步") && t.includes("不是你打的"), t);
+  assert(t.includes("VBear 依分配工作送出的第 2 步") && t.includes("不是你打的"), t);
   assert(!t.includes("你・"), "not 「你」: " + t);
   assert(t.includes("請算成本"));
   assert(line.find((n) => n.tag === "a" && attr(n, "href") === "#/dispatch/" + DID), "a link to the dispatch");

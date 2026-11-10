@@ -57,7 +57,7 @@ const detail = (over = {}) => ({ group: { id: GID, name: "市集準備", created
 const A_CHAT = "c-" + "a".repeat(16), B_CHAT = "c-" + "b".repeat(16);
 const KID = "k-" + "a".repeat(16);
 const chatCard = (over = {}) => ({ card_id: KID, token: "t".repeat(32), turn: 1, tool: "Bash", input: { command: "ls -a", description: "list" },
-  editable: "command", reason: "Bash 每次都問", expires_in: 290, ...over });
+  editable: "command", reason: "每個指令都要你允許才會執行", expires_in: 290, ...over });
 const codexCommand = (over = {}) => chatCard({ tool: "command", editable: "command", reason: "Codex 要執行指令",
   input: { command: "/bin/zsh -lc 'ls -a'", cwd: ".", actions: [{ type: "listFiles", command: "ls -a" }] }, ...over });
 const codexFile = (over = {}) => chatCard({ tool: "file_change", editable: "content", reason: "Codex 要改檔案",
@@ -537,7 +537,7 @@ test("a card that waits is drawn under the name of the employee who asks, as the
   const main = await open("#/chat/group/" + GID);
   const c = q(main, "card-box");
   assert(c, "the card is on the page");
-  assert(text(c).includes("會計師想執行指令（Bash）"), text(c));
+  assert(text(c).includes("會計師想執行指令") && !text(c).replace(text(c.find((x) => x.getAttribute && x.getAttribute("data-chat") === "card-tech")), "").includes("Bash"), text(c));   // (P47-4) plain words; the English name is in 「技術細節」
   assert(text(c).includes("ls -a") && text(c).includes("要你決定"));
   assert(c.find((x) => x.getAttribute && x.getAttribute("data-chat") === "live-card"), "it is chatCardNode's card");
   assert.strictEqual(text(c.find((x) => x.getAttribute && x.getAttribute("data-chat") === "allow")), "允許這一次");
@@ -578,13 +578,13 @@ test("a Codex command card in the group has the warning about the sandbox, a Cod
   setPage({ detail: running(A_CHAT), chats: { [A_CHAT]: chatBody(chatLive({ state: "waiting_for_you", cards: [codexCommand()] })) } });
   let main = await open("#/chat/group/" + GID);
   const cmd = q(main, "card-box");
-  assert(text(cmd).includes("可能在沙盒外執行"), "the warning stays");
+  assert(text(cmd).includes("可能在保護範圍（沙盒）外執行"), "the warning stays");
   assert(text(cmd).includes("/bin/zsh -lc 'ls -a'"));
   setPage({ detail: running(A_CHAT), chats: { [A_CHAT]: chatBody(chatLive({ state: "waiting_for_you", cards: [codexFile()] })) } });
   main = await open("#/chat/group/" + GID);
   const file = q(main, "card-box");
   assert(file && text(file).includes("notes.txt"));
-  assert(!text(file).includes("沙盒外"), "a file card has no such warning");
+  assert(!text(file).includes("保護範圍（沙盒）外"), "a file card has no such warning");
   const labels = main.findAll((x) => x.tag === "button").map(text).join("|");
   assert(!/都允許|全部允許|以後都|這一輪都|大家都|一次允許/.test(labels), labels);
 });
