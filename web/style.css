@@ -1976,3 +1976,8 @@ input[type="checkbox"] { width: 18px; height: 18px; flex: none; accent-color: va
 .chat-hint { display: grid; gap: 8px; margin: 10px 0 0; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--panel); }
 .chat-hint p { margin: 0; }
 .chat-hint .row { display: flex; flex-wrap: wrap; gap: 6px 8px; }
+
+/* P48-2 home page frame, progress line and the mark's letters */
+.home-loading { margin: 6px 0 0; }
+[data-home="loading-note"] { margin-top: 18px; }
+.brand-mark[data-brand="text"] { font-weight: 700; font-size: 15px; letter-spacing: 0; color: var(--ink); }

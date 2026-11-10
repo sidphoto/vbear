@@ -2309,57 +2309,203 @@ function sectionHead(title, sub, action) {
 // routines page's own requests). The parts of the old lobby (the board, task cards, skill search, recent projects) are under 「進階」 and only in
 // the advanced mode, which decides nothing but what is shown.
 let homeTick = null;     // the refresh of the home page every 5 seconds (route() runs it); null on any other page
+// The words the progress line uses for the blocks that are still being read (the page names nothing else: it does not know more than which block waits).
+const HOME_LOADING_TEXT = "載入中…";
+const HOME_BLOCK_WORDS = { waiting: "等你決定的事", team: "你的員工", today: "今天的定時工作", first: "你的 AI 工具", advanced: "進階的區塊" };
+const HOME_SLOW_MS = 3000;          // a block still being read after this long: the progress line says which ones
+const HOME_GIVE_UP_MS = 60000;      // a block still not read after this long says it could not read it (the answer is drawn if it comes later)
+const HOME_SLOW_NOTE = "第一次打開 VBear 要先叫醒背景程式，通常不到半分鐘。";
+// A timer that looks at the clock: one that fires early (a stubbed timer) does nothing, and one that fires late (a background tab) still counts.
+function homeLater(ms, fn) {
+  const t0 = Date.now();
+  setTimeout(() => { if (Date.now() - t0 >= ms) fn(); }, ms);
+}
+function homeLoadingLine(key, words) { return el("p", { class: "small muted home-loading", "data-home-loading": key }, words || HOME_LOADING_TEXT); }
+// The frame of a block whose data is not in yet: its title (so the page does not jump) and one line, never a result.
+function homeBlockLoading(key, title) {
+  return el("section", { class: "section home-block", "data-home": key }, sectionHead(title, null), homeLoadingLine(key));
+}
+
+// The page draws its frame as soon as the config is in (it decides whether the person is sent to the start-up page), then asks for everything at
+// once; each block draws itself when its own requests are back. Nothing is drawn as a result before its data is in: a block that is still being read
+// says 載入中, never "nothing waits" or a zero; after 3 seconds a line names the blocks still being read; a block whose request is not back after
+// 60 seconds says it could not read (and is drawn again if the answer comes later). The promise settles when every block is drawn.
 async function viewHome() {
   const token = seq;
-  // /api/flows reads live state from the cache /api/live fills, so live goes first.
-  const [, , tasksRes, profilesRes, catalogRes, configRes, chatsRes, routinesRes, waitingRes, ledgerRes] = await Promise.all([loadStatic(), loadLive().then(() => loadFlows()),
-    api.get("/api/tasks").catch(() => null), api.get("/api/agent-profiles").catch(() => null),
-    api.get("/api/agent-builder/catalog").catch(() => null), api.get("/api/config").catch(() => null),
-    api.get("/api/chats").catch(() => null), api.get("/api/routines").catch(() => null), api.get("/api/waiting").catch(() => null),
-    api.get("/api/meetings/ledger").catch(() => null), loadMeetings(), loadStaffingList(), loadDispatchList(), loadGroupList()]);
-  const setup = setupGateWanted(configRes) ? await setupGate(configRes) : setupGateQuiet(configRes);
-  if (token !== seq) return;
-  if (setup.redirect) { location.hash = welcomeWanted(configRes) ? "#/welcome" : "#/setup"; return; }
+  const configRes = await api.get("/api/config").catch(() => null);
+  if (token !== seq || authLostShown) return;           // the page that says to open VBear from its own window is up: nothing is drawn over it
   const conf = configRes && configRes.config && typeof configRes.config === "object" ? configRes.config : null;
   const advanced = conf && typeof conf.advanced_mode === "boolean" ? conf.advanced_mode : navAdvanced;   // a display only: which blocks are drawn
-  const profiles = profilesRes && Array.isArray(profilesRes.profiles) ? profilesRes.profiles.filter((p) => p && typeof p === "object" && typeof p.id === "string") : null;
-  const toolsRes = profiles && !profiles.length ? await api.get("/api/setup/tools").catch(() => null) : null;
-  if (token !== seq) return;
-  noteTasks(tasksRes && tasksRes.tasks);
   const state = {
-    token, profiles, conf, catalog: catalogRes && catalogRes.ok ? catalogRes : null, chats: chatsRes, routines: routinesRes,
-    lamp: ledgerRes && typeof ledgerRes.lamp === "string" ? ledgerRes.lamp : "", waitingList: waitingRes && Array.isArray(waitingRes.waiting) ? waitingRes.waiting : null,
-    shown: "", now: () => new Date(),
+    token, profiles: null, conf, catalog: null, chats: null, routines: null, tools: null,
+    lamp: "", waitingList: null, shown: "", now: () => new Date(),
   };
-  const board = boardGroups(D.live, D.flows, D.meetings, D.staffing, D.dispatch, D.groups);
-  boardShownKey = boardKey(board, boardKeyContext());
-  const waiting = homeWaiting(state, board);
-  const advancedPart = advanced ? homeAdvanced({ tasksRes, profilesRes, catalogRes, configRes, board }) : null;
+  const back = new Set();            // the requests that are back (a failed one is back, with nothing)
+  const gaveUp = new Set();          // the blocks that waited 60 seconds
+  const painted = {};                // what each place shows now: it is drawn again only when this changes
+  let slow = false;                  // 3 seconds have passed
+  let setup = { redirect: false, notice: false };
+  let advancedPart = null;
+  let staticError = null;            // the index of skills could not be read (a failed read says so; it does not blank the page)
+  let bodyKind = "";
+  let finish;
+  const finished = new Promise((r) => { finish = r; });
+
+  // ---- the frame ----
+  const noticesHost = el("div", { "data-home": "notices" });
+  const noteHost = el("div", { "data-home": "note-host" });
+  const bodyHost = el("div", { "data-home": "body" });
+  const teamHost = el("div"), todayHost = el("div"), askHost = el("div"), firstHost = el("div"), advancedHost = el("div");
+  const waiting = homeWaiting(state);
   const main = claim(token);
-  let body;
-  if (profiles === null) {
-    body = [el("section", { class: "section", "data-home": "team" }, sectionHead(WORDS.employeeList.use, null),
-      notice("warn", "讀不到員工的資料，所以先不顯示。重新整理看看；還是不行，請到「設定」看一下 VBear 的狀態。")), homeToday(state)];
-  } else if (!profiles.length) body = [homeFirstSteps(toolsRes, chatsRes)];
-  else body = [homeTeam(state), homeToday(state), homeAsk(state)];
-  setKids(main,
-    el("h1", null, WORDS.home.use),
-    el("p", { class: "lede" }, "這裡看有什麼等你決定、你的員工，和今天要做的事。"),
-    corruptNotice(),
-    staleNotice(),
-    herdrMigrationNotice(),
-    setup.notice ? setupUpgradeNotice() : null,
-    runtimeNotice(),
-    waiting.node,
-    body,
-    advancedPart ? advancedPart.node : null);
-  homeTick = async () => {
+  const head = [el("h1", null, WORDS.home.use), el("p", { class: "lede" }, "這裡看有什麼等你決定、你的員工，和今天要做的事。")];
+  const drawFrame = () => setKids(main, ...head, noticesHost, waiting.node, bodyHost, noteHost, advancedHost);
+  // A person who has not finished the start-up may be sent there: until the server has settled that, only the title and the line saying what is being waited for are
+  // drawn (the blocks of the home page are not shown to someone who is about to be sent away).
+  const gating = setupGateWanted(configRes);
+  if (gating) setKids(main, head[0], homeLoadingLine("setup", "正在確認開始設定…")); else drawFrame();
+
+  // what each block needs before it can say anything; a block that waited 60 seconds is read with what there is
+  const NEED = {
+    notices: ["static", "live"],
+    waiting: ["live", "meetings", "staffing", "dispatch", "groups", "waiting", "ledger", "chats"],
+    team: ["profiles"],
+    today: ["routines", "chats", "profiles"],
+    ask: ["profiles", "chats"],
+    first: ["profiles", "tools", "chats"],
+    advanced: ["static", "tasks", "profiles", "catalog", "live", "meetings", "staffing", "dispatch", "groups"],
+  };
+  const ready = (name) => gaveUp.has(name) || NEED[name].every((k) => back.has(k));
+  const paint = (name, key, draw) => { if (painted[name] === key) return; painted[name] = key; draw(); };
+
+  const drawNotices = () => {
+    const o = D.overview, h = D.live && D.live.runtime;
+    paint("notices", JSON.stringify([o ? [o.stale, o.generated_at, o.config_corrupt, o.herdr_migration_notice] : null, h ? [h.available, h.problems] : null, setup.notice, staticError && staticError.message]), () => {
+      setKids(noticesHost, staticError ? notice("bad", "載入失敗：" + staticError.message) : null, corruptNotice(), staleNotice(), herdrMigrationNotice(),
+        setup.notice ? setupUpgradeNotice() : null, runtimeNotice());
+    });
+  };
+  const drawWaiting = () => {
+    if (!ready("waiting")) return;
+    const m = waitingFold({ g: boardGroups(D.live, D.flows, D.meetings, D.staffing, D.dispatch, D.groups), list: state.waitingList, lamp: state.lamp, chats: state.chats });
+    if (waiting.paint(m)) waitingPublish(m);         // drawn again only when it changed, and then the number is worked out again
+  };
+  const drawBody = () => {
+    const known = ready("team");
+    const kind = !known ? "loading" : state.profiles === null ? "unread" : state.profiles.length ? "team" : "first";
+    if (kind !== bodyKind) {
+      bodyKind = kind;
+      for (const k of ["team", "today", "ask", "first"]) delete painted[k];
+      setKids(bodyHost, kind === "first" ? [firstHost] : kind === "team" ? [teamHost, todayHost, askHost] : [teamHost, todayHost]);
+      if (kind === "first" && !back.has("tools")) {        // the three steps need the tools: asked only now, when there is nobody yet
+        api.get("/api/setup/tools").catch(() => null).then((r) => land("tools", () => { state.tools = r; }));
+      }
+    }
+    if (kind === "first") {
+      const loading = !ready("first");
+      paint("first", String(loading) + String(back.has("tools")) + String(back.has("chats")), () => setKids(firstHost, homeFirstSteps(state.tools, state.chats, loading)));
+      return;
+    }
+    if (kind === "loading") {
+      paint("team", "loading", () => setKids(teamHost, homeBlockLoading("team", WORDS.employeeList.use)));
+    } else if (kind === "unread") {
+      paint("team", "unread", () => setKids(teamHost, el("section", { class: "section", "data-home": "team" }, sectionHead(WORDS.employeeList.use, null),
+        notice("warn", "讀不到員工的資料，所以先不顯示。重新整理看看；還是不行，請到「設定」看一下 VBear 的狀態。"))));
+    } else {
+      paint("team", "team" + back.has("chats"), () => setKids(teamHost, homeTeam(state)));
+    }
+    paint("today", ready("today") ? "in" : "loading", () => setKids(todayHost, ready("today") ? homeToday(state) : homeBlockLoading("today", "今天")));
+    if (kind === "team") paint("ask", ready("ask") ? "in" : "loading", () => setKids(askHost, ready("ask") ? homeAsk(state) : homeBlockLoading("ask", "想做什麼？跟 CEO 說")));
+  };
+  const drawAdvanced = () => {
+    if (!advanced) return;
+    if (!ready("advanced")) { paint("advanced", "loading", () => setKids(advancedHost, el("section", { class: "section home-advanced", "data-home": "advanced" }, el("h2", null, "進階"), homeLoadingLine("advanced")))); return; }
+    paint("advanced", "in" + NEED.advanced.filter((k) => back.has(k)).join(), () => {
+      const board = boardGroups(D.live, D.flows, D.meetings, D.staffing, D.dispatch, D.groups);
+      boardShownKey = boardKey(board, boardKeyContext());
+      advancedPart = homeAdvanced({ tasksRes: state.tasksRes, profilesRes: state.profilesRes, catalogRes: state.catalogRes, configRes, board });
+      setKids(advancedHost, advancedPart.node);
+    });
+  };
+  // the blocks that are still being read, by their words
+  const pendingBlocks = () => {
+    const out = [];
+    if (!ready("waiting")) out.push("waiting");
+    if (bodyKind === "loading") out.push("team", "today");
+    else if (bodyKind === "first") { if (!ready("first")) out.push("first"); }
+    else if (!ready("today")) out.push("today");
+    if (advanced && !ready("advanced")) out.push("advanced");
+    return out;
+  };
+  const drawNote = () => {
+    const names = slow ? pendingBlocks().map((k) => HOME_BLOCK_WORDS[k]) : [];
+    paint("note", names.join(), () => setKids(noteHost, names.length ? el("p", { class: "small muted", "data-home": "loading-note" }, `還在讀：${names.join("、")}。${HOME_SLOW_NOTE}`) : null));
+  };
+  const update = () => {
+    if (token !== seq || authLostShown) return;
+    drawNotices(); drawWaiting(); drawBody(); drawAdvanced(); drawNote();
+    if (ready("notices") && ready("waiting") && ready("team") && (bodyKind === "first" ? ready("first") : ready("today") && ready("ask")) && (!advanced || ready("advanced"))) finish();
+  };
+  function land(key, assign) {
+    if (token !== seq || authLostShown) { finish(); return; }
+    assign();
+    back.add(key);
+    update();
+  }
+  const fetchInto = (key, path, assign) => api.get(path).catch(() => null).then((r) => land(key, () => assign(r)));
+
+  // ---- the start-up gate: only a person who has not finished the start-up is asked (the server settles it) ----
+  homeLater(HOME_SLOW_MS, () => { if (token === seq) { slow = true; update(); } });
+  setup = gating ? await setupGate(configRes) : setupGateQuiet(configRes);
+  if (token !== seq) return;
+  if (setup.redirect) { location.hash = welcomeWanted(configRes) ? "#/welcome" : "#/setup"; return; }
+  if (gating) drawFrame();
+  update();
+  homeLater(HOME_GIVE_UP_MS, () => {
     if (token !== seq) return;
-    await state.refreshWaiting();
-    if (advancedPart) await advancedPart.refresh();
+    for (const k of Object.keys(NEED)) if (!ready(k)) gaveUp.add(k);
+    update();
+  });
+
+  state.refreshWaiting = async (force) => {       // `force`: the person's own press (a row's button) asks for the chats again at once
+    if (state.token !== seq) return;
+    const m = await waitingModel({ store: true, force: !!force });
+    if (state.token !== seq) return;
+    state.waitingList = m.list; state.lamp = m.lamp; state.chats = m.chats || state.chats;
+    waiting.paint(m);
+  };
+
+  // ---- everything at once; each block draws itself when its own requests are back ----
+  loadStatic().catch((e) => { staticError = e; }).then(() => land("static", () => {}));
+  // /api/flows reads live state from the cache /api/live fills, so live goes first.
+  loadLive().then(() => loadFlows()).then(() => land("live", () => {}));
+  loadMeetings().then(() => land("meetings", () => {}));
+  loadStaffingList().then(() => land("staffing", () => {}));
+  loadDispatchList().then(() => land("dispatch", () => {}));
+  loadGroupList().then(() => land("groups", () => {}));
+  fetchInto("tasks", "/api/tasks", (r) => { state.tasksRes = r; noteTasks(r && r.tasks); });
+  fetchInto("profiles", "/api/agent-profiles", (r) => {
+    state.profilesRes = r;
+    state.profiles = r && Array.isArray(r.profiles) ? r.profiles.filter((p) => p && typeof p === "object" && typeof p.id === "string") : null;
+  });
+  fetchInto("catalog", "/api/agent-builder/catalog", (r) => { state.catalogRes = r; state.catalog = r && r.ok ? r : null; });
+  fetchInto("chats", "/api/chats", (r) => { state.chats = r; waitingChatsNote(r); });
+  fetchInto("routines", "/api/routines", (r) => { state.routines = r; });
+  fetchInto("waiting", "/api/waiting", (r) => { state.waitingList = r && Array.isArray(r.waiting) ? r.waiting : null; });
+  fetchInto("ledger", "/api/meetings/ledger", (r) => { state.lamp = r && typeof r.lamp === "string" ? r.lamp : ""; });
+
+  let ticking = false;
+  homeTick = async () => {
+    if (token !== seq || ticking || !ready("waiting")) return;     // the first read is still on: it is the one that draws
+    ticking = true;
+    try {
+      await state.refreshWaiting();
+      if (advancedPart) await advancedPart.refresh();
+    } finally { ticking = false; }
   };
   activeViewCleanup = () => { homeTick = null; };
   // no auto-focus on the boxes: it would scroll the page past what waits for the person
+  await finished;
 }
 
 // The old lobby, kept whole for the advanced mode: the first game, the board of flows, task cards, the skill search, recent projects, skills with problems.
@@ -2539,7 +2685,7 @@ async function openChatWith(profileId, opts = {}) {
 // The rows of what waits for the person, from what the old lobby's 「輪到你」 and the line over every page listed (the same in the normal and
 // in the advanced mode). `g`: boardGroups(...); `list`: GET /api/waiting's rows (null = not read); `lamp`: today's lamp ("red" = at the limit).
 // -> { rows: [{ kind, key, text, href?, act? }], notes: [what could not be read], complete }. A paused dispatch or group that has its countdown row is not said twice.
-function homeWaitingRows(g, list, lamp) {
+function homeWaitingRows(g, list, lamp, chats) {
   const rows = [];
   const notes = [];
   const resumeDispatch = new Set();
@@ -2582,8 +2728,22 @@ function homeWaitingRows(g, list, lamp) {
     if (r.waiting === true) rows.push({ kind: "group_waiting", key: "gw:" + r.id, text: `群組「${r.name || "（沒有名稱）"}」有員工想動手，等你按「允許這一次」或「拒絕」`, href: `#/chat/group/${encodeURIComponent(r.id)}` });
     else if (!resumeGroup.has(r.id)) rows.push({ kind: "group_paused", key: "gq:" + r.id, text: `群組「${r.name || "（沒有名稱）"}」暫停了，等你按「繼續」或「不用了」`, href: `#/chat/group/${encodeURIComponent(r.id)}` });
   }
+  // P48-2: the cards of every chat (a chat with one employee, also one a routine opened): `chats` is GET /api/chats' body, null = not read, undefined = not asked
+  if (chats === null) notes.push("讀不到聊天裡有沒有在等你的卡片");
+  else if (chats && typeof chats === "object") {
+    const cards = Array.isArray(chats.cards) ? chats.cards : [];
+    for (const c of Array.isArray(chats.chats) ? chats.chats : []) {
+      if (!c || typeof c !== "object" || c.waiting !== true || typeof c.id !== "string" || !c.id) continue;
+      const card = cards.find((x) => x && x.id === c.profile_id);
+      const who = card && typeof card.name === "string" && card.name ? card.name : "有員工";
+      rows.push({ kind: "chat_card", key: "cc:" + c.id, text: `${who}想動手，等你按「允許這一次」或「拒絕」`, href: `#/chat/${encodeURIComponent(c.id)}` });
+    }
+  }
   if (lamp === "red") rows.push({ kind: "limit", key: "limit", text: "今天的用量到上限了，員工明天 0 點前不會再回話。", href: LIMIT_SETTINGS_HREF, link: "到設定看" });
-  return { rows, notes, complete: !notes.length && g.runtimeAvailable === true };
+  const complete = !notes.length && g.runtimeAvailable === true;
+  // only the oldest chats are out of sight when the list is cut: said, but the number stays (a chat with a card that waits is a recent one)
+  if (chats && typeof chats === "object" && Number(chats.more) > 0) notes.push("對話很多，只看了最近的；比較舊的對話裡有沒有在等你的卡片，這裡看不到。");
+  return { rows, notes, complete };
 }
 
 const HOME_ROW_BUTTONS = {
@@ -2600,9 +2760,10 @@ function homeRowNode(row, act) {
   if (row.kind === "limit") node.setAttribute("data-home", "limit-reached");
   return node;
 }
-// The block. `state.refreshWaiting()` reads again (the same GETs as the page) and repaints the list only when it changed.
-function homeWaiting(state, board) {
-  const list = el("div", { class: "home-rows", "data-home": "waiting-list" });
+// The block: it starts as a frame that says 載入中 and is drawn by `paint(model)` (the model of waitingFold) once its data is in. `paint` returns
+// whether something changed. `state.refreshWaiting()` (set by the page) reads again, with the same GETs as the page.
+function homeWaiting(state) {
+  const list = el("div", { class: "home-rows", "data-home": "waiting-list" }, homeLoadingLine("waiting"));
   const note = (m) => notice("warn", m);
   const requests = {
     "wait-start": (id) => api.post(`/api/routines/waiting/${encodeURIComponent(id)}`, { action: "start" }),
@@ -2613,30 +2774,20 @@ function homeWaiting(state, board) {
   const done = { "wait-start": "已開始", "wait-skip": "這次跳過了", "missed-run": "已開始補做", "missed-dismiss": "不補做了" };
   const act = async (key, id) => {
     try { await requests[key](id); toast(done[key]); } catch (e) { toast(e.message); }
-    await state.refreshWaiting();
+    await state.refreshWaiting(true);
     refreshWaitingBar();
   };
-  const paint = (g) => {
-    const m = homeWaitingRows(g, state.waitingList, state.lamp);
+  const paint = (m) => {
     const key = JSON.stringify([m.rows, m.notes, m.complete]);
-    if (key === state.shown) return;
+    if (key === state.shown) return false;
     state.shown = key;
     setKids(list,
       m.notes.map(note),
       m.rows.length ? el("div", { class: "home-row-list" }, m.rows.map((r) => homeRowNode(r, act)))
         : el("p", { class: "small muted", "data-home": "waiting-none" }, m.complete ? "現在沒有要你決定的事。" : "目前讀得到的資料裡，沒有要你決定的事。"));
+    return true;
   };
-  paint(board);
-  state.refreshWaiting = async () => {
-    if (state.token !== seq) return;
-    await Promise.all([loadLive().then(() => loadFlows()), loadMeetings(), loadStaffingList(), loadDispatchList(), loadGroupList()]);
-    const [w, l] = await Promise.all([api.get("/api/waiting").catch(() => null), api.get("/api/meetings/ledger").catch(() => null)]);
-    if (state.token !== seq) return;
-    state.waitingList = w && Array.isArray(w.waiting) ? w.waiting : null;
-    state.lamp = l && typeof l.lamp === "string" ? l.lamp : "";
-    paint(boardGroups(D.live, D.flows, D.meetings, D.staffing, D.dispatch, D.groups));
-  };
-  return { node: el("section", { class: "section home-block", "data-home": "waiting" }, sectionHead(WORDS.waiting.use, null), list) };
+  return { node: el("section", { class: "section home-block", "data-home": "waiting" }, sectionHead(WORDS.waiting.use, null), list), paint };
 }
 
 // ---- 我的員工 ----
@@ -2783,13 +2934,15 @@ function homeToolStep(toolReady, rows, glance) {
   if (glance.some((g) => g.state === "unverified")) return { done: false, line: "AI 工具已就緒，第一次聊天前要先做一次安全檢查（建立 CEO 後會帶你做）。" };
   return { done: false, line: toolReady ? "AI 工具已就緒，但聊天現在還不能用，到「看 AI 工具」看原因。" : unread };
 }
-function homeFirstSteps(toolsRes, chatsRes) {
+function homeFirstSteps(toolsRes, chatsRes, loading) {
   const rows = toolsRes && typeof toolsRes === "object" && Array.isArray(toolsRes.tools) ? toolsRes.tools : null;
   const ready = !!rows && rows.some((t) => t && ["claude", "codex", "agy"].includes(t.id) && t.ready === true);
-  const toolStep = homeToolStep(ready, rows, chatSupportGlance(chatsRes));
+  // while the tools and the chat support are still being read, step 1 says so: it draws no conclusion before the answer
+  const toolStep = loading ? { done: false, line: null } : homeToolStep(ready, rows, chatSupportGlance(chatsRes));
   const step = (n, cls, title, line, action) => el("li", { class: `home-step ${cls}`, "data-home-step": String(n) },
     el("span", { class: "home-step-mark", "aria-hidden": "true" }, cls.includes("done") ? "✓" : String(n)),
-    el("div", { class: "home-step-body" }, el("strong", null, title), el("span", { class: "small muted" }, line)), action || null);
+    el("div", { class: "home-step-body" }, el("strong", null, title),
+      line === null ? el("span", { class: "small muted", "data-home-loading": "first-steps" }, "正在看你的 AI 工具…") : el("span", { class: "small muted" }, line)), action || null);
   return el("section", { class: "section home-block", "data-home": "first-steps" },
     el("h2", null, "歡迎！三步就能開始。"),
     el("ol", { class: "home-steps" },
@@ -2881,6 +3034,84 @@ async function viewWork() {
       el("li", { class: "work-link" }, el("a", { href: `#/${route}`, class: "work-link-name", "data-work": route }, name), el("span", { class: "small muted" }, line)))));
 }
 // ---------- end of plain pages ----------------------------------------------------------------------------------------------
+
+// ---------- waiting model (v0.22, P48-2) ----------------------------------------------------------------------------------------
+// What waits for the person, worked out once for every place that shows it: the home page's list, the line over the other pages, the title of the
+// page (and of the app's window and Dock). It is made only from GETs. The title is a number and nothing else: `VBear`, or `(N) VBear` when N things wait
+// and everything was read; no name, no words of a chat. The app is handed the same number (and a `notify` flag, see waitingNotifyWanted).
+
+// A listener is called with { count, complete } each time the number is worked out: `count` is the number of rows, `complete` says every read worked
+// (the title and the Dock show no number when it is false). P48-4 registers its own through onWaitingCount.
+let waitingListeners = [];
+function onWaitingCount(fn) { if (typeof fn === "function") waitingListeners.push(fn); }
+// Whether the app may show a Mac notification: the person's own switch decides it (P48-4); until then it is false, so the app only gets the number.
+function waitingNotifyWanted() { return false; }
+
+function waitingTitleText(count) { return count > 0 ? `(${Math.min(count, 999)}) VBear` : "VBear"; }
+
+let waitingSentToApp = null;
+function waitingToApp(count) {
+  if (count === waitingSentToApp) return;
+  const bridge = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.vbearWaiting;
+  if (!bridge || typeof bridge.postMessage !== "function") return;
+  waitingSentToApp = count;
+  const notify = waitingNotifyWanted();
+  try { window.webkit.messageHandlers.vbearWaiting.postMessage({ count: count, notify: notify }); } catch (_) { /* the app is not listening: the title still has the number */ }
+}
+// The number goes to the title and the app, and to the listeners. A read that was not whole shows no number: it is not guessed.
+let waitingLast = null;            // { m, at }: the last model that was worked out
+const WAITING_REUSE_MS = 30000;
+// GET /api/chats makes the server run the AI tools' --version (about 2 seconds, no cache of its own), so it is read at most every 30 seconds by the
+// waiting model (the page's other reads stay at their own pace); a read the person's own press asks for (`force`) and the home page's first read go at once.
+let waitingChatsRead = null;       // { at, body }: the last whole answer
+function waitingChatsNote(body) { if (body && typeof body === "object") waitingChatsRead = { at: Date.now(), body }; }
+function waitingPublish(m) {
+  waitingLast = { m, at: Date.now() };
+  const count = m.complete ? Math.min(m.rows.length, 999) : 0;
+  document.title = waitingTitleText(count);
+  waitingToApp(count);
+  for (const fn of waitingListeners.slice()) {
+    try { fn({ count: m.rows.length, complete: m.complete }); } catch (_) { /* one listener does not stop the others */ }
+  }
+}
+
+// -> { rows, notes, complete, count, list, lamp, chats }. `inputs`: g = boardGroups(...), list = GET /api/waiting's rows (null = not read), lamp, chats = GET /api/chats' body (null = not read).
+function waitingFold(inputs) {
+  const m = homeWaitingRows(inputs.g, inputs.list, inputs.lamp, inputs.chats);
+  return { rows: m.rows, notes: m.notes, complete: m.complete, count: m.rows.length, list: inputs.list, lamp: inputs.lamp, chats: inputs.chats };
+}
+// The reads. `store`: the home page keeps what it reads in D (its board reads it again), any other page reads without touching D (other pages compare D before and after).
+function waitingSources(store) {
+  const keep = (key, v) => { if (store) D[key] = v; return v; };
+  const own = (key, path, failed) => () => api.get(path).catch((e) => failed(e.message)).then((v) => keep(key, v));
+  return {
+    live: store ? loadLive : own("live", "/api/live", (m) => ({ error: m, sessions: [], projects: [], attention: [], usage: { sessions: [] }, runtime: { available: false, problems: [m] } })),
+    flows: store ? loadFlows : own("flows", "/api/flows", (m) => ({ error: m, flows: [] })),
+    meetings: store ? loadMeetings : own("meetings", "/api/meetings", (m) => ({ error: m, meetings: [] })),
+    staffing: store ? loadStaffingList : own("staffing", "/api/staffing", (m) => ({ error: m, staffing: [] })),
+    dispatch: store ? loadDispatchList : own("dispatch", "/api/dispatch", (m) => ({ error: m, dispatch: [] })),
+    groups: store ? loadGroupList : own("groups", "/api/groups", (m) => ({ error: m, groups: [] })),
+    list: () => api.get("/api/waiting").then((w) => (w && Array.isArray(w.waiting) ? w.waiting : null)).catch(() => null),
+    ledger: () => api.get("/api/meetings/ledger").catch(() => null),
+    chats: (force) => {
+      if (!force && waitingChatsRead && Date.now() - waitingChatsRead.at < WAITING_REUSE_MS) return Promise.resolve(waitingChatsRead.body);
+      return api.get("/api/chats").catch(() => null).then((b) => { waitingChatsNote(b); return b; });
+    },
+  };
+}
+// Reads everything that can wait (GETs only), works the rows out, publishes the number. -> the model of waitingFold. `opts.force`: read /api/chats now.
+async function waitingModel(opts = {}) {
+  const src = waitingSources(!!opts.store);
+  // /api/flows reads live state from the cache /api/live fills, so live goes first
+  const liveAndFlows = src.live().then(async (live) => [live, await src.flows()]);
+  const [[live, flows], meetings, staffing, dispatch, groups, list, ledger, chats] =
+    await Promise.all([liveAndFlows, src.meetings(), src.staffing(), src.dispatch(), src.groups(), src.list(), src.ledger(), src.chats(!!opts.force)]);
+  const lamp = ledger && typeof ledger.lamp === "string" ? ledger.lamp : "";
+  const m = waitingFold({ g: boardGroups(live, flows, meetings, staffing, dispatch, groups), list, lamp, chats });
+  waitingPublish(m);
+  return m;
+}
+// ---------- end of waiting model --------------------------------------------------------------------------------------------------
 
 // ---------- the quest board (design lobby v1.2) ------------------------------------------------------------
 // The home page's first block. Every card is data VBear already has; nothing here invents progress. The grouping
@@ -13039,20 +13270,37 @@ function waitingBarText(rows) {
   const time = typeof first.slot === "string" ? first.slot.slice(11, 16) : "";
   return `等你決定：定時工作「${first.name}」${time}到時間了` + (list.length > 1 ? `，另外還有 ${list.length - 1} 件` : "") + (lost ? `；${lost}` : "");
 }
-async function refreshWaitingBar() {
+async function refreshWaitingBar(reuse) {
   const bar = document.getElementById("waiting-bar");
   if (!bar) return;
   if (navTop === "home") { bar.hidden = true; setKids(bar); return; }   // P47-2: the home page lists the same things itself, under 等你決定
+  // P48-2: the same reads as the home page's list (waitingModel: GETs only, nothing written into D), so the cards of the chats count here too
+  // and the title of the page has the number on every page
+  // `reuse` (a move to another page): the line's own rows (/api/waiting, one cheap read) are read fresh as before, but the cards of the chats come from what
+  // was read in the last 30 seconds instead of asking the server for everything at every click (the 30-second timer always reads all of it)
+  let m = null;
   let rows = [];
-  try { const r = await api.get("/api/waiting"); rows = r && Array.isArray(r.waiting) ? r.waiting : []; } catch (_) { rows = []; }
+  let cards = [];
+  if (reuse && waitingLast && Date.now() - waitingLast.at < WAITING_REUSE_MS) {
+    try { const r = await api.get("/api/waiting"); rows = r && Array.isArray(r.waiting) ? r.waiting : []; } catch (_) { rows = []; }
+    cards = waitingLast.m.rows.filter((r) => r.kind === "chat_card");
+  } else {
+    try { m = await waitingModel({ force: true }); } catch (_) { m = null; }       // the timer is the 30-second pace itself; a press asks at once
+    rows = m && Array.isArray(m.list) ? m.list : [];
+    cards = m ? m.rows.filter((r) => r.kind === "chat_card") : [];
+  }
+  if (navTop === "home") { bar.hidden = true; setKids(bar); return; }   // the person went home while it was read
   const text = waitingBarText(rows);
   const resume = resumeBarRows(rows);
-  if (!text && !resume.length) { bar.hidden = true; setKids(bar); return; }
+  if (!text && !resume.length && !cards.length) { bar.hidden = true; setKids(bar); return; }
   bar.hidden = false;
+  const lead = text || resume.length ? "　" : "等你決定：";
   setKids(bar, text ? el("span", { "data-waiting": "text" }, text) : null, text ? " " : null,
     text ? el("a", { href: "#/routines", "data-waiting": "link" }, "去處理") : null, text && resume.length ? "　" : null,
     resume.length ? el("span", { "data-waiting": "resume" }, (text ? "" : "等你決定：") + resume[0].text + (resume.length > 1 ? `，另外還有 ${resume.length - 1} 件` : "")) : null,
-    resume.length ? " " : null, resume.length ? el("a", { href: resume[0].href, "data-waiting": "resume-link" }, "去看看") : null);
+    resume.length ? " " : null, resume.length ? el("a", { href: resume[0].href, "data-waiting": "resume-link" }, "去看看") : null,
+    cards.length ? el("span", { "data-waiting": "chat" }, lead + cards[0].text + (cards.length > 1 ? `，另外還有 ${cards.length - 1} 件` : "")) : null,
+    cards.length ? " " : null, cards.length ? el("a", { href: cards[0].href, "data-waiting": "chat-link" }, "去看看") : null);
 }
 
 async function viewRoutines() {
@@ -13321,6 +13569,22 @@ function loadAdvancedNav() {
   }
   return advancedNavLoading.then(() => navAdvanced);
 }
+// The mark in the corner is a picture that may fail to load the very first time (P48-2): it is asked for once more (the file is the same, the address
+// has ?r=1 so nothing cached is reused), and when that fails too the letters VB stand in for it: never a broken picture.
+function brandMarkGuard() {
+  let img = null;
+  try { img = document.querySelector(".brand-mark img"); } catch (_) { img = null; }
+  if (!img || typeof img.addEventListener !== "function") return;
+  let tries = 0;
+  const retry = () => {
+    tries += 1;
+    if (tries === 1) { img.setAttribute("src", "/logo.svg?r=1"); return; }
+    const mark = img.parentNode;
+    if (mark) { mark.setAttribute("data-brand", "text"); setKids(mark, "VB"); }
+  };
+  img.addEventListener("error", retry);
+  if (img.complete === true && !img.naturalWidth) retry();      // it failed before this script ran (a picture with no width of its own is asked for once more, harmlessly)
+}
 function wireNavMenu() {
   const btn = document.getElementById("nav-toggle");
   if (!btn || !btn.addEventListener) return;
@@ -13394,7 +13658,7 @@ async function route() {
     setKids($main(), e.status === 401 ? authRequiredView() : notice("bad", "載入失敗：" + e.message));
   }
   if (authLostShown) return;   // the login page is up: nothing here should keep asking the server every few seconds
-  refreshWaitingBar();
+  refreshWaitingBar(true);
   // Live pages refresh their data quietly; they re-render only when nothing
   // is focused inside main, so typing and scrolling are never interrupted.
   // Home refreshes only its attention block, so the search box keeps focus.
@@ -20139,6 +20403,7 @@ function skipToMain(e) {
 }
 document.querySelector("a.skip").addEventListener("click", skipToMain);
 wireNavMenu();
+brandMarkGuard();
 window.addEventListener("hashchange", () => {
   if (authPending) return;   // bootstrap routes to the address as it is once the login code is traded
   if (location.hash === "#main" && routedHash !== null) {  // reached without the click handler
