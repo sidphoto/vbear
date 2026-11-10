@@ -1933,3 +1933,8 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .btn[hidden] { display: none; }
 .home-ask-row textarea, input[data-limit-input] { padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); font: inherit; resize: vertical; }
 input[data-limit-input] { width: 100%; box-sizing: border-box; resize: none; }
+
+/* P48-2 home page frame, progress line and the mark's letters */
+.home-loading { margin: 6px 0 0; }
+[data-home="loading-note"] { margin-top: 18px; }
+.brand-mark[data-brand="text"] { font-weight: 700; font-size: 15px; letter-spacing: 0; color: var(--ink); }
