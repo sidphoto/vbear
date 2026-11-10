@@ -35,9 +35,9 @@ INSTRUCTIONS = (
 OPENING = "你好，請先問我三個問題，了解我想做什麼。"
 SETUP_REASON = "目前沒有已經就緒、而且能聊天的 AI 工具（Claude Code、Codex 或 AGY）。先到「開始設定」把其中一個裝好、登入。"
 CODEX_CHAT_NOTE = ("Codex 聊天要用另一份登入：先到「開始設定」按「讓聊天用的 Codex 登入」，登入之後才能和 CEO 聊。"
-                   "角色卡現在還是可以先建立。")
+                   "員工現在還是可以先建立。")
 AGY_CHAT_NOTE = ("AGY 要先到聊天頁按「驗證聊天」（會用你的 Google 方案跑十幾則很短的對話），驗證通過之後才能和 CEO 聊。"
-                 "角色卡現在還是可以先建立。")
+                 "員工現在還是可以先建立。")
 
 
 def _can_chat(profile) -> bool:

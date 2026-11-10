@@ -268,11 +268,11 @@ const useBtn = (main) => qa(main, "use")[0];
 const chatInput = (main) => main.find((n) => n.getAttribute && n.getAttribute("data-chat") === "input");
 const groupInput = (main) => main.find((n) => n.getAttribute && n.getAttribute("data-group") === "input");
 
-test("a chat has 用技能 beside the send button; picking a skill puts its words in the box and sends nothing", async () => {
+test("a chat has 用常用做法 beside the send button; picking a skill puts its words in the box and sends nothing", async () => {       // (P47-4) the button's words
   setPage({ book: book([skill("k-000000000001", "市集日報", STEPS), skill("k-000000000002", EVIL, "第二個")]) });
   const main = await open("#/chat/" + CID);
   assert(useBtn(main), "the button is there");
-  assert.strictEqual(text(useBtn(main)), "用技能");
+  assert.strictEqual(text(useBtn(main)), "用常用做法");
   useBtn(main).click();
   await settle();
   const dlg = dialog();
@@ -358,12 +358,12 @@ test("a chat a group opened has no box and so no 用技能", async () => {
 
 // ---- 存成技能 ---------------------------------------------------------------------------------------------------
 
-test("a chat has 存成技能 beside 記住 on each spoken line, and opening the chat saves nothing", async () => {
+test("a chat has 存成常用做法 beside 記住 on each spoken line, and opening the chat saves nothing", async () => {       // (P47-4) the button's words
   setPage({ detail: chatDetail([rec("user_message", { turn: 1, text: "第一步先整理" }), rec("reply", { turn: 1, text: "好", truncated: false }),
     rec("tool_call", { turn: 1, tool: "Bash", summary: "ls" })]) });
   const main = await open("#/chat/" + CID);
   assert.strictEqual(saveButtons(main).length, 2);
-  assert(saveButtons(main).every((b) => text(b) === "存成技能"));
+  assert(saveButtons(main).every((b) => text(b) === "存成常用做法"));
   assert.strictEqual(skillPosts().length, 0);
 });
 
@@ -526,13 +526,13 @@ async function kready(over = {}) {
 const skillWrites = () => FETCH_LOG.filter((c) => c.method === "POST" && /^\/api\/my-skills(\/k-[0-9a-f]{12}(\/delete)?)?$/.test(c.url.split("?")[0]));
 const ksuggestCalls = () => FETCH_LOG.filter((c) => c.url.startsWith("/api/my-skills/suggest")).map((c) => `${c.method} ${c.url.split("?")[0]}`);
 
-test("a one-to-one chat has 整理成技能; opening it asks nothing, a group's chat has none", async () => {
+test("a one-to-one chat has 整理成常用做法 (an item of the 「⋯」 menu); opening it asks nothing, a group's chat has none", async () => {
   suggestPage();
   const main = await kopen();
   const btn = kq(main, "open");
-  assert.strictEqual(text(btn), "整理成技能");
-  assert(text(kq(main, "desk")).includes("Anthropic"));
-  assert(text(kq(main, "desk")).includes("US$0.10"));
+  assert(text(btn).startsWith("整理成常用做法"), text(btn));
+  assert(text(btn).includes("Anthropic"));         // (P47-4) the sentence that stood on the desk stands under the item
+  assert(text(btn).includes("US$0.10"));
   assert.deepStrictEqual(ksuggestCalls().filter((c) => c.startsWith("POST")), []);
   setPage({ detail: chatDetail([], { group: { id: GID, name: "市集準備" } }) });
   assert(!kq(await kopen(), "open"));
@@ -616,7 +616,7 @@ test("a proposal that reads like an order carries the server's warning on the ca
 
 test("nothing worth keeping says so and can be closed; 不用了 posts an empty dismiss and the card goes away", async () => {
   const main = await kready({ view: kview({ items: [] }) });
-  assert(text(kq(main, "card")).includes("沒有值得存成技能"));
+  assert(text(kq(main, "card")).includes("沒有值得存成常用做法"));
   kq(main, "dismiss").click();
   await settle(40);
   assert(ksuggestCalls().includes(`POST /api/my-skills/suggest/${SID}/dismiss`));

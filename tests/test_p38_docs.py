@@ -118,7 +118,8 @@ class CodexChatDocsTests(unittest.TestCase):
 
     def test_an_allowed_command_may_run_outside_the_sandbox_is_said_in_every_place(self):
         warning = "允許後，這個指令可能在沙盒外執行：能改到工作資料夾以外的檔案，也能連網。只允許你看得懂、確定沒問題的指令。"
-        self.assertIn(warning, self.app)
+        # (P47-4) the page now says 保護範圍（沙盒）; the sentence is otherwise the same. The documents still quote the old noun until P47-6.
+        self.assertIn(warning.replace("沙盒外", "保護範圍（沙盒）外"), self.app)
         for phrase in ("允許後可能在沙盒外執行", "三個選項", "照現在發布", "`never`", "`:root`", "等 Codex 修好", "apply_patch", "連網",
                        "寫整台電腦", "不再問", "`require_escalated`"):
             self.assertIn(phrase, self.adr, phrase)

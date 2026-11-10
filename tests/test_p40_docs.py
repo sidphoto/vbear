@@ -99,7 +99,8 @@ class ChiefDocsTests(unittest.TestCase):
         self.assertNotIn("現在只會聊天", self.glossary)
 
     def test_the_words_the_documents_quote_are_the_ones_the_page_uses(self):
-        for words in ("請幕僚長安排", "確認派工", "不採用", "你改過", "AI 自己做了什麼", "幕僚長目前需要 Claude Code", "VBear 依派工送出"):
+        # (P47-4) the page says 依分配工作 now; the documents quote 依派工 until P47-6
+        for words in ("請幕僚長安排", "確認派工", "不採用", "你改過", "AI 自己做了什麼", "幕僚長目前需要 Claude Code", "VBear 依分配工作送出"):
             self.assertIn(words, self.app, words)
 
 
