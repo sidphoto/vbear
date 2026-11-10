@@ -10844,7 +10844,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         // P34-2: how the card is started, and a suggestion when the folder is not the one the position suggests (words only)
         if (typeof pv.launch_mode === "string" && typeof pv.mode_note === "string" && pv.mode_note) {
           kids.push(el("div", { class: "notice info", "data-pass": "mode" }, el("span", { class: "ico", "aria-hidden": "true" }, "i"),
-            el("div", { class: "small" }, el("strong", null, `出發方式：${pv.launch_mode === "full" ? "完整模式" : "安全模式"}`),
+            el("div", { class: "small" }, el("strong", null, `開始工作的方式：${pv.launch_mode === "full" ? "完全交給他（有風險）" : "每件事先問我"}`),
               el("p", { style: "margin:4px 0" }, pv.mode_note))));
         }
         if (typeof pv.folder_warning === "string" && pv.folder_warning) {
@@ -10915,7 +10915,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       return el("section", { class: "rc-block", "data-launch": "chosen-skills" },
         el("h4", null, isFull ? "技能卡清單（收藏中），VBear 不會替它挑技能" : "技能卡清單（收藏中），本次不會載入"),
         el("p", { class: "rc-note" }, isFull
-          ? "這是你替這張角色卡收藏的清單，只是紀錄。完整模式下，工具會照你自己的設定載入它的技能、CLAUDE.md、MCP 與外掛，不是這份清單。"
+          ? "這是你替這位員工收藏的清單，只是紀錄。「完全交給他（有風險）」下，工具會照你自己的設定載入它的技能、CLAUDE.md、MCP 與外掛，不是這份清單。"
           : "這是你替這張角色卡收藏的清單，只是紀錄；這次出發不會把這些技能帶上。"),
         ids.length ? el("ul", null, ids.map((sid) => {
           const rec = catalog.find((x) => x.skill_id === sid);
@@ -11015,7 +11015,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         el("span", { class: "ico", "aria-hidden": "true" }, "!"),
         el("div", { class: "small" },
           el("strong", null, "這個員工可以動你電腦上的任何檔案"),
-          el("p", { style: "margin:4px 0" }, "完整模式沒有任何保護：它能讀、改、刪你電腦上的檔案，也能上網。看懂之後再勾選才能出發。"),
+          el("p", { style: "margin:4px 0" }, "「完全交給他（有風險）」沒有任何保護：它能讀、改、刪你電腦上的檔案，也能上網。看懂之後再勾選才能開始工作。"),
           el("label", { class: "row", for: "agent-launch-full-ack", style: "gap:8px; align-items:flex-start" },
             fullAckBox, el("span", null, "我了解"))));
     }

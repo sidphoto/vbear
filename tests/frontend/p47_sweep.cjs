@@ -212,6 +212,21 @@ const wordsOfTree = (root) => {
     assert.deepStrictEqual(bad, [], `${bad.length} strings still say an old word:\n${bad.join("\n")}`);
   });
 
+  // The workbench is an advanced page (its words stay for now), but a person in the normal mode lands in it from 「開始工作」 and meets the pre-launch
+  // check there. The two ways of starting are the words of the table in that check, and in everything else that is shared.
+  await test("source: the pre-launch check inside the workbench names the two ways of starting with the new words", () => {
+    const owner = ownerTable(SOURCE);
+    const modes = AVOID.filter((w) => w.term === "安全模式" || w.term === "完整模式");
+    assert.strictEqual(modes.length, 2);
+    const bad = [];
+    for (const lit of literals(SOURCE)) {
+      if (owner(lit.line) !== "viewWorkbench") continue;
+      if (lit.text.length && modes.some((w) => lit.text.includes(w.term))) bad.push(`${lit.line} ${lit.text.slice(0, 60)}`);
+    }
+    assert.deepStrictEqual(bad, [], bad.join("\n"));
+    assert.ok(literals(SOURCE).some((l) => owner(l.line) === "viewWorkbench" && l.text.includes("完全交給他（有風險）")), "the pass says the full way in the new words");
+  });
+
   await test("source: the menu and the page shell (index.html) say none of the old words", () => {
     const visible = HTML.replace(/<script[\s\S]*?<\/script>/g, "").replace(/<style[\s\S]*?<\/style>/g, "").replace(/<[^>]*>/g, "\n");
     assert.deepStrictEqual(hits(visible).concat(hits(visible, AVOID_TITLE)), []);
