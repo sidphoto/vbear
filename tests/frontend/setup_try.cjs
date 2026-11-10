@@ -37,6 +37,9 @@ const installed = (id, over = {}) => row(id, { installed: true, version: "1.2.3"
 
 let page, calls, tryReply;
 function setPage(over = {}) {
+  // P48-1: the chosen tool (here Codex, which this file does not try) has the new one-button check (p48_setup.cjs); the old 「試一下」 of every other tool is
+  // the one under 「其他 AI 工具」, which is what this file is about.
+  global.localStorage._store = { "vbear-setup-pick": "codex" };
   page = { tools: [installed("claude"), row("codex"), installed("agy"), installed("grok")], setup_done: true, ...over };
   calls = [];
   tryReply = () => jsonResponse({ ok: true, tool: "agy", success: true, result: "success", message: "Antigravity（AGY）回應了，這個 AI 工具可以用。", spent_usd: "0.01" });
