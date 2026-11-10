@@ -3045,17 +3045,17 @@ async function viewWork() {
 let waitingListeners = [];
 function onWaitingCount(fn) { if (typeof fn === "function") waitingListeners.push(fn); }
 // Whether the app may show a Mac notification: the person's own switch decides it (P48-4); until then it is false, so the app only gets the number.
-function waitingNotifyWanted() { return false; }
+function waitingNotifyWanted() { return notifyIsOn() && !!waitingLast && waitingLast.m.complete === true; }   // P48-4: the person's switch, and a read that was whole
 
 function waitingTitleText(count) { return count > 0 ? `(${Math.min(count, 999)}) VBear` : "VBear"; }
 
-let waitingSentToApp = null;
+let waitingSentToApp = null;       // "count:notify" of the last message: the same pair is not sent twice
 function waitingToApp(count) {
-  if (count === waitingSentToApp) return;
   const bridge = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.vbearWaiting;
   if (!bridge || typeof bridge.postMessage !== "function") return;
-  waitingSentToApp = count;
   const notify = waitingNotifyWanted();
+  if (`${count}:${notify}` === waitingSentToApp) return;
+  waitingSentToApp = `${count}:${notify}`;
   try { window.webkit.messageHandlers.vbearWaiting.postMessage({ count: count, notify: notify }); } catch (_) { /* the app is not listening: the title still has the number */ }
 }
 // The number goes to the title and the app, and to the listeners. A read that was not whole shows no number: it is not guessed.
@@ -7697,6 +7697,131 @@ function dailyLimitEditor({ current, onSaved }) {
     el("p", { class: "small muted" }, "方案用量上限是 AI 工具自己的限制；調高這裡的花費上限，不會改變方案的用量限制。"));
 }
 
+// ---------- notifications (v0.22, P48-4) ----------------------------------------------------------------------------------------
+// A Mac notification when more things wait for the person: off unless the person turns the switch on (the key `vbear-notify` is "on"). The system is asked
+// for the allowance only at the press on that switch, never when a page loads. The words are fixed: the title VBear and "有 N 件事等你決定", only the
+// number; no name, no words of a chat. In the app, Swift makes the notification from the number (the page only says count and notify); in a browser the
+// page makes it with the browser's own Notification. Nothing goes over the network and nothing is written to the server.
+const NOTIFY_KEY = "vbear-notify";
+function notifyIsOn() { try { return localStorage.getItem(NOTIFY_KEY) === "on"; } catch (_) { return false; } }
+function notifyWrite(on) { try { if (on) localStorage.setItem(NOTIFY_KEY, "on"); else localStorage.removeItem(NOTIFY_KEY); } catch (_) { /* the switch then just stays as it was */ } }
+function notifyBridge() {
+  const b = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.vbearWaiting;
+  return b && typeof b.postMessage === "function" ? b : null;
+}
+
+// The app's answer to {ask: true}: one of three fixed words, taken only while a question is open.
+let notifyPending = null;
+window.vbearNotifyAnswer = function (word) {
+  const pending = notifyPending;
+  if (!pending || (word !== "granted" && word !== "denied" && word !== "unavailable")) return;
+  notifyPending = null;
+  pending(word);
+};
+
+// Only the switch's handler calls this. -> "granted" | "denied" | "unavailable"
+function notifyAsk() {
+  const bridge = notifyBridge();
+  if (bridge) {
+    return new Promise((resolve) => {
+      const mine = (word) => { clearTimeout(timer); resolve(word); };
+      const timer = setTimeout(() => { if (notifyPending === mine) { notifyPending = null; resolve("unavailable"); } }, 120000);   // no answer is not an allowance
+      notifyPending = mine;
+      try { bridge.postMessage({ ask: true }); } catch (_) { notifyPending = null; mine("unavailable"); }
+    });
+  }
+  if (typeof Notification !== "function") return Promise.resolve("unavailable");
+  if (Notification.permission === "granted") return Promise.resolve("granted");
+  if (Notification.permission === "denied") return Promise.resolve("denied");
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (word) => { if (!done) { done = true; resolve(word === "granted" ? "granted" : "denied"); } };
+    try {
+      const r = Notification.requestPermission(finish);
+      if (r && typeof r.then === "function") r.then(finish, () => finish("denied"));
+    } catch (_) { done = true; resolve("unavailable"); }
+  });
+}
+
+// What the page last counted (a whole read), for "more than before". The first number is only remembered; fewer only moves it.
+let notifyLastCount = null;
+function notifyPageAway() { return !!document.hidden || (typeof document.hasFocus === "function" && !document.hasFocus()); }
+function notifyShow(count) {
+  if (typeof Notification !== "function" || Notification.permission !== "granted") return;
+  try {
+    const note = new Notification("VBear", { body: `有 ${Math.min(count, 999)} 件事等你決定`, tag: "vbear-waiting" });
+    note.onclick = () => {
+      try { if (typeof window.focus === "function") window.focus(); } catch (_) { /* optional */ }
+      location.hash = "#/";
+      try { note.close(); } catch (_) { /* optional */ }
+    };
+  } catch (_) { /* no notification: the title and the list still have the number */ }
+}
+function notifyOnCount(info) {
+  if (!info || info.complete !== true) return;           // a read that was not whole may be short: it neither tells nor moves the record
+  const before = notifyLastCount;
+  notifyLastCount = info.count;
+  if (before === null || info.count <= before) return;
+  if (!notifyIsOn() || notifyBridge() || !notifyPageAway()) return;   // in the app, Swift tells
+  notifyShow(info.count);
+}
+onWaitingCount(notifyOnCount);
+
+// The 30-second timer goes on while the page is hidden when the switch is on (the other pages read through refreshWaitingBar; the home page's own
+// 5-second timer stops when it is hidden, so it is read here). Same GETs as always, nothing new.
+function notifyReadHome() {
+  if (document.hidden && notifyIsOn() && navTop === "home") waitingModel({ force: true }).catch(() => {});
+}
+// The app is told the number again with the new switch, so its own record follows the switch.
+function notifyTell() {
+  waitingSentToApp = null;
+  waitingToApp(waitingLast && waitingLast.m.complete ? Math.min(waitingLast.m.rows.length, 999) : 0);
+}
+
+const NOTIFY_WORDS = {
+  askingApp: "等 Mac 回答…",
+  askingBrowser: "等瀏覽器回答…",
+  onApp: "已打開。有事等你決定、而且 VBear 不在最前面時，Mac 會跳出通知。",
+  onBrowser: "已打開。有事等你決定、而且這個頁面不在最前面時，瀏覽器會跳出通知。",
+  off: "已關閉。",
+  deniedApp: "Mac 沒有允許 VBear 發通知，可以到「系統設定 → 通知」打開。開關保持關閉。",
+  unavailableApp: "Mac 沒有允許 VBear 發通知（拿不到通知的權限；這個 VBear 沒有 Apple 的簽章，Mac 可能不讓它發）。開關保持關閉。",
+  deniedBrowser: "瀏覽器沒有允許通知，可以在瀏覽器的網站設定打開。開關保持關閉。",
+  unavailableBrowser: "這個瀏覽器不能發通知。開關保持關閉。",
+  revokedBrowser: "瀏覽器現在沒有允許這個網站發通知，所以不會跳出；可以在瀏覽器的網站設定打開。",
+};
+function notifySettings() {
+  const app = !!notifyBridge();
+  const result = el("p", { class: "small", "data-settings": "notify-result", "aria-live": "polite" });
+  const say = (words) => { result.textContent = words; };
+  const input = el("input", { type: "checkbox", checked: notifyIsOn(), "data-setting": "notify" });
+  if (notifyIsOn() && !app && typeof Notification === "function" && Notification.permission === "denied") say(NOTIFY_WORDS.revokedBrowser);
+  input.addEventListener("change", async () => {
+    if (!input.checked) { notifyWrite(false); say(NOTIFY_WORDS.off); notifyTell(); return; }
+    input.disabled = true;
+    say(app ? NOTIFY_WORDS.askingApp : NOTIFY_WORDS.askingBrowser);
+    const word = await notifyAsk();
+    input.disabled = false;
+    if (word === "granted") {
+      notifyWrite(true);
+      input.checked = true;
+      say(app ? NOTIFY_WORDS.onApp : NOTIFY_WORDS.onBrowser);
+      notifyTell();
+      return;
+    }
+    input.checked = false;                              // not allowed: the switch is off again and says so; it does not ask again by itself
+    say(word === "denied" ? (app ? NOTIFY_WORDS.deniedApp : NOTIFY_WORDS.deniedBrowser) : (app ? NOTIFY_WORDS.unavailableApp : NOTIFY_WORDS.unavailableBrowser));
+  });
+  return el("div", { class: "panel pad", "data-settings": "notify" },
+    el("h2", { style: "margin-bottom:6px" }, "通知"),
+    el("label", { class: "switch" }, input,
+      el("div", null, el("div", { class: "t" }, "有事等你決定時，用 Mac 的通知提醒我"),
+        el("div", { class: "small muted" }, "通知只在這台 Mac 上顯示，內容只有「有幾件事等你決定」，不會有員工說的話或你的對話。"))),
+    result,
+    el("p", { class: "small muted" }, "分頁標題（App 是視窗標題和 Dock 圖示）上的數字不是通知，一直開著，不受這個開關影響。"));
+}
+// ---------- end of notifications --------------------------------------------------------------------------------------------------
+
 async function viewSettings(params) {   // params: the address's ?key=value (P47-3 reads ?open=limits)
   const token = seq;
   await loadStatic();
@@ -7760,6 +7885,7 @@ async function viewSettings(params) {   // params: the address's ?key=value (P47
             el("div", null, el("div", { class: "t" }, "外觀"),
               el("select", { on: { change: (e) => setTheme(e.target.value) } },
                 [["auto", "跟隨系統"], ["light", "淺色"], ["dark", "深色"]].map(([v, t]) => el("option", { value: v, selected: store.get("theme", "auto") === v }, t)))))),
+        notifySettings(),
         el("div", { class: "panel pad" },
           el("h2", { style: "margin-bottom:6px" }, "使用紀錄"),
           el("label", { class: "switch" },
@@ -20391,7 +20517,7 @@ async function viewStaffingDetail(token, id) {
 
 setTheme(store.get("theme", "auto"));
 setInterval(() => { if (!document.hidden && !authLostShown && !authPending) { refreshTranslations(); pollRoleTranslations(); } }, 2500);
-setInterval(() => { if (!document.hidden && !authLostShown && !authPending) refreshWaitingBar(); }, 30000);
+setInterval(() => { if ((!document.hidden || notifyIsOn()) && !authLostShown && !authPending) { refreshWaitingBar(); notifyReadHome(); } }, 30000);   // P48-4: on while hidden, if the notification is on
 // Coming back to this tab: refresh at once instead of waiting.
 document.addEventListener("visibilitychange", () => { if (!document.hidden && liveTick && !authPending) liveTick(); });
 // The skip link moves focus only; it must not become a route ("#main" is not a page).
