@@ -1927,3 +1927,9 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .tpl-fixed { margin: 8px 0; padding-left: 18px; display: grid; gap: 4px; }
 .tpl-warn { display: grid; gap: 6px; margin: 8px 0; }
 @media (max-width: 520px) { .tpl-foot .btn { flex: 1 1 100%; justify-content: center; } }
+
+/* fix47 (after the real-Mac check of v0.21.0): a button the page hides (the stop button of a chat with no turn running) is really hidden, and the home
+   page's box for the CEO and the settings' own limit look like the other boxes (the browser's grey box and monospace placeholder are gone). */
+.btn[hidden] { display: none; }
+.home-ask-row textarea, input[data-limit-input] { padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); font: inherit; resize: vertical; }
+input[data-limit-input] { width: 100%; box-sizing: border-box; resize: none; }

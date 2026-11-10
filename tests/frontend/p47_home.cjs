@@ -75,6 +75,7 @@ function world(over = {}) {
     groups: over.groups || [],
     live: over.live || { runtime: { available: true, problems: [] }, sessions: [], attention: [], projects: [], panes: [], usage: { sessions: [] } },
     tools: over.tools || [{ id: "claude", ready: true, state: "ready" }],
+    support: over.support || { state: "verified", detected: "2.1.318" },       // what GET /api/chats says of the chat support (Claude Code checked for chat)
     tasks: over.tasks || [],
     fail: over.fail || {},
     posts: over.posts || {},
@@ -117,7 +118,7 @@ function boot(hash, W, extra = {}) {
       if (p === "/api/config") return reply(200, { config: W.config, state_dir: "/x", runtime_socket: "" });
       if (p === "/api/agent-profiles") return reply(200, { ok: true, profiles: W.profiles });
       if (p === "/api/agent-builder/catalog") return reply(200, { ok: true, tool_list: [], skills: [] });
-      if (p === "/api/chats") return reply(200, { chats: W.chats, more: 0, cards: W.cards, support: {}, limits: { per_turn_usd: "0.05", daily_usd: "3" }, ledger: { lamp: W.lamp, spent_usd: "0.2", daily_usd: "3" }, problems: [] });
+      if (p === "/api/chats") return reply(200, { chats: W.chats, more: 0, cards: W.cards, support: W.support, limits: { per_turn_usd: "0.05", daily_usd: "3" }, ledger: { lamp: W.lamp, spent_usd: "0.2", daily_usd: "3" }, problems: [] });
       if (p === "/api/meetings/ledger") return reply(200, { lamp: W.lamp, spent_usd: "0.2", daily_usd: "3" });
       if (p === "/api/routines") return reply(200, { routines: W.routines, readable: true, cards: W.cards, waiting: W.waiting.filter((r) => r.kind === "routine_due" || r.kind === "routine_missed"), settings: {}, limits: {}, today: {}, autonomy: {} });
       if (p === "/api/waiting") return reply(200, { waiting: W.waiting });
@@ -343,6 +344,74 @@ function check15c(log, phase, typed, messages) {
     assert.ok(all(ask2, (n) => n.tag === "a" && n.getAttribute("href") === "#/ceo").length === 1);
   });
 
+  // ---- fix47: a CEO whose AI tool cannot chat yet is not sent to (the real-Mac check found a dead end here) -------------------------------
+  await test("fix47 ask: the CEO's tool is held back by an administrator's policy or not checked for chat: no box, one line with the real reason, one way to the page that prepares it", async () => {
+    for (const [support, reason] of [[{ state: "policy", detected: "2.1.318" }, "這台電腦的 Claude Code 有管理員設定，VBear 不能用它聊天"], [{ state: "unverified", detected: "2.1.318" }, "先處理這一步才能和 小執 聊天"]]) {
+      const page = await home(world({ support, chats: [chatRow("c1", "p-ceo")] }));
+      const ask = one(page.main, "data-home", "ask");
+      assert.ok(!askBox(page) && !sendBtn(page), support.state + ": no box to type into");
+      assert.ok(text(ask).includes(reason), text(ask));
+      assert.strictEqual(all(ask, (n) => n.tag === "a" && n.getAttribute("href") === "#/chat?profile=p-ceo").length, 1);
+      assert.strictEqual(posts(page).length, 0);
+    }
+  });
+
+  await test("fix47 ask: the tool stopped being able to chat after the page was drawn: a press sends nothing, opens nothing, keeps the words under the employee's id and leads to the page that says why", async () => {
+    for (const chats of [[], [chatRow("c1", "p-ceo")]]) {
+      const W = world({ chats });
+      const page = await home(W);
+      W.support = { state: "policy", detected: "2.1.318" };
+      askBox(page).value = "晚一點要用的話"; sendBtn(page).click(); await tick(30);
+      assert.strictEqual(posts(page).length, 0, "no chat opened, no message sent");
+      assert.strictEqual(page.location.hash, "#/chat?profile=p-ceo");
+      assert.strictEqual(evalIn(page, 'ceoDrafts.get("p-ceo")'), "晚一點要用的話");
+    }
+  });
+
+  await test("fix47 ask: an employee's avatar with a chat already there still opens it (reading is free), but one with none and a tool that cannot chat goes to the page that prepares it", async () => {
+    const W = world({ support: { state: "unverified", detected: "2.1.318" }, chats: [chatRow("c-old", "p-acc")] });
+    const page = await home(W);
+    one(page.main, "data-employee", "p-acc").click(); await tick(20);
+    assert.strictEqual(page.location.hash, "#/chat/c-old");
+    one(page.main, "data-employee", "p-ceo").click(); await tick(20);
+    assert.strictEqual(page.location.hash, "#/chat?profile=p-ceo");
+    assert.strictEqual(posts(page).length, 0);
+  });
+
+  await test("fix47 ask: a chat the server labels with a routine's title is never the chat with the employee, even when the routines list does not name it (a deleted routine, a run older than the last ten)", async () => {
+    const W = world({ chats: [chatRow("c-routine", "p-ceo", { last_at: 9000, routine_title: "已刪除的早報" }), chatRow("c-mine", "p-ceo", { last_at: 1000 })], routines: [] });
+    const page = await home(W);
+    one(page.main, "data-employee", "p-ceo").click(); await tick(20);
+    assert.strictEqual(page.location.hash, "#/chat/c-mine");
+    askBox(page).value = "你好"; sendBtn(page).click(); await tick(30);
+    assert.deepStrictEqual(postsTo(page, /messages/).map(([, u]) => u), ["/api/chats/c-mine/messages"]);
+    const only = world({ chats: [chatRow("c-routine", "p-ceo", { routine_title: "早報" })] });
+    const p2 = await home(only);
+    askBox(p2).value = "你好"; sendBtn(p2).click(); await tick(30);
+    assert.strictEqual(postsTo(p2, /^\/api\/chats$/).length, 1, "none that is a personal chat: one is opened");
+    assert.strictEqual(p2.location.hash, "#/chat/c-new");
+  });
+
+  await test("fix47 three steps: step 1 is ticked and says 'can chat' only when a chat can start; a policy or an unchecked tool is said as it is", async () => {
+    const step = async (support) => { const page = await home(world({ profiles: [], cards: [], support })); return one(one(page.main, "data-home", "first-steps"), "data-home-step", "1"); };
+    const ok = await step({ state: "verified", detected: "2.1.318" });
+    assert.ok(ok.className.includes("done") && text(ok).includes("可以聊天"));
+    const held = await step({ state: "policy", detected: "2.1.318" });
+    assert.ok(!held.className.includes("done") && !text(held).includes("可以聊天") && text(held).includes("管理員設定"), text(held));
+    const unchecked = await step({ state: "unverified", detected: "2.1.318" });
+    assert.ok(!unchecked.className.includes("done") && !text(unchecked).includes("可以聊天") && text(unchecked).includes("安全檢查"), text(unchecked));
+    const codex = await step({ state: "unknown", codex: { state: "ready" } });
+    assert.ok(codex.className.includes("done"), "any tool that can chat ticks it");
+    assert.ok(all(held, (n) => n.tag === "a" && n.getAttribute("href") === "#/setup").length === 1, "still the way to look at the tools");
+  });
+
+  await test("fix47 look: the home box and the settings' own limit box have the other boxes' style (border, panel colour, the page's font), not the browser's grey box", () => {
+    for (const sel of [".home-ask-row textarea", "input[data-limit-input]"]) {
+      const rule = CSS.split("}").filter((r) => r.split("{")[0].split(",").some((s) => s.trim() === sel)).join(";");
+      assert.ok(/border:\s*1px solid var\(--line-2\)/.test(rule) && /background:\s*var\(--panel\)/.test(rule) && /font:\s*inherit/.test(rule), `${sel}: ${rule}`);
+    }
+  });
+
   await test("ask: the CEO is the first CEO of the config when that card is there, else the first employee whose position is CEO", async () => {
     const boss = profile("p-boss", "老闆", { position: "planner" });
     const page = await home(world({ profiles: [CEO, boss], config: { first_ceo_id: "p-boss" }, chats: [chatRow("c-boss", "p-boss"), chatRow("c-ceo", "p-ceo", { last_at: 9000 })] }));
@@ -363,7 +432,7 @@ function check15c(log, phase, typed, messages) {
     assert.ok(third.className.includes("off") && all(third, (n) => n.tag === "a").length === 0);
     assert.ok(!one(page.main, "data-home", "ask") && !one(page.main, "data-home", "team"));
     assert.deepStrictEqual(check15c(page.log, "draw"), []);
-    const none = await home(world({ profiles: [], cards: [], tools: [{ id: "claude", ready: false, state: "not_installed" }] }));
+    const none = await home(world({ profiles: [], cards: [], tools: [{ id: "claude", ready: false, state: "not_installed" }], support: { state: "unknown", detected: null } }));
     assert.ok(!one(one(none.main, "data-home", "first-steps"), "data-home-step", "1").className.includes("done"), "no ready tool: not ticked");
   });
 

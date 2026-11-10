@@ -28,6 +28,9 @@ SENTENCES = {
     "今天的額度已用完（亮紅燈），今天不能再送訊息，本機日期隔天才會重算。": "chat_service.py",
     "今天的額度已用完（亮紅燈），今天不能再送訊息，本機日期隔天才會重算": "groups.py",
     "今天剩下的額度不到 US$0.01，不送出。": "chat_service.py",
+    "這個版本的聊天模式還沒有在這台 Mac 上通過驗證": "chat_service.py",
+    "的聊天模式還沒有通過驗證": "runtime/cli_versions.py",
+    "這台 Mac 上有管理員政策或系統設定，可能蓋過 VBear 的設定，所以不啟動聊天": "chat_service.py",
 }
 
 
@@ -41,7 +44,7 @@ class ServerSentencesAreUnchanged(unittest.TestCase):
     def test_the_screen_table_knows_each_of_them(self):
         app = (Path(__file__).resolve().parents[1] / "web" / "app.js").read_text(encoding="utf-8")
         table = app[app.index("const PLAIN_ERRORS = ["):app.index("// x: the original (a string, or an Error")]
-        for word in ("今天的額度已用完（亮紅燈）", "今天剩下的額度不到 US\\$0\\.01", "無法連線到 VBear runtime", "Agent CLI 版本檢查", "manual_review", "孤兒翻譯"):
+        for word in ("今天的額度已用完（亮紅燈）", "今天剩下的額度不到 US\\$0\\.01", "無法連線到 VBear runtime", "Agent CLI 版本檢查", "manual_review", "孤兒翻譯", "聊天模式還沒有", "管理員政策或系統設定"):
             self.assertIn(word, table, word)
 
 

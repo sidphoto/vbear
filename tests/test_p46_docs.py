@@ -17,10 +17,8 @@ REPO = Path(__file__).resolve().parent.parent
 EVIDENCE = REPO / "docs" / "evidence" / "agy-1.5.3-chat.md"
 FIXTURES = REPO / "tests" / "fixtures" / "agy-chat"
 
-# What must never be in the repository, spelled in pieces so that this file does not hold it either: the names of the maintainer's own
-# skills, plan and providers, the name of a temporary folder, the title of a test conversation.
-PERSONAL = ["identi" + "fy-me", "grill" + "-me", "team" + "work", "minimax" + "-global", "vs." + "8kOc", "AI " + "Pro",
-            "permissions " + "test", "MiniMax-" + "M3", "side" + "chang"]
+# No list of private names is kept here: the repository is public, and a list of words that must not appear is itself a list of them (even spelled in pieces).
+# The checks below are generic patterns only (an email-like string that is not an example address, a path in a home folder).
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
 HOME_PATH = re.compile(r"/(?:Users|home)/[A-Za-z0-9._-]+")
 SAFE_EMAIL_DOMAINS = ("example.com", "example.org", "example.net")
@@ -28,9 +26,6 @@ SAFE_EMAIL_DOMAINS = ("example.com", "example.org", "example.net")
 
 def problems(text: str, label: str) -> list[str]:
     found = []
-    for word in PERSONAL:
-        if word.casefold() in text.casefold():
-            found.append(f"{label}: names something personal ({len(word)} characters)")
     for m in EMAIL.finditer(text):
         if not m.group(0).lower().endswith(SAFE_EMAIL_DOMAINS):
             found.append(f"{label}: an email-like string")
@@ -52,8 +47,7 @@ class EvidenceFileTests(unittest.TestCase):
         self.assertEqual(problems(text, "agy-1.5.3-chat.md"), [])
 
     def test_the_scan_fires_on_small_made_up_texts(self):
-        for text in ("my home is /Users/alice/projects", "mail a.b@gmail.com now", "skill " + PERSONAL[0], "plan " + PERSONAL[5].lower(),
-                     "at /home/bob/x"):
+        for text in ("my home is /Users" + "/alice/projects", "mail " + "someone" + "@" + "corp.invalid" + " now", "at /home" + "/bob/x"):
             self.assertTrue(problems(text, "x"), text)
         for text in ("mail a.b@example.com now", "/Users/fake-user/.codex", "the ~/.agents/hooks.json file", "plain words"):
             self.assertEqual(problems(text, "x"), [], text)

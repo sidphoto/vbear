@@ -1038,6 +1038,10 @@ const PLAIN_ERRORS = [
   { key: "cli_version", re: /Agent CLI 版本檢查/, text: "VBear 沒能確認這個 AI 工具的版本，所以先不啟動它。", next: "請到「AI 工具」看看它有沒有裝好、能不能開。" },
   { key: "manual_review", normalOnly: true, re: /manual_review|(?:待|需要|等待)人工處理/, next: "VBear 不確定這件事有沒有收尾，先停下來等你看。",
     swaps: [[/[（(]\s*manual_review\s*[）)]/g, ""], [/manual_review/g, "要你檢查"], [/(?:等待|需要|待)人工處理/g, "要你檢查"]] },
+  { key: "chat_unverified", re: /聊天模式還沒有(?:在這台 Mac 上)?通過驗證/,
+    text: "這個 AI 工具還沒做過聊天用的安全檢查，所以現在不能聊天。", next: "到這位員工的準備頁，做一次安全檢查，通過後就能聊。" },
+  { key: "chat_admin_policy", re: /這台 Mac 上有管理員政策或系統設定，可能蓋過 VBear 的設定，所以不啟動聊天/,
+    text: "這台電腦的 AI 工具有管理員設定，VBear 不能用它聊天。", next: "可以到「AI 工具」看看有沒有別的工具能用。" },
   { key: "orphan", re: /孤兒翻譯/, label: true, swaps: [[/孤兒翻譯/g, "找不到原技能的翻譯"]] },
 ];
 // x: the original (a string, or an Error or a server answer that carries it).
@@ -2328,7 +2332,7 @@ async function viewHome() {
   if (profiles === null) {
     body = [el("section", { class: "section", "data-home": "team" }, sectionHead(WORDS.employeeList.use, null),
       notice("warn", "讀不到員工的資料，所以先不顯示。重新整理看看；還是不行，請到「設定」看一下 VBear 的狀態。")), homeToday(state)];
-  } else if (!profiles.length) body = [homeFirstSteps(toolsRes)];
+  } else if (!profiles.length) body = [homeFirstSteps(toolsRes, chatsRes)];
   else body = [homeTeam(state), homeToday(state), homeAsk(state)];
   setKids(main,
     el("h1", null, WORDS.home.use),
@@ -2440,7 +2444,10 @@ function homeRoutineChatIds(routinesRes) {
 function homeChatsOf(chatsRes, routinesRes, profileId) {
   const list = chatsRes && typeof chatsRes === "object" && Array.isArray(chatsRes.chats) ? chatsRes.chats : [];
   const routine = homeRoutineChatIds(routinesRes);
-  return list.filter((c) => c && typeof c === "object" && typeof c.id === "string" && c.profile_id === profileId && !c.problem && !routine.has(c.id))
+  // a chat the server labels with a routine's title is that routine's own run (the server reads it from the whole record, so it holds for a deleted routine
+  // or a run older than the last ten that GET /api/routines lists): it is never "the chat with" the employee
+  return list.filter((c) => c && typeof c === "object" && typeof c.id === "string" && c.profile_id === profileId && !c.problem && !routine.has(c.id)
+    && typeof c.routine_title !== "string")
     .sort((a, b) => (Number(b.last_at) || 0) - (Number(a.last_at) || 0));
 }
 // The employee who is the CEO: the first CEO the person made (config first_ceo_id) when that card is there, else the first card whose position is CEO.
@@ -2479,6 +2486,11 @@ async function openChatWith(profileId, opts = {}) {
   };
   if (card && card.can_chat === false) { prepare(); return { ok: false, sent: false, kept: false, error: null, chatId: "", reason: card.reason || "" }; }
   let chat = homeChatsOf(chatsRes, routinesRes, profileId)[0] || null;
+  // The AI tool of this employee cannot chat yet (not checked for chat, held back by an administrator's policy, not logged in...): a new chat would be
+  // opened for nothing and a send would be refused, so the person goes to the page that says why, and the words wait under the employee's id.
+  // Reading a chat that is already there (no words to send) is still allowed.
+  const prep = card ? chatPrepState(card, chatsRes) : null;
+  if (prep && prep.kind !== "start" && (!chat || text.trim())) { prepare(); return { ok: false, sent: false, kept: false, error: null, chatId: "", reason: prep.reason }; }
   if (!chat) {
     try {
       const r = await api.post("/api/chats", { profile_id: profileId });
@@ -2693,9 +2705,10 @@ function homeAsk(state) {
       el("a", { class: "btn primary", href: "#/ceo", "data-home": "ask-ceo" }, "建立 CEO"));
   }
   const card = homeCardOf(state.chats, ceo.id);
-  if (card && card.can_chat === false) {
+  const prep = card ? chatPrepState(card, state.chats) : null;
+  if (prep && prep.kind !== "start") {         // cannot chat yet (card off, tool not checked for chat, policy...): one reason and one way to the page that prepares it
     return el("section", { class: "section home-block", "data-home": "ask" }, head,
-      el("p", null, `${ceo.name || "CEO"} 現在還不能聊天：${plainWords(card.reason || "").text || "原因不明"}`),
+      el("p", null, `${ceo.name || "CEO"} 現在還不能聊天：${plainWords(prep.reason || "").text || "原因不明"}`),
       el("a", { class: "btn primary", href: `#/chat?profile=${encodeURIComponent(ceo.id)}`, "data-home": "ask-prepare" }, "先把聊天準備好"));
   }
   const talked = state.chats && Array.isArray(state.chats.chats) ? state.chats.chats.some((c) => c && c.turns > 0 && !c.problem) : false;
@@ -2729,16 +2742,37 @@ function homeAsk(state) {
 }
 
 // ---- the three steps of a person with no employee ----
-function homeFirstSteps(toolsRes) {
+// What the chat support (GET /api/chats' `support`) says of each AI tool that can chat: [{ id, name, state, ready }], or null when it was not read.
+// A tool can be installed and logged in and still not be able to chat (not checked for chat yet, held back by an administrator's policy), so
+// "ready" for a chat is this and not the tool's own readiness.
+function chatSupportGlance(data) {
+  const sup = data && typeof data === "object" && data.support && typeof data.support === "object" ? data.support : null;
+  if (!sup) return null;
+  const sub = (x) => (x && typeof x === "object" && typeof x.state === "string" ? x.state : "");
+  return [["claude", "Claude Code", sub(sup), "verified"], ["codex", "Codex", sub(sup.codex), "ready"], ["agy", "AGY", sub(sup.agy), "ready"]]
+    .map(([id, name, state, good]) => ({ id, name, state, ready: state === good }));
+}
+// The line of step 1: whether a chat can start with the tools there are, in plain words. -> { done, line }
+function homeToolStep(toolReady, rows, glance) {
+  const unread = rows ? "還沒有就緒的 AI 工具。" : "讀不到 AI 工具的狀態。";
+  if (!glance) return { done: false, line: toolReady ? "AI 工具已就緒，但讀不到聊天的狀態。" : unread };
+  if (glance.some((g) => g.ready)) return { done: true, line: "已經有可以聊天的 AI 工具就緒了。" };
+  const held = glance.find((g) => g.state === "policy");
+  if (held) return { done: false, line: `這台電腦的 ${held.name} 有管理員設定，VBear 不能用它聊天。` };
+  if (glance.some((g) => g.state === "unverified")) return { done: false, line: "AI 工具已就緒，第一次聊天前要先做一次安全檢查（建立 CEO 後會帶你做）。" };
+  return { done: false, line: toolReady ? "AI 工具已就緒，但聊天現在還不能用，到「看 AI 工具」看原因。" : unread };
+}
+function homeFirstSteps(toolsRes, chatsRes) {
   const rows = toolsRes && typeof toolsRes === "object" && Array.isArray(toolsRes.tools) ? toolsRes.tools : null;
   const ready = !!rows && rows.some((t) => t && ["claude", "codex", "agy"].includes(t.id) && t.ready === true);
+  const toolStep = homeToolStep(ready, rows, chatSupportGlance(chatsRes));
   const step = (n, cls, title, line, action) => el("li", { class: `home-step ${cls}`, "data-home-step": String(n) },
     el("span", { class: "home-step-mark", "aria-hidden": "true" }, cls.includes("done") ? "✓" : String(n)),
     el("div", { class: "home-step-body" }, el("strong", null, title), el("span", { class: "small muted" }, line)), action || null);
   return el("section", { class: "section home-block", "data-home": "first-steps" },
     el("h2", null, "歡迎！三步就能開始。"),
     el("ol", { class: "home-steps" },
-      step(1, ready ? "done" : "", "準備 AI 工具", ready ? "已經有可以聊天的 AI 工具就緒了。" : rows ? "還沒有就緒的 AI 工具。" : "讀不到 AI 工具的狀態。",
+      step(1, toolStep.done ? "done" : "", "準備 AI 工具", toolStep.line,
         el("a", { class: "btn small", href: "#/setup" }, "看 AI 工具")),
       step(2, "", "建立 CEO", "他會先問你幾個問題，再幫你整理計畫。", el("a", { class: "btn small primary", href: "#/ceo" }, "建立 CEO")),
       step(3, "off", "說第一句話", "建立 CEO 之後就能說。", null)));
@@ -7278,6 +7312,13 @@ function autonomyDialogBody(item, limits, never) {
     el("ul", { class: "small" }, never.map((t) => el("li", null, t))));
 }
 
+// The items that cannot be turned on yet are not listed above, so the line about them does not count them ("item 4"): the server's own sentence
+// (data.later_note) counted the items of its table, not the ones in the page, and read as if one of four listed items was missing.
+const AUTONOMY_LATER_TEXT = "還有一項（讓員工不必每次問）之後的版本才會加入；現在每個指令、每個檔案修改都照舊先問你。";
+function autonomyLaterNote(data) {
+  if (typeof data.later_note !== "string" || !data.items.some((item) => item && item.active !== true)) return null;
+  return el("p", { class: "small muted", "data-autonomy": "later" }, AUTONOMY_LATER_TEXT);
+}
 function autonomySettings(data) {
   const box = el("section", { class: "panel pad", "data-settings": "autonomy" }, el("h2", { style: "margin-bottom:6px" }, "自己動手"));
   const actionsLink = () => el("p", { class: "small" }, el("a", { href: "#/actions", "data-autonomy": "actions-link" }, "看「AI 自己做了什麼」"), "：幕僚長和分配工作做過的每一件事，誰決定的，都列在那裡。");
@@ -7314,7 +7355,7 @@ function autonomySettings(data) {
   append(box, el("p", { class: "small muted" }, AUTONOMY_NOTE),
     data.items.filter((item) => item.active === true && typeof item.key === "string").map(row),
     el("p", { class: "small", "data-autonomy": "never" }, "就算全部勾了，也永遠不會做：", never.join("")),
-    typeof data.later_note === "string" ? el("p", { class: "small muted", "data-autonomy": "later" }, data.later_note) : null,
+    autonomyLaterNote(data),
     actionsLink());
   return box;
 }
@@ -13861,6 +13902,18 @@ function ceoStepWanted(plan) {
 // page with the card chosen, which says why.
 async function ceoOpenChat(profileId, opening, reuseId) {
   let chatId = reuseId || "";
+  // The AI tool must be able to chat before the conversation is opened: when it is not (not checked for chat yet, held back by an administrator's policy,
+  // not logged in), the person goes to the page that says why and has one action, and the opening waits under the employee's id.
+  // A read that fails does not block: the old way (open, and go to that page if the server refuses) then applies.
+  try {
+    const data = await api.get("/api/chats");
+    const prep = chatPrepState(homeCardOf(data, profileId), data);
+    if (prep && prep.kind !== "start") {
+      if (opening) ceoDrafts.set(profileId, opening);
+      location.hash = `#/chat?profile=${encodeURIComponent(profileId)}`;
+      return false;
+    }
+  } catch (_) { /* the old way */ }
   if (!chatId) {
     try {
       const r = await api.post("/api/chats", { profile_id: profileId });
@@ -13879,6 +13932,7 @@ async function ceoOpenChat(profileId, opening, reuseId) {
 async function viewCeo() {
   const token = seq;
   const plan = await ceoPlan();
+  const chatsRes = plan && plan.needed === true ? await api.get("/api/chats").catch(() => null) : null;       // only to say whether a chat can start with the tool
   const main = claim(token);
   if (token !== seq) return;
   const head = el("h1", null, CEO_TITLE);
@@ -13915,7 +13969,11 @@ async function viewCeo() {
       busy = false; go.disabled = false;
     }
   });
-  const toolLine = el("p", { "data-ceo": "tool" }, el("strong", null, "用哪個 AI 工具："), `${plan.tool_name || plan.tool}（已就緒）`);
+  const glance = chatSupportGlance(chatsRes);
+  const mine = glance ? glance.find((g) => g.id === plan.tool) : null;
+  const toolState = !mine ? "（聊天的狀態讀不到）" : mine.ready ? "（已就緒）" : mine.state === "policy" ? "（這台電腦有管理員設定，VBear 不能用它聊天）"
+    : mine.state === "unverified" ? "（第一次聊天前要先做一次安全檢查，建立後會帶你做）" : "（聊天現在還不能用，建立後會告訴你原因）";
+  const toolLine = el("p", { "data-ceo": "tool" }, el("strong", null, "用哪個 AI 工具："), `${plan.tool_name || plan.tool}${toolState}`);
   setKids(main, head, el("p", { class: "lede" }, CEO_LEDE),
     el("section", { class: "panel pad ceo-form", "data-ceo": "form" },
       el("label", { class: "ceo-field" }, el("span", null, "名字"), name),
@@ -13939,6 +13997,8 @@ async function viewCeo() {
 // a message is sent by the send button, and a tool that asks is run only after the person presses 「允許這一次」 or 「改內容再允許」
 // on its card. A card can be answered once, within 5 minutes; the server checks the one-use token and judges the call again.
 
+// The codes with which the server refuses a send because the AI tool cannot chat (the chat page then says why and leads to the page that prepares it).
+const CHAT_NOT_READY_CODES = ["unverified", "admin_policy", "not_logged_in", "claude_version", "codex_version", "agy_version", "unsupported_version", "invalid_binary"];
 const CHAT_PAGE_MAX = 12;           // pages of 200 records read when a chat is opened (a chat longer than that shows its end)
 const CHAT_POLL_MS = 1500;          // polling, when the live stream cannot be used
 const CHAT_INTRO_KEY = "vbear-chat-intro-seen";
@@ -14351,6 +14411,9 @@ function chatPrepState(card, data) {
   const word = cardHas(words, state) ? words[state][0] : "狀態不明";
   const version = part && typeof part.version === "string" && part.version ? part.version : part && typeof part.detected === "string" && part.detected ? part.detected : "";
   if (state === (engine === "claude-chat" || !engine ? "verified" : "ready")) return { kind: "start", label: "開始聊天", reason: `${name}準備好了，可以開始聊天。` };
+  if (state === "policy") {            // not something to verify: the administrator's settings on this computer hold the tool back
+    return linkSetup("到 AI 工具看看", `這台電腦的 ${tool} 有管理員設定，VBear 不能用它聊天。可以到「AI 工具」看看有沒有別的工具能用。`);
+  }
   const why = `${tool} ${word}，先處理這一步才能和 ${name} 聊天。`;
   if (state === "unverified") {
     if (engine === "agy-chat") return { kind: "verify", label: "驗證聊天", reason: why, verify: { engine: "agy", version, title: "驗證 AGY 的聊天", cost: CHAT_AGY_VERIFY_COST } };
@@ -14878,10 +14941,27 @@ async function viewChatDetail(token, id) {
     } catch (e) {
       // The day's limit stopped it (nothing was sent, nothing was spent): said in plain words with the way to the settings; the words stay in the box.
       if (e.code === "red" || e.code === "budget" || plainWords(e).limit) setKids(limitBox, limitReachedNotice(e.message));
+      else if (CHAT_NOT_READY_CODES.includes(e.code)) await notReadyNote(e);
       else { noteText = e.message; toast(e.message); }
       if (e.code === "shared_unverified") { sharedUnverified = true; drawShared(); }
     }
     busy = false; if (token === seq) draw();
+  }
+  // The server refused the send because this AI tool cannot chat (not checked for chat, an administrator's policy, not logged in...): the real reason is
+  // read from the chat support now (the server's sentence may name only the first thing it found), said in plain words with one way to the page that
+  // prepares it; the server's own sentence is kept whole behind 「技術細節」, and the words stay in the box.
+  async function notReadyNote(e) {
+    const pid = (view.card && typeof view.card.id === "string" && view.card.id) || (view.chat && view.chat.profile_id) || "";
+    let reason = plainWords(e);
+    const data = pid ? await api.get("/api/chats").catch(() => null) : null;
+    const st = data ? chatPrepState(homeCardOf(data, pid), data) : null;
+    const text = st && st.kind !== "start" ? st.reason : reason.text + reason.next;
+    const raw = typeof e.message === "string" ? e.message.trim() : "";
+    const node = noticeBox("warn", [text,
+      pid ? el("p", { style: "margin:8px 0 0" }, el("a", { class: "btn small", href: `#/chat?profile=${encodeURIComponent(pid)}`, "data-chat": "prep-go" }, "到準備頁")) : null,
+      raw ? plainTechFold(raw) : null]);
+    node.setAttribute("data-chat", "not-ready");
+    setKids(limitBox, node);
   }
   async function stop() {
     try { await api.post(`/api/chats/${encodeURIComponent(id)}/stop`, {}); await pollOnce(); }
@@ -20133,7 +20213,7 @@ function openTemplatesPreview(ctx) {
     const box = el("input", { type: "checkbox", "data-tpl-confirm": "yes", on: { change: (e) => { state.confirm = e.target.checked; ask(); } } });
     box.checked = state.confirm === true;
     return el("div", { class: "tpl-warn", "data-templates": "warn" },
-      notice("warn", Object.values(p.warn_text || {}).join(" ")),
+      tplServerNotice("warn", Object.values(p.warn_text || {}).join(" "), p),
       el("ul", { class: "small" }, p.warn_items.map((w) => el("li", { "data-tpl-warn": w.kind },
         `${w.kind === "card" ? "員工" : w.kind === "skill" ? "常用做法" : "定時工作"}：${itemName(w.kind, w.from)}`))),
       el("label", null, box, " 我確定"));
@@ -20151,7 +20231,7 @@ function openTemplatesPreview(ctx) {
       return;
     }
     const kids = [toolRow()];
-    if (state.error) kids.push(notice("bad", state.error));
+    if (state.error) kids.push(tplServerNotice("bad", state.error, p));
     if (p) {
       kids.push(
         el("p", { "data-templates": "summary" }, `這次會建：${p.cards.length} 位員工、${p.skills.length} 個常用做法、${p.routines.length} 件定時工作。`),
@@ -20160,9 +20240,9 @@ function openTemplatesPreview(ctx) {
           p.skills.map((s) => el("li", { "data-tpl-preview": "skill" }, s.name)))) : null,
         p.routines.length ? el("div", null, el("h3", null, "定時工作"), el("ul", { class: "tpl-list", "data-templates": "preview-routines" }, p.routines.map(routineLine))) : null,
         el("p", { class: "small", "data-templates": "after" }, afterLine(p.after)),
-        p.problems.filter((x) => x.code !== "confirm_warning").map((x) => notice("bad", x.text)),
+        p.problems.filter((x) => x.code !== "confirm_warning").map((x) => tplServerNotice("bad", x, p)),
         p.warn_items.length ? warnBox(p) : null,
-        p.notes.map((n) => el("p", { class: "small muted", "data-tpl-preview": "note" }, n.text)));
+        p.notes.map((n) => el("p", { class: "small muted", "data-tpl-preview": "note" }, tplWords(n.text))));
     } else if (!state.error) kids.push(el("p", { class: "small muted" }, "整理中…"));
     const lines = [TPL_PREVIEW_LINES.safe, TPL_PREVIEW_LINES.memory, TPL_PREVIEW_LINES.off, TPL_PREVIEW_LINES.free];
     if (state.tool === "codex") lines.push(TPL_PREVIEW_LINES.codex);
@@ -20179,6 +20259,24 @@ function openTemplatesPreview(ctx) {
   draw();
   ask();
   return { close, state };
+}
+
+// The sentences the server writes for a team template's preview still say 角色卡, 技能, 例行工作 and 安全模式 (its Python words are not changed).
+// The page says them in its own words (the same sentence, other nouns) and keeps the server's sentence whole behind 「技術細節」. A counting
+// sentence (template_full) is built from the counts of the preview, since 張 and 個 do not fit 員工.
+const TPL_SWAPS = [[/角色卡/g, "員工"], [/例行工作/g, "定時工作"], [/技能/g, "常用做法"], [/安全模式/g, "每件事先問我"]];
+const TPL_KIND_WORDS = { cards: ["員工", "位"], skills: ["常用做法", "個"], routines: ["定時工作", "件"] };
+function tplWords(raw) { return TPL_SWAPS.reduce((t, [re, to]) => t.replace(re, to), String(raw)); }
+function tplServerNotice(kind, x, preview) {
+  const raw = typeof x === "string" ? x : x && typeof x.text === "string" ? x.text : "";
+  if (!raw) return null;
+  let text = tplWords(raw);
+  if (x && x.code === "template_full" && cardHas(TPL_KIND_WORDS, x.kind) && preview && preview.after && preview.after[x.kind] && Number.isFinite(x.over)) {
+    const a = preview.after[x.kind];
+    const [word, unit] = TPL_KIND_WORDS[x.kind];
+    text = `${word}會超過 ${a.max} ${unit}：你現在有 ${a.now} ${unit}，這次要加 ${a.add} ${unit}，請少勾 ${x.over} ${unit}。`;
+  }
+  return text === raw ? noticeBox(kind, raw) : noticeBox(kind, [text, plainTechFold(raw)]);
 }
 
 async function viewTemplates() {

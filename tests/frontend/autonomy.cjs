@@ -105,7 +105,8 @@ test("the one item that is not here (4) is one sentence and no tick box, and its
   setServer();
   const main = await open();
   const t = text(section(main));
-  assert(t.includes(LATER), t);
+  assert(t.includes("還有一項（讓員工不必每次問）之後的版本才會加入"), t);
+  assert(!/第 4 項/.test(t), "it does not count an item the page does not list: " + t);
   assert(!t.includes(ITEMS[3].title), "not listed: " + ITEMS[3].title);
   assert.strictEqual(boxes(main).length, 4);
 });
