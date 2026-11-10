@@ -294,6 +294,26 @@ test("「開始使用」 on the start-up page leads to the step when there is no
   assert.strictEqual(global.location.hash, "#/", "a plan that cannot be read never traps the person");
 });
 
+test("P48-3: the AI the person picked is not ready (another one is): 「下一步：建立 CEO」 still opens the step, which says why and offers nothing to make", async () => {
+  const REASON = "你選的 Codex 還沒準備好，回開始設定把它準備好，或換一家。";
+  setPage({ config: { setup_done: false }, plan: plan({ can_create: false, go: "setup", tool: null, tool_name: null, reason: REASON }) });
+  global.localStorage.setItem("vbear-setup-pick", "codex");
+  let main = await open("#/setup");
+  await click(byAttr(main, "data-setup", "leave"));
+  assert(FETCH_LOG.some((c) => c.url === "/api/first-ceo?tool=codex"), "the plan was asked for the picked AI");
+  assert.strictEqual(global.location.hash, "#/ceo", "not the home page: the person is told why");
+  main = await open("#/ceo");
+  assert(text(main).includes(REASON));
+  assert.strictEqual(ceo(main, "create"), null, "nothing can be made on another AI");
+  assert.strictEqual(attr(ceo(main, "setup-go"), "href"), "#/setup");
+  global.localStorage._store = {};
+  // a person who has a card to chat with is still sent to the home page, and so is a plan that could not be read
+  setPage({ config: { setup_done: false }, plan: plan({ needed: false, can_create: false, tool: null }) });
+  main = await open("#/setup");
+  await click(byAttr(main, "data-setup", "leave"));
+  assert.strictEqual(global.location.hash, "#/");
+});
+
 // ---- the lobby ---------------------------------------------------------------------------------------------------
 
 // P47-2: the lobby's two doors (make a CEO / chat with the CEO that was made, once) are replaced by the new home page: the three steps for a person

@@ -14135,7 +14135,7 @@ async function viewSetup() {
     const leave = el("button", { class: "btn primary", type: "button", "data-setup": "leave", disabled: !canLeave }, SETUP_LEAVE_LABEL);
     leave.addEventListener("click", () => run(leave, async () => {
       if (shown.setup_done !== true) await api.post("/api/config", { setup_done: true });
-      location.hash = ceoStepWanted(await ceoPlan()) ? "#/ceo" : "#/";          // P38-8: no card to chat with yet: make the first CEO
+      location.hash = ceoStepShown(await ceoPlan()) ? "#/ceo" : "#/";          // P38-8: no card to chat with yet: make the first CEO (P48-3: also when the picked AI is not ready, so the page says why)
     }));
     const recheck = el("button", { class: "btn", type: "button", "data-setup": "recheck" }, "重新檢查");
     recheck.addEventListener("click", () => run(recheck, () => refresh(false, true)));
@@ -14208,12 +14208,17 @@ function ceoPickedTool() {
 async function ceoPlan() {
   try {
     const pick = ceoPickedTool();
-    const r = await api.get("/api/first-ceo" + (pick ? "?tool=" + pick : ""));       // a query on the same path: the list of paths the page uses (15b) is unchanged
+    const r = await api.get(pick ? `/api/first-ceo?tool=${encodeURIComponent(pick)}` : "/api/first-ceo");       // the same path with the pick as a query (ADR 0014; 15b lists it)
     return r && typeof r === "object" ? r : null;
   } catch (_) { return null; }
 }
 // The step is for a person who has no card to chat with and a ready tool to make one on; anything the server did not say
 // plainly counts as "not needed".
+// P48-3: the step's page is opened for anyone who still has no card to chat with, also when the AI they picked is not ready (the page then says why
+// and offers nothing to make); a plan that could not be read leaves the person on the home page.
+function ceoStepShown(plan) {
+  return !!plan && plan.needed === true;
+}
 function ceoStepWanted(plan) {
   return !!plan && plan.needed === true && plan.can_create === true && typeof plan.tool === "string" && plan.tool !== "";
 }
@@ -21113,6 +21118,7 @@ if (typeof module !== "undefined" && module.exports) {
     viewChat,
     viewCeo,
     ceoStepWanted,
+    ceoStepShown,
     ceoPlanShaped,
     chatPrepState,
     ceoDrafts,

@@ -2334,7 +2334,7 @@ V0200_APP_API_PREFIXES = frozenset({
     "/api/actions", "/api/agent-builder/catalog", "/api/agent-builder/intent-check?", "/api/agent-profiles",
     "/api/agent-profiles/", "/api/annotations", "/api/armory", "/api/auth", "/api/chat-support/verify", "/api/chats",
     "/api/chats/", "/api/chief", "/api/chief/", "/api/chief/preview?chat_id=", "/api/config", "/api/dispatch",
-    "/api/dispatch/", "/api/first-ceo", "/api/flows", "/api/flows/", "/api/flows/storage", "/api/folders/inspect?path=",
+    "/api/dispatch/", "/api/first-ceo", "/api/first-ceo?tool=", "/api/flows", "/api/flows/", "/api/flows/storage", "/api/folders/inspect?path=",
     "/api/governance", "/api/groups", "/api/groups/", "/api/live", "/api/meetings", "/api/meetings/", "/api/meetings/ledger",
     "/api/meetings/preview", "/api/meetings/verify", "/api/memory", "/api/memory/", "/api/memory/cards", "/api/memory/clear",
     "/api/memory/export", "/api/memory/suggest", "/api/memory/suggest/", "/api/memory/suggest/preview", "/api/my-skills",
@@ -2440,6 +2440,10 @@ class NothingNewIsAsked(unittest.TestCase):
         new_path = 'api.get("/api/spending");\nconst x = `/api/chats/${id}/summary`;\n'
         self.assertEqual(app_api_prefixes(new_path) - V0200_APP_API_PREFIXES, {"/api/spending"}, "a new path is caught; a longer one under a known prefix is the same prefix")
         self.assertEqual(app_api_prefixes('api.get("/api/chats/" + id)') - V0200_APP_API_PREFIXES, set())
+        # P48-3: the one query on a known path that ADR 0014 approves is listed; any other new query, or a new path, is still caught
+        self.assertEqual(app_api_prefixes("api.get(`/api/first-ceo?tool=${pick}`)") - V0200_APP_API_PREFIXES, set())
+        self.assertEqual(app_api_prefixes("api.get(`/api/first-ceo?name=${x}`)") - V0200_APP_API_PREFIXES, {"/api/first-ceo?name="})
+        self.assertEqual(app_api_prefixes('api.get("/api/first-ceo-other")') - V0200_APP_API_PREFIXES, {"/api/first-ceo-other"})
         route = 'if path == "/api/spending":\n    return 1\nif path.startswith("/api/chats/"):\n    return 2\n'
         self.assertEqual(server_routes(route) - V0200_SERVER_ROUTES, {"/api/spending"})
         kinds = dict(CHAT_KINDS_V0200)
