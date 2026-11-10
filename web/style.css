@@ -276,7 +276,7 @@ details.fold > .fold-body { padding: 0 14px 14px; }
 .term-history-notice { flex-basis: 100%; overflow-wrap: anywhere; }
 .switch { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
 .switch:first-child { border-top: 0; }
-.switch input { margin-top: 4px; width: 17px; height: 17px; accent-color: var(--accent); }
+.switch input { margin-top: 4px; accent-color: var(--accent); }
 .switch .t { font-weight: 600; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .spacer { flex: 1; }
@@ -1933,3 +1933,9 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .btn[hidden] { display: none; }
 .home-ask-row textarea, input[data-limit-input] { padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); font: inherit; resize: vertical; }
 input[data-limit-input] { width: 100%; box-sizing: border-box; resize: none; }
+
+/* P48-6: one size for every tick box (also inside .switch); the team-template preview's name box looks like the other boxes; the dialog's bottom bar
+   stays in view when the dialog scrolls. */
+input[type="checkbox"] { width: 18px; height: 18px; flex: none; accent-color: var(--accent); }
+.modal-box .input, .tpl-list .input { padding: 6px 9px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel); color: var(--ink); font: inherit; max-width: 100%; box-sizing: border-box; }
+.modal-box [data-templates="preview-foot"] { position: sticky; bottom: 0; background: var(--panel); padding-block: 10px; margin-top: 0; z-index: 1; }
