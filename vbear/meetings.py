@@ -604,6 +604,9 @@ def delete(meeting_id: str) -> None:
         with store.locked():
             if not store.path().exists():
                 raise MeetingError("not_found")
+            rec = store.load()
+            from . import spend_keep
+            spend_keep.keep(rec, per_call_limit, "meeting")
             store.path().unlink()
     except StoreError as exc:
         raise MeetingError("storage", str(exc)) from None

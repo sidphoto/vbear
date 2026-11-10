@@ -1224,6 +1224,9 @@ def delete(staffing_id: str) -> None:
         with store.locked():
             if not store.path().exists():
                 raise StaffingError("not_found")
+            rec = store.load()
+            from . import spend_keep
+            spend_keep.keep(rec, per_call_of, "staffing")
             store.path().unlink()
     except StoreError as exc:
         raise StaffingError("storage", str(exc)) from None

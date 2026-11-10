@@ -288,6 +288,8 @@ class StoreTests(Isolated):
 
     def test_delete_removes_the_file_only(self):
         rec = record()
+        for turn in rec["turns"]:
+            turn["state"] = "cancelled"
         store = mt.MeetingStore(rec["id"])
         with store.locked():
             store.save(rec)

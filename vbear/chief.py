@@ -632,6 +632,9 @@ def delete(chief_id: str) -> None:
         with store.locked():
             if not store.path().exists():
                 raise ChiefError("not_found")
+            rec = store.load()
+            from . import spend_keep
+            spend_keep.keep(rec, per_call_of, "chief")
             store.path().unlink()
     except StoreError as exc:
         raise ChiefError("storage", str(exc)) from None
@@ -667,7 +670,8 @@ def spend_kind():
         except mt.MeetingError as exc:
             raise unknown(exc) from None
 
-    return ids, load_one, per_call_of
+    from . import spend_keep
+    return spend_keep.with_kept((ids, load_one, per_call_of), {"meeting", "staffing", "chief"})
 
 
 def status_of(rec: dict) -> str:
