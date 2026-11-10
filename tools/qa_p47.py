@@ -749,14 +749,38 @@ class Console:
         # on its own thread over a connection this call holds. When the time is over the connection is shut and closed, which ends the
         # thread's read at once; the thread is then waited for (briefly) so nothing is left reading.
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
-        held = []                                           # the socket itself: an answer with "Connection: close" takes it from conn.sock
-        plain_connect = conn.connect
+        # The socket is made and registered before it connects, under a lock shared with the cancel below: a cancel either finds it and
+        # closes it (its connect, request or read then fails at once), or comes first and the socket is never made. Nothing can connect
+        # after the time is over, and an answer with "Connection: close" taking the socket from conn.sock does not hide it.
+        lock, held, cancelled = threading.Lock(), [], [False]
+        port = self.port
 
         def connect():
-            plain_connect()
-            held.append(conn.sock)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            with lock:
+                if cancelled[0]:
+                    sock.close()
+                    raise OSError("the time left is over")
+                held.append(sock)
+            sock.connect(("127.0.0.1", port))
+            conn.sock = sock
         conn.connect = connect
         box = []
+
+        def shut_all():
+            with lock:
+                cancelled[0] = True
+                socks = list(held)
+            for sock in socks:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                try:
+                    sock.close()
+                except OSError:
+                    pass
 
         def run():
             try:
@@ -770,24 +794,19 @@ class Console:
                 box.append((resp.status, data))
             except Exception:                               # a read cut short by the closing below ends here, whatever it raised
                 box.append((0, None))
+            finally:
+                shut_all()                                  # the worker always lets its socket go, answered or not
+                conn.close()
         worker = threading.Thread(target=run, daemon=True)
         worker.start()
         try:
             worker.join(max(0.0, self.budget()))
         finally:
             late = worker.is_alive()
-            if late:
-                for sock in held + ([conn.sock] if conn.sock is not None else []):
-                    try:
-                        sock.shutdown(socket.SHUT_RDWR)
-                    except OSError:
-                        pass
-                    try:
-                        sock.close()
-                    except OSError:
-                        pass
+            shut_all()                                      # past the time left (or done): no socket stays open, none can be opened
             conn.close()
             worker.join(1.0)                                # the read was cut: the thread ends at once
+            del conn.connect                                # no reference loop keeps the connection alive
         if late or not box or self.budget() <= 0:
             return 0, None
         return box[0]

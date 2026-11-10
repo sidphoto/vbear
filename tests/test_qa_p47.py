@@ -995,8 +995,8 @@ class RunTests(unittest.TestCase):
             def connect(inner):
                 pass
 
-            def request(inner, *a, **k):
-                inner.connect()
+            def request(inner, *a, **k):                   # no network: the call's own connect (set on it) is not reached
+                pass
 
             def getresponse(inner):
                 return Reply()
@@ -1116,6 +1116,58 @@ class RunTests(unittest.TestCase):
             finally:
                 srv.close()
                 t.join(3.0)
+
+    def test_a_connect_that_finishes_after_the_time_left_sends_nothing_and_leaves_no_socket_open(self):
+        # R7: the deadline can fall while the connection is being made; the socket must still be closed and no request may go out.
+        import socket
+        import time as _time
+        import unittest.mock as mock
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        srv.settimeout(3.0)
+        port = srv.getsockname()[1]
+        got = []
+
+        def serve():
+            try:
+                conn, _ = srv.accept()
+            except OSError:
+                return
+            try:
+                conn.settimeout(1.0)
+                got.append(conn.recv(65536))
+            except OSError:
+                pass
+            finally:
+                conn.close()
+        t = threading.Thread(target=serve, daemon=True)
+        t.start()
+        made = []
+        real = socket.socket
+
+        class SlowConnect(real):
+            def connect(inner, addr):
+                made.append(inner)
+                _time.sleep(0.3)                            # the deadline (0.1 s) falls while the connection is being made
+                return super().connect(addr)
+        try:
+            console = qa.Console(port, "t", timeout=5.0)
+            end = _time.monotonic() + 0.1
+            console.budget = lambda: end - _time.monotonic()
+            with mock.patch.object(qa.socket, "socket", SlowConnect):
+                began = _time.monotonic()
+                code, data = console.call("/api/x")
+                took = _time.monotonic() - began
+            self.assertEqual((code, data), (0, None))
+            self.assertLess(took, 1.5)
+            self.assertTrue(made, "the socket was made")
+            self.assertTrue(all(sock.fileno() == -1 for sock in made), "every socket of the call is closed when it returns")
+            t.join(2.0)
+            self.assertFalse(any(g for g in got), "no request went out after the time left")
+        finally:
+            srv.close()
+            t.join(3.0)
 
     def test_a_probe_that_answers_after_the_deadline_is_not_taken(self):
         b = qa.Browser.__new__(qa.Browser)
