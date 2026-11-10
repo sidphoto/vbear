@@ -2453,5 +2453,93 @@ class NothingNewIsAsked(unittest.TestCase):
         self.assertNotEqual(chat_record_shape(fewer, {}, {})["kinds"], base["kinds"], "a new field of a kind is caught")
 
 
+
+class DeletingNeverLowersTheDay(unittest.TestCase):
+    """16f: deletion cannot erase the day's bill, including future spend kinds."""
+
+    def test_16f_each_deletable_kind_keeps_its_cost(self):
+        from tests import test_p48_spend_keep as fixtures
+        case = fixtures.SpendKeepTests()
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        for mod, store in fixtures.CASES:
+            with self.subTest(kind=mod.__name__):
+                case.assert_kept(mod, store)
+        from vbear.runtime import chat_store as cs
+        chat = cs.create(case.base, 'fictional', now=case.now)
+        log = cs.ChatLog(case.base, chat['id'])
+        try:
+            log.append('turn_started', {'turn': 1, 'cap_usd': '0.1'}, now=case.now)
+            log.append('turn_ended', {'turn': 1, 'cost_usd': '0.02', 'reported': True, 'total_usd': None,
+                                    'reason': 'result', 'subtype': None, 'is_error': False}, now=case.now)
+        finally:
+            log.close()
+        before = case.runner._day()
+        cs.delete(case.base, chat['id'], now=case.now)
+        self.assertGreaterEqual(case.runner._day(), before)
+
+    def test_16f_bad_evidence_and_running_records_fail_closed(self):
+        from tests import test_p48_spend_keep as fixtures
+        for method in ('test_bad_tombstone_makes_day_unknown_and_blocks_spending',
+                       'test_queued_and_running_cannot_be_deleted'):
+            case = fixtures.SpendKeepTests()
+            case.setUp()
+            try:
+                getattr(case, method)()
+            finally:
+                case.doCleanups()
+
+    def test_16f_table_covers_every_spend_kind_with_delete(self):
+        import inspect
+        import sys
+        from tests import test_p48_spend_keep as fixtures
+        from vbear.meeting_runner import MeetingRunner
+        seen = set()
+
+        def modules(fn):
+            if inspect.ismodule(fn):
+                return {fn.__name__}
+            if inspect.ismethod(fn):
+                fn = fn.__func__
+            if not inspect.isfunction(fn) or id(fn) in seen:
+                return set()
+            seen.add(id(fn))
+            result = {fn.__module__}
+            for name in fn.__code__.co_names:
+                value = fn.__globals__.get(name)
+                if inspect.ismodule(value):
+                    result |= modules(value)
+            for cell in fn.__closure__ or ():
+                result |= modules(cell.cell_contents)
+            return result
+
+        def deletable(kinds):
+            return {name for kind in kinds for fn in kind for name in modules(fn)
+                    if hasattr(sys.modules.get(name), 'delete')}
+
+        from vbear.runtime import chat_store
+        expected = {mod.__name__ for mod, _ in fixtures.CASES} | {chat_store.__name__}
+        self.assertEqual(deletable(MeetingRunner().spend_kinds()), expected)
+        # A new paid kind with a delete must extend the behavioural table too.
+        import types
+        from unittest import mock
+        fake = types.ModuleType('fictional_paid_kind')
+        exec('def ids(): return []\ndef load(rid): return {}\ndef limit(rec, turn): return 0\ndef delete(rid): pass', fake.__dict__)
+        with mock.patch.dict(sys.modules, {fake.__name__: fake}):
+            seen.clear()
+            self.assertNotEqual(deletable(MeetingRunner().spend_kinds() + [(fake.ids, fake.load, fake.limit)]), expected)
+
+    def test_16f_catches_a_delete_that_forgets_the_cost(self):
+        from tests import test_p48_spend_keep as fixtures
+        from unittest import mock
+        case = fixtures.SpendKeepTests()
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        mod, store = fixtures.CASES[0]
+        # Replace only the retention step with the old broken implementation.
+        with mock.patch('vbear.spend_keep.keep', return_value=None):
+            with self.assertRaises(AssertionError):
+                case.assert_kept(mod, store)
+
 if __name__ == "__main__":
     unittest.main()
