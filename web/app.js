@@ -13256,12 +13256,20 @@ async function refreshWaitingBar(reuse) {
   if (navTop === "home") { bar.hidden = true; setKids(bar); return; }   // P47-2: the home page lists the same things itself, under 等你決定
   // P48-2: the same reads as the home page's list (waitingModel: GETs only, nothing written into D), so the cards of the chats count here too
   // and the title of the page has the number on every page
-  // `reuse` (a move to another page): what was read in the last 25 seconds is drawn again instead of asking the server for everything at every click
-  let m = reuse && waitingLast && Date.now() - waitingLast.at < WAITING_REUSE_MS ? waitingLast.m : null;
-  if (!m) { try { m = await waitingModel(); } catch (_) { m = null; } }
+  // `reuse` (a move to another page): the line's own rows (/api/waiting, one cheap read) are read fresh as before, but the cards of the chats come from what
+  // was read in the last 25 seconds instead of asking the server for everything at every click (the 30-second timer always reads all of it)
+  let m = null;
+  let rows = [];
+  let cards = [];
+  if (reuse && waitingLast && Date.now() - waitingLast.at < WAITING_REUSE_MS) {
+    try { const r = await api.get("/api/waiting"); rows = r && Array.isArray(r.waiting) ? r.waiting : []; } catch (_) { rows = []; }
+    cards = waitingLast.m.rows.filter((r) => r.kind === "chat_card");
+  } else {
+    try { m = await waitingModel(); } catch (_) { m = null; }
+    rows = m && Array.isArray(m.list) ? m.list : [];
+    cards = m ? m.rows.filter((r) => r.kind === "chat_card") : [];
+  }
   if (navTop === "home") { bar.hidden = true; setKids(bar); return; }   // the person went home while it was read
-  const rows = m && Array.isArray(m.list) ? m.list : [];
-  const cards = m ? m.rows.filter((r) => r.kind === "chat_card") : [];
   const text = waitingBarText(rows);
   const resume = resumeBarRows(rows);
   if (!text && !resume.length && !cards.length) { bar.hidden = true; setKids(bar); return; }
