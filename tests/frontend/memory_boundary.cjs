@@ -84,7 +84,7 @@ test("the memory page lists who takes memory along, the company it goes to, and 
   assert.strictEqual(q(codex, "card-switch").checked, false);
   assert(text(grok).includes("這位員工的 AI 工具還不能聊天，用不到記憶"));
   assert(!q(grok, "card-switch"), "no switch for a card that cannot chat");
-  assert(text(q(main, "terminal")).includes("在終端機（完整模式）出發時不帶記憶"));
+  assert(text(q(main, "terminal")).includes("在指令視窗（「完全交給他（有風險）」）開始工作時不帶記憶"));
 });
 
 test("switching a Claude Code card off sends exactly the card and off, and the page is read again", async () => {

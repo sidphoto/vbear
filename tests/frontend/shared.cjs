@@ -91,7 +91,7 @@ test("the fixed sentences under the switches: a new chat is needed, off takes ef
   const main = await open();
   assert(text(q(main, "new-chat-note")).includes("剛打開時，要開新的聊天，員工才會知道有共用資料夾"));
   assert(text(q(main, "off-note")).includes("下一句話") && text(q(main, "off-note")).includes("不會刪掉任何檔案"));
-  assert(text(q(main, "full-note")).includes("終端機（完整模式）") && text(q(main, "full-note")).includes("不另外告訴它有這個資料夾"));
+  assert(text(q(main, "full-note")).includes("指令視窗（「完全交給他（有風險）」）") && text(q(main, "full-note")).includes("不另外告訴它有這個資料夾"));
   assert.strictEqual(q(main, "change-note"), null, "the old long sentence is gone");
 });
 

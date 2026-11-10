@@ -672,7 +672,7 @@ async function test(name, fn) {
     assert.ok(chip(b2.node, "p-rev").getAttribute("title").includes("你建議放「審查」位"), chip(b2.node, "p-rev").getAttribute("title"));
     assert.ok(chip(b2.node, "p-rev").getAttribute("title").includes("獨立審查"));
     const staff = chip(b2.node, "p-shared").getAttribute("title");
-    assert.ok(staff.includes("法務經理") && staff.includes("通常不上任務卡"), staff);
+    assert.ok(staff.includes("法務經理") && staff.includes("通常不上專案"), staff);
   });
 
   await test("P32-2 board: the places keep their keys, names and families (the flow format is not touched)", () => {
@@ -1136,7 +1136,7 @@ async function test(name, fn) {
       byData(dlg(), "data-place-task", "task-1")[0].click();
       const note = byData(dlg(), "data-place", "staff-note")[0];
       assert.ok(note, position);
-      assert.ok(findText(note, position === "pm" ? "這是幕僚卡，通常不上任務卡；沒有 CEO 時可以放規劃位" : "這是幕僚卡，不佔任務卡的位置，通常單獨出發"), position);
+      assert.ok(findText(note, position === "pm" ? "這是幕僚卡，通常不上專案；沒有 CEO 時可以放規劃位" : "這是幕僚卡，不佔專案的位置，通常單獨開始工作"), position);
       assert.strictEqual(walk(dlg()).filter((n) => n.getAttribute && n.getAttribute("data-place-slot") && n.getAttribute("aria-pressed") === "true").length, 0, position);
       assert.strictEqual(act(dlg(), "place").disabled, true, position);
       dlg().dispatch("keydown", { key: "Escape" });

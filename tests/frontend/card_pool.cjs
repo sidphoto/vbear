@@ -380,7 +380,7 @@ async function test(name, fn) {
     const L = pure.cardLight;
     const green = L({ permission_intents: { read: "allow", write: "deny", test: "allow", deploy: "deny" } });
     assert.strictEqual(green.state, "green");
-    assert.strictEqual(green.text, "可以出發（權限意圖都已決定）");
+    assert.strictEqual(green.text, "可以開始工作（權限意圖都已決定）");
     assert.ok(!/安全|已限制/.test(green.text));
     const yellow = L({ permission_intents: { read: "allow", write: "unspecified", test: "deny", deploy: "deny" } });
     assert.strictEqual(yellow.state, "yellow");
@@ -425,7 +425,7 @@ async function test(name, fn) {
     assert.strictEqual(pure.skillCompatible(null, "claude"), false);
     assert.strictEqual(pure.skillIncompatibleNote("codex"), "Codex 不會讀這張卡");
     assert.strictEqual(pure.skillIncompatibleNote("claude"), "Claude Code 不會讀這張卡");
-    assert.strictEqual(pure.skillIncompatibleNote("shared"), "共用角色卡只能插共用的技能卡");
+    assert.strictEqual(pure.skillIncompatibleNote("shared"), "共用員工只能插共用的技能卡");
   });
 
   await test("the pool page: title, header buttons, cards in a grid, sample cards last and labelled 示範", async () => {
@@ -435,7 +435,7 @@ async function test(name, fn) {
       mkProfile("p-2", "Reviewer", "codex", { read: "allow", write: "unspecified", test: "deny", deploy: "deny" }),
     ];
     const ctx = await openPool(profiles);
-    assert.strictEqual(walk(main).find((n) => n.tag === "h1").textContent, "角色卡池");
+    assert.strictEqual(walk(main).find((n) => n.tag === "h1").textContent, "員工詳細資料");
     assert.ok(btnByText(main, "＋ 新角色卡"), "new card button");
     assert.ok(!btnByText(main, "用起手牌組開始"), "the starter deck is for a person with no card of their own");
     const cards = walk(main).filter((n) => n.tag === "article" && n.getAttribute("data-profile-id"));
@@ -444,7 +444,7 @@ async function test(name, fn) {
     assert.ok(cards.every((c) => findText(c, "名冊，不代表正在出勤")));
     assert.ok(!findText(main, "出勤中"), "no attendance is claimed");
     const light = (c) => byData(c, "data-pcard", "light")[0];
-    assert.ok(light(cards[0]).className.includes("rcard-green") && findText(light(cards[0]), "可以出發（權限意圖都已決定）"));
+    assert.ok(light(cards[0]).className.includes("rcard-green") && findText(light(cards[0]), "可以開始工作（權限意圖都已決定）"));
     assert.ok(light(cards[1]).className.includes("rcard-yellow") && findText(light(cards[1]), "還差一步：權限意圖還沒決定"));
     assert.ok(byData(cards[1], "data-pcard", "decide").length === 1 && byData(cards[0], "data-pcard", "decide").length === 0);
     assert.ok(findText(light(cards[0]), "實際能不能出發，以出發通行證為準"), "the green light does not promise a launch");
@@ -536,9 +536,9 @@ async function test(name, fn) {
   await test("wizard: three steps, the controls at the bottom, no step entered without a name", async () => {
     const { d } = await openWizard();
     assert.ok(d, "dialog opened");
-    assert.strictEqual(walk(d).find((n) => n.tag === "h2").textContent, "新角色卡");
+    assert.strictEqual(walk(d).find((n) => n.tag === "h2").textContent, "新增員工");
     const steps = walk(d).filter((n) => n.tag === "button" && n.className.includes("cw-step"));
-    assert.deepStrictEqual(steps.map((s) => s.getAttribute("aria-label")), ["第 1 步，共 3 步：名字與外觀", "第 2 步，共 3 步：陣營與位置", "第 3 步，共 3 步：技能卡"]);
+    assert.deepStrictEqual(steps.map((s) => s.getAttribute("aria-label")), ["第 1 步，共 3 步：名字與外觀", "第 2 步，共 3 步：AI 工具與位置", "第 3 步，共 3 步：技能卡"]);
     assert.strictEqual(steps[0].getAttribute("aria-current"), "step");
     assert.ok(btnByText(d, "取消") && btnByText(d, "下一步") && !btnByText(d, "上一步") && !btnByText(d, "建立"));
     // the footer is its own sibling of the scrolling body, so it stays in view on a phone
@@ -552,7 +552,7 @@ async function test(name, fn) {
     assert.ok(findText(d, "請先替這張卡取個名字"), "jumping ahead without a name is refused too");
     typeName(d, "Alpha");
     btnByText(d, "下一步").dispatch("click");
-    assert.ok(findText(d, "陣營就是這張卡用哪個工具") && btnByText(d, "上一步"));
+    assert.ok(findText(d, "這位員工用哪個 AI 工具") && btnByText(d, "上一步"));
     btnByText(d, "下一步").dispatch("click");
     assert.ok(btnByText(d, "建立") && !btnByText(d, "下一步") && findText(d, "只是記錄"));
     btnByText(d, "上一步").dispatch("click");
@@ -576,14 +576,14 @@ async function test(name, fn) {
     const { d } = await openWizard();
     const input = typeName(d, "Alpha");
     input.dispatch("keydown", { key: "Enter", isComposing: false });
-    assert.ok(findText(d, "陣營就是這張卡用哪個工具"));
+    assert.ok(findText(d, "這位員工用哪個 AI 工具"));
     d.dispatch("keydown", { key: "Escape" });
     assert.ok(!dialog(), "Escape closed it");
   });
 
   await test("wizard: the species picker changes only the look and says so", async () => {
     const { ctx, d } = await openWizard();
-    assert.ok(findText(d, "種族只換外觀，不影響能力。"));
+    assert.ok(findText(d, "外觀只換樣子，不影響能力。"));
     const fox = byData(d, "data-species", "fox")[0];
     fox.dispatch("click");
     assert.strictEqual(byData(dialog(), "data-species", "fox")[0].getAttribute("aria-pressed"), "true");
@@ -621,7 +621,7 @@ async function test(name, fn) {
     assert.ok(chips.includes("讀取檔案・允許") && chips.includes("編輯寫入・允許") && chips.includes("執行測試・允許") && chips.includes("部署上線・拒絕"), chips);
     assert.ok(findText(cur, "不代表 VBear 已經限制這個程式的真實能力"), "the R3 sentence is always beside the intents");
     assert.ok(findText(byData(cur, "data-cw", "launch-note")[0],
-      "目前 VBear 能啟動的只有這一組權限。想讓規劃者或審查者不改檔案，VBear 現在無法強制，請在任務卡的目標裡寫清楚。"));
+      "目前 VBear 能啟動的只有這一組權限。想讓規劃者或審查者不改檔案，VBear 現在無法強制，請在專案的目標裡寫清楚。"));
     const note = byData(cur, "data-cw", "intent-note")[0], launch = byData(cur, "data-cw", "launch-note")[0];
     const order = walk(cur); assert.ok(order.indexOf(note) < order.indexOf(launch), "the launch sentence comes after the R3 sentence");
     assert.ok(byData(cur, "data-cw", "intent-check")[0].hasAttribute("hidden"), "the verified combination needs no warning");
@@ -649,7 +649,7 @@ async function test(name, fn) {
     const groupBy = (label) => groups.find((n) => n.getAttribute("aria-label") === label);
     const outer = groupBy("建議位置");
     assert.ok(outer, "one group named 建議位置 holds the rows");
-    const team = groupBy("任務卡上的位置"), staff = groupBy("幕僚與支援"), gate = groupBy("VBear 內建");
+    const team = groupBy("專案上的位置"), staff = groupBy("幕僚與支援"), gate = groupBy("VBear 內建");
     assert.ok(team && staff && gate && outer.contains(team) && outer.contains(staff) && outer.contains(gate));
     const posButtons = (g) => walk(g).filter((n) => n.tag === "button" && n.getAttribute("data-position"));
     assert.deepStrictEqual(posButtons(team).map((b) => b.getAttribute("data-position")), ["planner", "executor", "social", "art"]);
@@ -658,7 +658,7 @@ async function test(name, fn) {
     assert.deepStrictEqual(posButtons(staff).map((b) => textOf(b).trim()), ["PM", "法務經理", "會計師", "先不指定"]);
     // the independent review is not one of the seven: one separate option, below the rows, that says what it is
     assert.deepStrictEqual(posButtons(gate).map((b) => b.getAttribute("data-position")), ["reviewer"]);
-    assert.strictEqual(textOf(posButtons(gate)[0]).trim(), "VBear 內建：審查關卡（給任務卡的審查位）");
+    assert.strictEqual(textOf(posButtons(gate)[0]).trim(), "VBear 內建：審查關卡（給專案的審查位）");
     assert.ok(findText(byData(cur, "data-cw", "position-gate")[0], "VBear 的品質關卡，不是公司職位"), "and it says it is the system's gate, not a position of the company");
     assert.ok(!team.contains(posButtons(gate)[0]) && !staff.contains(posButtons(gate)[0]), "not among the seven");
     assert.ok(!team.classList.contains("cw-tools") && !staff.classList.contains("cw-tools"), "the camp row layout is not used");
@@ -666,7 +666,7 @@ async function test(name, fn) {
     assert.strictEqual(byData(cur, "data-position", "none")[0].getAttribute("aria-pressed"), "true");
     const verified = (c) => textOf(byData(c, "data-cw", "intent-summary")[0]);
     const base = verified(cur);
-    const launchSentence = "目前 VBear 能啟動的只有這一組權限。想讓規劃者或審查者不改檔案，VBear 現在無法強制，請在任務卡的目標裡寫清楚。";
+    const launchSentence = "目前 VBear 能啟動的只有這一組權限。想讓規劃者或審查者不改檔案，VBear 現在無法強制，請在專案的目標裡寫清楚。";
     const rows = vm.runInContext("CARD_POSITION_TABLE", ctx);
     assert.strictEqual(rows.length, 8);
     const campWord = { claude: "Claude Code", codex: "Codex CLI", agy: "Antigravity（AGY）" };
@@ -676,17 +676,17 @@ async function test(name, fn) {
       assert.strictEqual(byData(cur, "data-position", r.id)[0].getAttribute("aria-pressed"), "true", r.id);
       const box = byData(cur, "data-cw", "position-box")[0];
       assert.ok(box, r.id);
-      assert.ok(findText(box, r.duty) && findText(box, r.reminder), r.id + ": duty and reminder");
-      assert.ok(findText(box, r.tier === "staff" ? (r.slot ? "沒有 CEO 時可以放規劃位" : "不佔任務卡的位置") : "任務卡上建議放"), r.id + ": where it goes");
-      assert.ok(findText(box, `建議陣營：${campWord[r.suggested_tool]}` + (r.suggested_model_alias ? `（${r.suggested_model_alias}）` : "")), r.id + ": the suggested camp");
-      assert.strictEqual(findText(box, "VBear 不會幫這個陣營的卡出發"), r.suggested_tool === "agy", r.id + ": only an AGY suggestion says VBear does not start it");
+      assert.ok(findText(box, r.duty.replace("不同陣營的模型", "不同 AI 工具的模型")) && findText(box, r.reminder), r.id + ": duty and reminder");
+      assert.ok(findText(box, r.tier === "staff" ? (r.slot ? "沒有 CEO 時可以放規劃位" : "不佔專案的位置") : "專案上建議放"), r.id + ": where it goes");
+      assert.ok(findText(box, `建議的 AI 工具：${campWord[r.suggested_tool]}` + (r.suggested_model_alias ? `（${r.suggested_model_alias}）` : "")), r.id + ": the suggested camp");
+      assert.strictEqual(findText(box, "VBear 不會幫這個 AI 工具的卡開始工作"), r.suggested_tool === "agy", r.id + ": only an AGY suggestion says VBear does not start it");
       assert.ok(findText(byData(cur, "data-cw", "launch-note")[0], launchSentence), r.id + ": the R10 sentence stays");
       assert.ok(findText(byData(cur, "data-cw", "launch-note")[0], r.reminder), r.id + ": and the reminder is brought into it");
       assert.strictEqual(verified(cur), base, r.id + ": the suggestion is the verified combination");
       assert.ok(byData(cur, "data-cw", "suggested").length === 1, r.id);
     }
     byData(dialog(), "data-position", "reviewer")[0].dispatch("click");
-    assert.ok(findText(byData(dialog(), "data-cw", "position-box")[0], "審查位或第二位審查（要和執行位不同陣營）"));
+    assert.ok(findText(byData(dialog(), "data-cw", "position-box")[0], "審查位或第二位審查（要和執行位不同的 AI 工具）"));
     assert.ok(findText(byData(dialog(), "data-cw", "position-box")[0], "不是公司職位"));
     byData(dialog(), "data-position", "none")[0].dispatch("click");
     assert.strictEqual(byData(dialog(), "data-cw", "position-box").length, 0);
@@ -726,7 +726,7 @@ async function test(name, fn) {
     assert.ok(byData(dialog(), "data-cw", "suggested").length === 0, "no longer the suggestion once it was changed");
     const box = byData(dialog(), "data-cw", "intent-check")[0];
     assert.ok(!box.hasAttribute("hidden"));
-    assert.ok(findText(box, "這個組合目前不能出發"), "the headline");
+    assert.ok(findText(box, "這個組合目前不能開始工作"), "the headline");
     assert.ok(findText(box, writeDenyBlockers[0].message), "the server's own reason, not a page copy");
     assert.strictEqual(fetchCalls.filter((c) => c.url.includes("intent-check")).length, 1);
     assert.ok(fetchCalls.find((c) => c.url.includes("intent-check")).url.endsWith("read=allow&write=deny&test=allow&deploy=deny"));
@@ -755,13 +755,13 @@ async function test(name, fn) {
     typeName(d, "Q");
     btnByText(d, "下一步").dispatch("click");
     setIntent("執行測試", "deny");
-    assert.ok(findText(byData(dialog(), "data-cw", "intent-check")[0], "檢查這個組合能不能出發"), "while asking");
+    assert.ok(findText(byData(dialog(), "data-cw", "intent-check")[0], "檢查這個組合能不能開始工作"), "while asking");
     release(); await tick(4);
-    assert.ok(findText(byData(dialog(), "data-cw", "intent-check")[0], "這個組合目前不能出發"));
+    assert.ok(findText(byData(dialog(), "data-cw", "intent-check")[0], "這個組合目前不能開始工作"));
     setIntent("執行測試", "allow");
     setIntent("讀取檔案", "deny");
     await tick(4);
-    assert.ok(findText(byData(dialog(), "data-cw", "intent-check")[0], "讀不到這個組合的檢查，實際能不能出發以出發通行證為準。"));
+    assert.ok(findText(byData(dialog(), "data-cw", "intent-check")[0], "讀不到這個組合的檢查，實際能不能開始工作以開始前的檢查為準。"));
     setIntent("讀取檔案", "allow");
     setIntent("部署上線", "allow");
     await tick(4);
@@ -782,7 +782,7 @@ async function test(name, fn) {
     assert.ok(byData(d, "data-cw", "suggested").length === 0);
     assert.strictEqual(selectOf("編輯寫入").value, "deny");
     const box = byData(d, "data-cw", "intent-check")[0];
-    assert.ok(findText(box, "這個組合目前不能出發") && findText(box, "無法強制禁止讀取") && findText(box, writeDenyBlockers[0].message));
+    assert.ok(findText(box, "這個組合目前不能開始工作") && findText(box, "無法強制禁止讀取") && findText(box, writeDenyBlockers[0].message));
   });
 
   await test("wizard step 2: the order is camp, position, profession, intents, 進階; the profession is not under 進階, the Model ID is", async () => {
@@ -795,13 +795,13 @@ async function test(name, fn) {
     assert.ok(!adv.hasAttribute("open"));
     const all = walk(cur);
     const labelAt = (text) => all.findIndex((n) => n.classList && n.classList.contains("cw-label") && (n.textContent || "").startsWith(text));
-    const order = [labelAt("陣營"), labelAt("建議位置"), labelAt("職業（角色範本，選填）"), labelAt("權限意圖"), all.indexOf(adv)];
+    const order = [labelAt("AI 工具"), labelAt("建議位置"), labelAt("職業（角色範本，選填）"), labelAt("權限意圖"), all.indexOf(adv)];
     assert.ok(order.every((i) => i >= 0), JSON.stringify(order));
     assert.deepStrictEqual([...order].sort((a, b) => a - b), order, "the order on the screen");
     const field = byData(cur, "data-cw", "profession-field")[0];
     assert.ok(field && !adv.contains(field), "the profession is out of 進階");
     assert.ok(findText(adv, "Model ID") && !findText(adv, "職業"));
-    assert.ok(findText(field, "你電腦裡現成的角色範本") && findText(field, "出發時不會把範本的指示交給工具"));
+    assert.ok(findText(field, "你電腦裡現成的角色範本") && findText(field, "開始工作時不會把範本的指示交給工具"));
     assert.strictEqual(profPicker(), undefined, "closed: one line");
     assert.ok(findText(byData(field, "data-cw", "profession-current")[0], "不用範本"));
     assert.strictEqual(profOpen().textContent.trim(), "挑一個");
@@ -844,7 +844,7 @@ async function test(name, fn) {
     btnByText(dialog(), "上一步").dispatch("click");
     byData(dialog(), "data-tool", "codex")[0].dispatch("click");
     btnByText(dialog(), "下一步").dispatch("click");
-    assert.ok(findText(dialog(), "換了陣營，已移除 1 張這個陣營不會讀的技能卡。"));
+    assert.ok(findText(dialog(), "換了 AI 工具，已移除 1 張這個 AI 工具不會讀的技能卡。"));
     assert.ok(findText(dialog(), "已插入（1）"));
     assert.strictEqual(byData(dialog(), "data-skill", "s-x")[0].getAttribute("aria-disabled"), null, "now the codex skill fits");
     showUnused();
@@ -872,8 +872,8 @@ async function test(name, fn) {
     byData(main, "data-pcard", "decide")[0].dispatch("click");
     await tick();
     const d = dialog();
-    assert.ok(findText(d, "陣營就是這張卡用哪個工具"), "step 2");
-    assert.ok(findText(d, "有權限意圖還沒決定；出發前要先決定。"));
+    assert.ok(findText(d, "這位員工用哪個 AI 工具"), "step 2");
+    assert.ok(findText(d, "有權限意圖還沒決定；開始工作前要先決定。"));
     assert.ok(findText(d, "編輯寫入・還沒決定"));
     const intents = byData(d, "data-cw", "intents")[0];
     assert.ok(intents.hasAttribute("open"));
@@ -903,8 +903,8 @@ async function test(name, fn) {
     assert.ok(findText(d, "不代表 VBear 已經限制這個程式的真實能力"));
     const names = walk(d).filter((n) => n.tag === "input" && n.getAttribute("type") === "text");
     names[1].value = "我的工匠"; names[1].dispatch("input");
-    assert.ok(btnByText(d, "建立 3 張角色卡"));
-    btnByText(d, "建立 3 張角色卡").dispatch("click");
+    assert.ok(btnByText(d, "建立 3 位員工"));
+    btnByText(d, "建立 3 位員工").dispatch("click");
     await tick(8);
     assert.deepStrictEqual(posts.map((p) => p.name), ["CEO", "我的工匠", "審查員"]);
     assert.deepStrictEqual(posts.map((p) => p.model.tool), ["claude", "claude", "codex"]);
@@ -928,11 +928,11 @@ async function test(name, fn) {
     await tick();
     const d = dialog();
     const rev = byData(d, "data-deck", "reviewer")[0];
-    assert.ok(findText(rev, "這台電腦找不到 Codex") && findText(rev, "審查位需要和全端工程師不同陣營的卡"));
+    assert.ok(findText(rev, "這台電腦找不到 Codex") && findText(rev, "審查位需要和全端工程師用不同 AI 工具的員工"));
     const box = walk(rev).find((n) => n.tag === "input" && n.getAttribute("type") === "checkbox");
     assert.strictEqual(box.hasAttribute("checked"), false);
-    assert.ok(btnByText(d, "建立 2 張角色卡"));
-    btnByText(d, "建立 2 張角色卡").dispatch("click");
+    assert.ok(btnByText(d, "建立 2 位員工"));
+    btnByText(d, "建立 2 位員工").dispatch("click");
     await tick(8);
     assert.deepStrictEqual(posts.map((p) => p.model.tool), ["claude", "claude"]);
   });
@@ -947,12 +947,12 @@ async function test(name, fn) {
       } });
     btnByText(main, "用起手牌組開始").dispatch("click");
     await tick();
-    btnByText(dialog(), "建立 3 張角色卡").dispatch("click");
+    btnByText(dialog(), "建立 3 位員工").dispatch("click");
     await tick(8);
     const d = dialog();
     assert.ok(d, "the dialog stays");
     assert.ok(findText(d, "已建立 1 張；") && findText(d, "「全端工程師」建立失敗：") && findText(d, "名稱重複的測試錯誤"));
-    assert.ok(btnByText(d, "建立 2 張角色卡"), "what is left can be retried without making the first one twice");
+    assert.ok(btnByText(d, "建立 2 位員工"), "what is left can be retried without making the first one twice");
   });
 
   // ---- vocabulary and honesty ----
@@ -982,7 +982,7 @@ async function test(name, fn) {
     assert.ok(ctx2);
   });
 
-  await test("vocabulary: the workbench's role tab uses 角色卡 and the same wizard", async () => {
+  await test("vocabulary: the workbench's role tab uses 員工 and the same wizard", async () => {
     const ctx = freshContext(baseHandlers([mkProfile("p-1", "Mine", "claude", ALL_DENY)]));
     evalAgentBuilderSlice(ctx);
     await ctx.viewWorkbench(null, null);
@@ -995,7 +995,7 @@ async function test(name, fn) {
     const create = btnByText(right, "＋ 新角色卡");
     assert.ok(create);
     create.dispatch("click"); await tick();
-    assert.ok(findText(dialog(), "新角色卡") && walk(dialog()).some((n) => n.className === "modal-box cw-box"), "the same wizard");
+    assert.ok(findText(dialog(), "新增員工") && walk(dialog()).some((n) => n.className === "modal-box cw-box"), "the same wizard");
   });
 
   await test("source scan: no retired word in a string literal, no innerHTML call, no emoji in the card pool code", () => {
@@ -1035,7 +1035,7 @@ async function test(name, fn) {
     // the slots say the cards are kept, not loaded; none is in effect
     assert.ok(findText(main, "技能卡 1 張") && findText(main, "收藏中") && findText(main, "這次的安全啟動不會載入"));
     assert.ok(!findText(main, "生效中"), "no card claims to be in effect");
-    assert.strictEqual(vm.runInContext("CARD_INTENT_NOTE", pure), "權限意圖是隊伍分工的標記，不代表 VBear 已經限制這個程式的真實能力；真正的限制，看出發通行證上的盾牌。");
+    assert.strictEqual(vm.runInContext("CARD_INTENT_NOTE", pure), "權限意圖是隊伍分工的標記，不代表 VBear 已經限制這個程式的真實能力；真正的限制，看開始前的檢查上的盾牌。");
   });
 
   await test("CSS: the wizard keeps its footer in view and honours reduced motion", () => {
@@ -1115,10 +1115,10 @@ async function test(name, fn) {
     for (const [label, p, ld, want] of rows) assert.strictEqual(pure.cardDeparture(p, ld).state, want, label);
     assert.deepStrictEqual([...pure.cardDeparture(decided, okState({ blockers: [{ message: "A" }, { message: "B" }] })).reasons], ["A", "B"]);
     assert.deepStrictEqual([...pure.cardDeparture(decided, okState({ blockers: [{ code: "c" }] })).reasons], ["原因未提供"]);
-    assert.strictEqual(pure.cardDeparture(decided, okState({ blockers: [] })).text, "可以出發（權限意圖都已決定）");
+    assert.strictEqual(pure.cardDeparture(decided, okState({ blockers: [] })).text, "可以開始工作（權限意圖都已決定）");
     const codex = pure.cardDeparture(decided, okState({ blockers: [{ code: "codex_interactive_flags_unsupported", message: "A" }, { code: "codex_evidence_missing", message: "B" }] }));
     assert.strictEqual(codex.text, "不能直接開終端");
-    assert.strictEqual(codex.note, "放在任務卡的審查位時，自動模式會派它在暫存副本裡審查；也可以手動記錄審查結果。");
+    assert.strictEqual(codex.note, "放在專案的審查位時，自動模式會派它在暫存副本裡審查；也可以手動記錄審查結果。");
     assert.deepStrictEqual([...codex.reasons], ["A", "B"], "the original reasons are kept for the back");
     for (const r of rows) assert.ok(!/安全|已限制/.test(pure.cardDeparture(r[1], r[2]).text), "the light never says safe or limited");
   });
@@ -1155,7 +1155,7 @@ async function test(name, fn) {
       blockers: [{ code: "a", message: "第一個原因" }, { code: "b", message: "第二個原因" }], blockers_note: "假設已勾選" })) });
     const light = (id) => byData(cardOf(id), "data-pcard", "light")[0];
     assert.strictEqual(light("p-1").getAttribute("data-light"), "blocked");
-    assert.ok(findText(faceOf(cardOf("p-1"), "front"), "目前不能出發") && findText(faceOf(cardOf("p-1"), "front"), "第一個原因"));
+    assert.ok(findText(faceOf(cardOf("p-1"), "front"), "目前不能開始工作") && findText(faceOf(cardOf("p-1"), "front"), "第一個原因"));
     assert.ok(!findText(faceOf(cardOf("p-1"), "front"), "第二個原因") && findText(faceOf(cardOf("p-1"), "front"), "另有 1 項，翻到背面看"));
     const reasons = byData(cardOf("p-1"), "data-rc", "blockers")[0];
     assert.ok(!reasons.hasAttribute("hidden") && findText(reasons, "第一個原因") && findText(reasons, "第二個原因") && findText(reasons, "假設已勾選"));
@@ -1176,13 +1176,13 @@ async function test(name, fn) {
     assert.ok(light("p-1").className.includes("rcard-codex") && !light("p-1").className.includes("rcard-blocked"));
     const front = faceOf(cardOf("p-1"), "front");
     assert.ok(findText(front, "不能直接開終端"));
-    assert.ok(findText(front, "放在任務卡的審查位時，自動模式會派它在暫存副本裡審查；也可以手動記錄審查結果。"));
+    assert.ok(findText(front, "放在專案的審查位時，自動模式會派它在暫存副本裡審查；也可以手動記錄審查結果。"));
     assert.ok(!findText(front, "目前不能出發"), "not the red words");
     const reasons = byData(cardOf("p-1"), "data-rc", "blockers")[0];
     assert.ok(!reasons.hasAttribute("hidden") && findText(reasons, "固定版 Codex CLI 互動 TUI 不支援") && findText(reasons, "Codex 驗收尚未完成"), "the back lists the original reasons");
     assert.ok(findText(reasons, "不能直接開終端的原因"));
     assert.strictEqual(light("p-2").getAttribute("data-light"), "blocked");
-    assert.ok(findText(faceOf(cardOf("p-2"), "front"), "目前不能出發") && !findText(faceOf(cardOf("p-2"), "front"), "不能直接開終端"));
+    assert.ok(findText(faceOf(cardOf("p-2"), "front"), "目前不能開始工作") && !findText(faceOf(cardOf("p-2"), "front"), "不能直接開終端"));
     assert.strictEqual(light("p-3").getAttribute("data-light"), "green");
     for (const l of byData(main, "data-pcard", "light")) assert.ok(!/安全|已限制/.test(textOf(l)));
   });
@@ -1196,14 +1196,14 @@ async function test(name, fn) {
   await test("P7 #13 cardPassLine: made from the armor items; never more hopeful than the pass; unreadable armor gives no line", () => {
     const line = (write, commit) => pure.cardPassLine({ state: "ok", data: { armor: armorOf(write, commit) } });
     const rows = [
-      [ARMOR_LEVEL.enforced, "出發後可以改檔案（限工作資料夾）；擋不住存下版本紀錄；詳情看出發通行證"],
-      [ARMOR_LEVEL.partial, "出發後可以改檔案（範圍只部分擋住）；擋不住存下版本紀錄；詳情看出發通行證"],
-      [ARMOR_LEVEL.unverified, "出發後可以改檔案（範圍限制還沒實測）；擋不住存下版本紀錄；詳情看出發通行證"],
-      [ARMOR_LEVEL.unknown, "出發後可以改檔案（範圍不明）；擋不住存下版本紀錄；詳情看出發通行證"],
-      [ARMOR_LEVEL.notGranted, "出發後可以改檔案（範圍不明）；擋不住存下版本紀錄；詳情看出發通行證"],
-      [ARMOR_LEVEL.intent, "出發後可以改檔案（範圍沒有被擋住）；擋不住存下版本紀錄；詳情看出發通行證"],
-      [ARMOR_LEVEL.unrestricted, "出發後可以改檔案（範圍沒有被擋住）；擋不住存下版本紀錄；詳情看出發通行證"],
-      ["something new", "出發後可以改檔案（範圍不明）；擋不住存下版本紀錄；詳情看出發通行證"],
+      [ARMOR_LEVEL.enforced, "開始工作後可以改檔案（限工作資料夾）；擋不住存下版本紀錄；詳情看開始前的檢查"],
+      [ARMOR_LEVEL.partial, "開始工作後可以改檔案（範圍只部分擋住）；擋不住存下版本紀錄；詳情看開始前的檢查"],
+      [ARMOR_LEVEL.unverified, "開始工作後可以改檔案（範圍限制還沒實測）；擋不住存下版本紀錄；詳情看開始前的檢查"],
+      [ARMOR_LEVEL.unknown, "開始工作後可以改檔案（範圍不明）；擋不住存下版本紀錄；詳情看開始前的檢查"],
+      [ARMOR_LEVEL.notGranted, "開始工作後可以改檔案（範圍不明）；擋不住存下版本紀錄；詳情看開始前的檢查"],
+      [ARMOR_LEVEL.intent, "開始工作後可以改檔案（範圍沒有被擋住）；擋不住存下版本紀錄；詳情看開始前的檢查"],
+      [ARMOR_LEVEL.unrestricted, "開始工作後可以改檔案（範圍沒有被擋住）；擋不住存下版本紀錄；詳情看開始前的檢查"],
+      ["something new", "開始工作後可以改檔案（範圍不明）；擋不住存下版本紀錄；詳情看開始前的檢查"],
     ];
     for (const [level, want] of rows) assert.strictEqual(line(level), want, level);
     // only an enforced write may say the reach; commit is never said to be stopped, whatever its own level says
@@ -1265,7 +1265,7 @@ async function test(name, fn) {
     assert.strictEqual(box().textContent, "");
     card.setLoadout(okState(loadoutBody(p, { armor: armorOf(ARMOR_LEVEL.enforced) })));
     assert.ok(!box().hasAttribute("hidden"));
-    assert.strictEqual(box().textContent, "出發後可以改檔案（限工作資料夾）；擋不住存下版本紀錄；詳情看出發通行證");
+    assert.strictEqual(box().textContent, "開始工作後可以改檔案（限工作資料夾）；擋不住存下版本紀錄；詳情看開始前的檢查");
     assert.ok(byData(card.node, "data-face", "front")[0] && walk(byData(card.node, "data-face", "front")[0]).includes(box()), "on the front");
     card.setLoadout(okState(loadoutBody(p, { armor: armorOf(ARMOR_LEVEL.unverified) })));
     assert.ok(box().textContent.includes("範圍限制還沒實測") && !box().textContent.includes("限工作資料夾"));
@@ -1388,7 +1388,7 @@ async function test(name, fn) {
     const card = pure.profileCard(p, { catalog, handlers: { launch: (x) => calls.push(["launch", x.id]), edit: (x) => calls.push(["edit", x.id]) } });
     const launch = byData(card.node, "data-pcard", "launch")[0];
     assert.strictEqual(byData(card.node, "data-pcard", "light")[0].getAttribute("data-light"), "checking");
-    assert.ok(findText(card.node, "確認出發條件中"));
+    assert.ok(findText(card.node, "確認開始工作條件中"));
     card.setLoadout(okState(loadoutBody(p)));
     assert.strictEqual(byData(card.node, "data-pcard", "light")[0].getAttribute("data-light"), "green");
     assert.strictEqual(byData(card.node, "data-pcard", "launch")[0], launch, "the same button");
@@ -1396,7 +1396,7 @@ async function test(name, fn) {
     assert.deepStrictEqual(calls, [["launch", "p-1"], ["edit", "p-1"]]);
     card.setLoadout({ state: "error", error: "x" });
     assert.strictEqual(byData(card.node, "data-pcard", "light")[0].getAttribute("data-light"), "unknown");
-    assert.ok(findText(card.node, "讀不到出發條件"));
+    assert.ok(findText(card.node, "讀不到開始工作條件"));
     // no handlers given: no action button, only the flip
     const bare = pure.profileCard(p, { catalog }).node;
     assert.deepStrictEqual(["launch", "edit", "duplicate", "remove", "decide"].map((k) => byData(bare, "data-pcard", k).length), [0, 0, 0, 0, 0]);
@@ -1819,7 +1819,7 @@ async function test(name, fn) {
     { skill_id: "s-ar", name: "codex-agy-skill", tool: "codex", read_by: ["agy"], scope: "user", activation: "active", excerpt: "codex, AGY reads it too" },
     { skill_id: "s-an", name: "agy-own-skill", tool: "agy", read_by: ["agy"], scope: "user", activation: "active", excerpt: "in AGY's folder" }] };
   const AGY_OFF = "AGY 不會讀這張技能卡（依這台電腦的 AGY 設定）";
-  const AGY_NOT_LAUNCHED = "安全模式不會啟動 AGY，要出發請選完整模式";
+  const AGY_NOT_LAUNCHED = "「每件事先問我」不會啟動 AGY，要開始工作請選「完全交給他（有風險）」";
   const agyLoadout = (p) => loadoutBody(p, {
     armor: { applicable: false, why: "安全模式不會啟動 AGY，沒有防具" },
     blockers: [{ code: "tool_not_launchable", message: AGY_NOT_LAUNCHED }],
@@ -1872,14 +1872,14 @@ async function test(name, fn) {
     assert.strictEqual(pure.skillIncompatibleNote("agy"), AGY_OFF);
     assert.strictEqual(pure.skillIncompatibleNote("claude"), "Claude Code 不會讀這張卡");
     assert.strictEqual(pure.skillIncompatibleNote("codex"), "Codex 不會讀這張卡");
-    assert.strictEqual(pure.skillIncompatibleNote("shared"), "共用角色卡只能插共用的技能卡");
+    assert.strictEqual(pure.skillIncompatibleNote("shared"), "共用員工只能插共用的技能卡");
   });
 
   await test("P20 wizard step 2: AGY is in the camp row with the others, drawn as the fox, and choosing it saves tool agy", async () => {
     const { posts, d } = await openWizard([], catalogAgy);
     typeName(d, "AGY 審查員");
     btnByText(d, "下一步").dispatch("click");
-    const group = byData(dialog(), "role", "group").find((n) => n.getAttribute("aria-label") === "陣營（工具）");
+    const group = byData(dialog(), "role", "group").find((n) => n.getAttribute("aria-label") === "AI 工具");
     const buttons = group.children.filter((n) => n.tag === "button");
     assert.deepStrictEqual(buttons.map((b) => b.getAttribute("data-tool")), ["claude", "codex", "agy", "shared"], "one row, in this order");
     const agy = buttons[2];
@@ -1891,7 +1891,7 @@ async function test(name, fn) {
     assert.strictEqual(byData(now, "data-tool", "agy")[0].getAttribute("aria-pressed"), "true");
     assert.strictEqual(byData(now, "data-tool", "claude")[0].getAttribute("aria-pressed"), "false");
     const note = byData(now, "data-cw", "agy-note")[0];
-    assert.ok(note && findText(note, "安全模式不會啟動 AGY，要出發請選完整模式"), "says it plainly beside the choice");
+    assert.ok(note && findText(note, "「每件事先問我」不會啟動 AGY，要開始工作請選「完全交給他（有風險）」"), "says it plainly beside the choice");
     assert.ok(!findText(now, "找不到 Codex"));
     btnByText(now, "下一步").dispatch("click");
     btnByText(dialog(), "建立").dispatch("click");
@@ -1914,7 +1914,7 @@ async function test(name, fn) {
     byData(cardOf("p-agy"), "data-pcard", "flip")[0].dispatch("click");
     byData(cardOf("p-agy"), "data-pcard", "edit")[0].dispatch("click");
     await tick();
-    assert.ok(findText(dialog(), "依陣營（狐）"), "the automatic choice names the fox");
+    assert.ok(findText(dialog(), "依 AI 工具（狐）"), "the automatic choice names the fox");
   });
 
   await test("P22 wizard step 3: an AGY card takes the skills AGY reads; the rest are greyed with AGY's own words", async () => {
@@ -1925,7 +1925,7 @@ async function test(name, fn) {
     btnByText(dialog(), "下一步").dispatch("click");
     const cur = dialog();
     const note = byData(cur, "data-cw", "agy-skills-note")[0];
-    assert.ok(note && findText(note, "這裡只列 AGY 依你電腦上的設定會讀到的技能（安全模式不啟動 AGY，完整模式會）"), "the honest sentence, before any skill is picked");
+    assert.ok(note && findText(note, "這裡只列 AGY 依你電腦上的設定會讀到的技能（「每件事先問我」不啟動 AGY，「完全交給他（有風險）」會）"), "the honest sentence, before any skill is picked");
     assert.ok(findText(note, "AGY 的內建與外掛技能不在這裡"));
     assert.ok(!findText(cur, "VBear 還不知道 AGY 會讀哪些技能"), "the old 'does not know' wording is gone");
     assert.deepStrictEqual(ids24(dialog()).sort(), ["s-an", "s-ar"], "P24: the default list is what AGY reads");
@@ -1978,7 +1978,7 @@ async function test(name, fn) {
     btnByText(dialog(), "上一步").dispatch("click");
     byData(dialog(), "data-tool", "agy")[0].dispatch("click");
     btnByText(dialog(), "下一步").dispatch("click");
-    assert.ok(findText(dialog(), "換了陣營，已移除 2 張這個陣營不會讀的技能卡。"));
+    assert.ok(findText(dialog(), "換了 AI 工具，已移除 2 張這個 AI 工具不會讀的技能卡。"));
     assert.ok(findText(dialog(), "已插入（1）"));
     btnByText(dialog(), "建立").dispatch("click");
     await tick();
@@ -2139,11 +2139,11 @@ async function test(name, fn) {
     assert.strictEqual(byData(dialog(), "data-cw", "agy-note").length, 0);
     assert.strictEqual(byData(dialog(), "data-cw", "shared-note").length, 0);
     byData(dialog(), "data-tool", "agy")[0].dispatch("click");
-    assert.ok(findText(byData(dialog(), "data-cw", "agy-note")[0], "安全模式不會啟動 AGY，要出發請選完整模式。"));
+    assert.ok(findText(byData(dialog(), "data-cw", "agy-note")[0], "「每件事先問我」不會啟動 AGY，要開始工作請選「完全交給他（有風險）」。"));
     assert.strictEqual(byData(dialog(), "data-cw", "shared-note").length, 0);
     byData(dialog(), "data-tool", "shared")[0].dispatch("click");
     assert.strictEqual(byData(dialog(), "data-cw", "agy-note").length, 0);
-    assert.ok(findText(byData(dialog(), "data-cw", "shared-note")[0], "共用卡不能出發，權限意圖只是分工記錄。"));
+    assert.ok(findText(byData(dialog(), "data-cw", "shared-note")[0], "共用卡不能開始工作，權限意圖只是分工記錄。"));
     byData(dialog(), "data-tool", "codex")[0].dispatch("click");
     assert.strictEqual(byData(dialog(), "data-cw", "shared-note").length, 0, "the shared sentence belongs to the shared camp only");
   });
@@ -2154,12 +2154,12 @@ async function test(name, fn) {
     btnByText(d, "下一步").dispatch("click");
     setIntent("編輯寫入", "deny");
     await tick(4);
-    assert.ok(findText(byData(dialog(), "data-cw", "intent-check")[0], "這個組合目前不能出發"));
+    assert.ok(findText(byData(dialog(), "data-cw", "intent-check")[0], "這個組合目前不能開始工作"));
     assert.ok(findText(byData(dialog(), "data-cw", "intent-check")[0], writeDenyBlockers[0].message));
     assert.strictEqual(asksOfServer(), 1);
     byData(dialog(), "data-tool", "codex")[0].dispatch("click");
     await tick(4);
-    assert.ok(findText(byData(dialog(), "data-cw", "intent-check")[0], "這個組合目前不能出發"), "Codex: unchanged");
+    assert.ok(findText(byData(dialog(), "data-cw", "intent-check")[0], "這個組合目前不能開始工作"), "Codex: unchanged");
     assert.strictEqual(asksOfServer(), 1, "answered once, remembered");
   });
 
@@ -2169,14 +2169,14 @@ async function test(name, fn) {
     btnByText(d, "下一步").dispatch("click");
     setIntent("編輯寫入", "deny");
     await tick(4);
-    assert.ok(findText(dialog(), "這個組合目前不能出發"), "Claude Code: the warning");
+    assert.ok(findText(dialog(), "這個組合目前不能開始工作"), "Claude Code: the warning");
     assert.strictEqual(asksOfServer(), 1);
     byData(dialog(), "data-tool", "agy")[0].dispatch("click");
     assert.ok(!findText(dialog(), "這個組合目前不能出發"), "to AGY: gone, no waiting for a reply");
     assert.ok(byData(dialog(), "data-cw", "intent-check")[0].hasAttribute("hidden"));
     byData(dialog(), "data-tool", "claude")[0].dispatch("click");
     await tick(4);
-    assert.ok(findText(dialog(), "這個組合目前不能出發"), "back to Claude Code: the warning is back");
+    assert.ok(findText(dialog(), "這個組合目前不能開始工作"), "back to Claude Code: the warning is back");
     byData(dialog(), "data-tool", "shared")[0].dispatch("click");
     assert.ok(!findText(dialog(), "這個組合目前不能出發"), "to the shared camp: gone");
     assert.strictEqual(asksOfServer(), 1, "never asked again");
@@ -2189,7 +2189,7 @@ async function test(name, fn) {
     typeName(d, "Late answer");
     btnByText(d, "下一步").dispatch("click");
     setIntent("編輯寫入", "deny");
-    assert.ok(findText(dialog(), "檢查這個組合能不能出發"), "Claude Code: asking");
+    assert.ok(findText(dialog(), "檢查這個組合能不能開始工作"), "Claude Code: asking");
     byData(dialog(), "data-tool", "agy")[0].dispatch("click");
     release(); await tick(6);
     assert.ok(!findText(dialog(), "這個組合目前不能出發") && !findText(dialog(), "檢查這個組合能不能出發"));
@@ -2221,7 +2221,7 @@ async function test(name, fn) {
     assert.strictEqual(shadowOf(front), shadowOf(pure.officeSprite("fox", "google", 3)), "the fox in the Google colours");
     const light = byData(card, "data-light", "blocked")[0];
     assert.ok(light, "the light is the red one, not a green");
-    assert.ok(findText(light, "目前不能出發") && findText(light, AGY_NOT_LAUNCHED));
+    assert.ok(findText(light, "目前不能開始工作") && findText(light, AGY_NOT_LAUNCHED));
     assert.strictEqual(byData(card, "data-pcard", "pass-line").filter((n) => !n.hasAttribute("hidden")).length, 0, "no line about what a start does");
     assert.ok(!walk(card).some((n) => /armor-shield/.test(n.className || "")), "no shield anywhere on the card");
     assert.ok(findText(back, "Antigravity（AGY）"));
@@ -2244,7 +2244,7 @@ async function test(name, fn) {
     assert.deepStrictEqual(ids, ["b"]);
   });
 
-  await test("P20 出發 on an AGY card: the pass says VBear does not start AGY, offers no preview or start, makes no request and shows no shield", async () => {
+  await test("P20 開始工作 on an AGY card: the pass says VBear does not start AGY, offers no preview or start, makes no request and shows no shield", async () => {
     const p = mkProfile("p-agy", "AGY 一號", "agy", VERIFIED);
     const ctx = freshContext(baseHandlers([p], catalogAgy, { "GET /api/agent-profiles/p-agy/loadout": () => jsonResponse(agyLoadout(p)) }));
     evalAgentBuilderSlice(ctx);
@@ -2303,7 +2303,7 @@ async function test(name, fn) {
     const { d } = await openWizard([], catalogAgy);
     typeName(d, "Layout");
     btnByText(d, "下一步").dispatch("click");
-    const tools = walk(dialog()).filter((n) => n.getAttribute && n.getAttribute("aria-label") === "陣營（工具）");
+    const tools = walk(dialog()).filter((n) => n.getAttribute && n.getAttribute("aria-label") === "AI 工具");
     const position = walk(dialog()).filter((n) => n.getAttribute && n.getAttribute("aria-label") === "建議位置");
     assert.strictEqual(tools.length, 1); assert.strictEqual(position.length, 1);
     assert.ok(tools[0].classList.contains("cw-choices") && tools[0].classList.contains("cw-tools"), "the camp row has its own class");
@@ -2325,8 +2325,8 @@ async function test(name, fn) {
   await test("P20 source: the pass and the wizard speak of AGY in the words the server uses, and no AGY string claims a load or a protection", () => {
     const wizard = source.slice(source.indexOf("function openCardWizard("), source.indexOf("// ---- footer + save"));
     assert.ok(!/AGY[^"`\n]*(會載入|已保護|受保護|安全)/.test(wizard.replace(/不代表[^"]*/g, "")));
-    assert.ok(source.includes("安全模式不會啟動 AGY，要出發請選完整模式"));
-    assert.ok(source.includes("這裡只列 AGY 依你電腦上的設定會讀到的技能（安全模式不啟動 AGY，完整模式會）"));
+    assert.ok(source.includes("「每件事先問我」不會啟動 AGY，要開始工作請選「完全交給他（有風險）」"));
+    assert.ok(source.includes("這裡只列 AGY 依你電腦上的設定會讀到的技能（「每件事先問我」不啟動 AGY，「完全交給他（有風險）」會）"));
     assert.ok(source.includes("AGY 不會讀這張技能卡（依這台電腦的 AGY 設定）"));
     assert.ok(!source.includes("VBear 還不知道 AGY 會讀哪些技能"), "P22: it is judged from AGY's own files now");
     assert.ok(source.includes("沒有掃描 ${CARD_TOOL_SHORT[tool]} 的 Agent 角色，沒有可選的職業標籤"));
@@ -2350,7 +2350,7 @@ async function test(name, fn) {
   await test("P35-4 a draft from a staffing proposal fills the new card's wizard; nothing is saved until 建立 on step 3", async () => {
     const { w, posts, saved, d } = await draftWizard({ name: "法務新卡 <img src=x onerror=alert(1)>", position: "legal", tool: "claude",
       modelId: "sonnet", skillIds: ["s-c", "s-s", "s-x", "s-gone"] });
-    assert.strictEqual(walk(d).find((n) => n.tag === "h2").textContent, "新角色卡");
+    assert.strictEqual(walk(d).find((n) => n.tag === "h2").textContent, "新增員工");
     assert.strictEqual(walk(d).find((n) => n.tag === "input" && n.getAttribute("id") === "cw-name").getAttribute("value"), "法務新卡 <img src=x onerror=alert(1)>");
     const note = byData(d, "data-cw", "draft-note")[0];
     assert.ok(note && /CEO 的組隊提案/.test(note.textContent) && /按「建立」才會存/.test(note.textContent), note && note.textContent);
@@ -2437,7 +2437,7 @@ async function test(name, fn) {
     const general = byData(d, "data-cw", "skills-note")[0].textContent;
     const agy = byData(d, "data-cw", "agy-skills-note")[0];
     assert.ok(agy && /AGY 依你電腦上的設定會讀到的技能/.test(agy.textContent) && /AGY 的內建與外掛技能不在這裡/.test(agy.textContent));
-    assert.ok(/安全模式不啟動 AGY/.test(agy.textContent));
+    assert.ok(/「每件事先問我」不啟動 AGY/.test(agy.textContent));
     assert.ok(!/只是收藏|只是記錄/.test(agy.textContent), "'only a record' is said once, in the general note");
     assert.ok(/只是記錄/.test(general));
   });
@@ -3000,7 +3000,7 @@ async function test(name, fn) {
     await tick(6);
     openPicker();
     assert.deepStrictEqual(profIds(), []);
-    assert.ok(findText(profPicker(), "這個陣營沒有掃描到角色範本"));
+    assert.ok(findText(profPicker(), "這個 AI 工具沒有掃描到角色範本"));
   });
 
   await test("P32-4 groups by the guessed position with counts, the card's own position first; a group button narrows the list", async () => {
@@ -3165,7 +3165,7 @@ async function test(name, fn) {
   await test("P32-4 the box says again that nothing is loaded, and shows the author's own words folded", async () => {
     await wiz324();
     pickProfession("c-res");
-    assert.ok(findText(brings(), "出發時不會把範本的指示交給工具；這只是標籤"));
+    assert.ok(findText(brings(), "開始工作時不會把範本的指示交給工具；這只是標籤"));
     const orig = byData(brings(), "data-cw", "profession-original")[0];
     assert.strictEqual(orig.tag, "details");
     assert.ok(!orig.hasAttribute("open") && findText(orig, "Finds new trends and market chances."));
@@ -3301,7 +3301,7 @@ async function test(name, fn) {
   });
 
   await test("P32-4 the settings page points to the profession in the wizard, not to 進階", () => {
-    assert.ok(source.includes("在角色卡精靈的「職業」裡翻譯") && !source.includes("在角色卡精靈的「進階」裡翻譯"));
+    assert.ok(source.includes("在員工精靈的「職業」裡翻譯") && !source.includes("在員工精靈的「進階」裡翻譯"));
   });
 
   await test("P32-4 the picker's code holds no innerHTML, emoji or outside address, and the CSS has its rules", () => {
@@ -3760,7 +3760,7 @@ async function test(name, fn) {
       assert.strictEqual(modeBtn("full").getAttribute("aria-pressed"), "true", `${t} has only full mode`);
       assert.strictEqual(modeBtn("safe").getAttribute("aria-pressed"), "false");
       const note = byData(dialog(), "data-cw", "full-only-note")[0];
-      assert.ok(note && findText(note, "只能用完整模式"), `${t}: the card says its tool has no safe mode`);
+      assert.ok(note && findText(note, "只能用「完全交給他（有風險）」"), `${t}: the card says its tool has no safe mode`);
     }
     toolBtn("claude").dispatch("click");
     assert.strictEqual(modeBtn("safe").getAttribute("aria-pressed"), "true", "back on a tool with a safe mode");
@@ -3820,7 +3820,7 @@ async function test(name, fn) {
     const saved = savedBodies("p-1");
     await editCard342(mkProfile("p-1", "Old", "claude", VERIFIED), { ...saved.handler });
     assert.strictEqual(modeBtn("safe").getAttribute("aria-pressed"), "true");
-    assert.ok(findText(byData(dialog(), "data-cw", "launch-mode")[0], "舊卡沒有設定，一律當安全模式"));
+    assert.ok(findText(byData(dialog(), "data-cw", "launch-mode")[0], "舊卡沒有設定，一律當「每件事先問我」"));
     btnByText(dialog(), "儲存修改").dispatch("click");
     await tick();
     assert.ok(!("launch_mode" in saved.out[0]), "an untouched old card stays as it is on disk");
@@ -4024,10 +4024,10 @@ async function test(name, fn) {
     byData(dialog(), "data-tool", "agy")[0].dispatch("click");
     assert.strictEqual(modeBtn("full").getAttribute("aria-pressed"), "true");
     const full = byData(dialog(), "data-cw", "agy-note")[0];
-    assert.ok(findText(full, "完整模式可以從 VBear 出發") && !findText(full, "不會啟動 AGY"));
+    assert.ok(findText(full, "「完全交給他（有風險）」可以從 VBear 開始工作") && !findText(full, "不會啟動 AGY"));
     assert.ok(!byData(dialog(), "data-cw", "launch-mode-pending").length, "the 'not open yet' hint is gone once the server can start it");
     modeBtn("safe").dispatch("click");
-    assert.ok(findText(byData(dialog(), "data-cw", "agy-note")[0], "安全模式不會啟動 AGY"));
+    assert.ok(findText(byData(dialog(), "data-cw", "agy-note")[0], "「每件事先問我」不會啟動 AGY"));
   });
 
   // ---- the paste button: instructions into the terminal's input, never Enter ----
@@ -4145,7 +4145,7 @@ async function test(name, fn) {
     full_mode_tools: ["claude", "codex", "agy", "grok", "mcode"],
     tool_list: [...toolRows.slice(0, 4), rowMcode, toolRows[4]], unavailable_tools: [] };
   const offeredTools = () => walk(dialog()).filter((n) => n.getAttribute && n.getAttribute("data-tool")).map((n) => n.getAttribute("data-tool"));
-  const FULL_ONLY_MARK = "這個 AI 工具目前只能用完整模式";
+  const FULL_ONLY_MARK = "這個 AI 工具目前只能用「完全交給他（有風險）」";
   const modePressed = () => byData(dialog(), "data-launch-mode", "full")[0].getAttribute("aria-pressed");
 
   await test("v0.12 look: Grok and MCODE are aliens in their own camps (xAI, MiniMax); the labels, the families and the reviewer rule know them", () => {
@@ -4199,9 +4199,9 @@ async function test(name, fn) {
     const now = dialog();
     assert.strictEqual(byData(now, "data-tool", "grok")[0].getAttribute("aria-pressed"), "true");
     assert.ok(findText(byData(now, "data-cw", "full-only")[0], FULL_ONLY_MARK));
-    assert.ok(findText(byData(now, "data-cw", "agy-note")[0], "Grok 在完整模式可以從 VBear 出發"), "the full-mode sentence, with Grok's own name");
+    assert.ok(findText(byData(now, "data-cw", "agy-note")[0], "Grok 在「完全交給他（有風險）」可以從 VBear 開始工作"), "the full-mode sentence, with Grok's own name");
     assert.strictEqual(modePressed(), "true", "a new card of a full-mode-only tool takes full mode although the default was safe");
-    assert.ok(findText(byData(now, "data-cw", "full-only-note")[0], "Grok 目前只能用完整模式"), "and the launch step says it again with the 我了解 reminder");
+    assert.ok(findText(byData(now, "data-cw", "full-only-note")[0], "Grok 目前只能用「完全交給他（有風險）」"), "and the launch step says it again with the 我了解 reminder");
     assert.strictEqual(shadowOf(byData(now, "data-tool", "grok")[0]), shadowOf(pure.officeSprite("alien", "xai", 2)), "the alien in the xAI colours");
     assert.ok(byData(now, "data-cw", "intent-check")[0].hasAttribute("hidden"), "no 'cannot be launched' check: there is no safe launch to ask about");
     btnByText(now, "下一步").dispatch("click");
@@ -4218,7 +4218,7 @@ async function test(name, fn) {
     assert.deepStrictEqual(offeredTools(), ["claude", "codex", "agy", "grok", "mcode", "shared"]);
     byData(dialog(), "data-tool", "mcode")[0].dispatch("click");
     assert.ok(findText(byData(dialog(), "data-cw", "full-only")[0], FULL_ONLY_MARK));
-    assert.ok(findText(byData(dialog(), "data-cw", "agy-note")[0], "MCODE 在完整模式可以從 VBear 出發"));
+    assert.ok(findText(byData(dialog(), "data-cw", "agy-note")[0], "MCODE 在「完全交給他（有風險）」可以從 VBear 開始工作"));
     assert.strictEqual(byData(dialog(), "data-cw", "tool-hidden-note").length, 0, "switched on: nothing hidden to say");
     btnByText(dialog(), "下一步").dispatch("click");
     btnByText(dialog(), "建立").dispatch("click");
@@ -4300,7 +4300,7 @@ async function test(name, fn) {
     assert.strictEqual(grok.getAttribute("data-camp"), "xai");
     assert.strictEqual(mcode.getAttribute("data-camp"), "minimax");
     assert.ok(findText(byData(grok, "data-pcard", "full-only")[0], FULL_ONLY_MARK), "the sentence on the front");
-    assert.ok(findText(faceOf(grok, "front"), "只能用完整模式"), "and the short badge beside the camp");
+    assert.ok(findText(faceOf(grok, "front"), "只能用「完全交給他（有風險）」"), "and the short badge beside the camp");
     assert.ok(findText(faceOf(grok, "front"), "Grok"));
     assert.strictEqual(shadowOf(faceOf(grok, "front")), shadowOf(pure.officeSprite("alien", "xai", 3)));
     assert.strictEqual(byData(claude, "data-pcard", "full-only").length, 0, "Claude Code has a safe mode: nothing to say");

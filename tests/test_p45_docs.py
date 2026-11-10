@@ -150,7 +150,7 @@ class TeamTemplatesDocsTests(unittest.TestCase):
             self.assertIn(term, self.glossary, term)
         part = self.glossary_raw[self.glossary_raw.index("**復原這次套用**"):]
         part = part[:part.index("\n_避免_")]
-        for word in ("終端機", "VBear 看不出來", "技能沒有", "改過"):
+        for word in ("指令視窗", "VBear 看不出來", "常用做法沒有", "改過"):
             self.assertIn(word, part, word)
 
     # -- the numbers and the words ---------------------------------------------------------------------------------------------

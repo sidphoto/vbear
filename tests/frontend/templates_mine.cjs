@@ -121,7 +121,7 @@ test("「你現在的」 lists what the person has, with a tick box each, and sa
 test("a person with nothing yet is told so, and the blocks of the page do not count the ticks of 「你現在的」", async () => {
   setServer({ current: { cards: [], skills: [], routines: [] } });
   const main = await open();
-  assert.strictEqual(text(by(main, "data-templates", "now-empty")), "你現在還沒有員工、技能或例行工作。");
+  assert.strictEqual(text(by(main, "data-templates", "now-empty")), "你現在還沒有員工、常用做法或定時工作。");
   assert.strictEqual(action(by(main, "data-templates", "foot"), "save").disabled, true);
 });
 
@@ -132,12 +132,12 @@ test("the buttons wait for a tick, in the blocks or in 「你現在的」, and t
   const nowSave = action(by(main, "data-templates", "now"), "save-now");
   assert.strictEqual(action(foot, "save").disabled, true);
   assert.strictEqual(nowSave.disabled, true);
-  assert.strictEqual(text(by(main, "data-templates", "now-count")), "你現在的，已勾：0 位員工、0 個技能、0 件例行工作");
+  assert.strictEqual(text(by(main, "data-templates", "now-count")), "你現在的，已勾：0 位員工、0 個常用做法、0 件定時工作");
   await tickNow(main, "cards", "prof-aaaaaaaaaaaa");
   assert.strictEqual(action(foot, "save").disabled, false);
   assert.strictEqual(nowSave.disabled, false);
-  assert.strictEqual(text(by(main, "data-templates", "now-count")), "你現在的，已勾：1 位員工、0 個技能、0 件例行工作");
-  assert.strictEqual(text(by(foot, "data-templates", "count")), "已勾：0 位員工、0 個技能、0 件例行工作", "the apply line is only for the blocks");
+  assert.strictEqual(text(by(main, "data-templates", "now-count")), "你現在的，已勾：1 位員工、0 個常用做法、0 件定時工作");
+  assert.strictEqual(text(by(foot, "data-templates", "count")), "已勾：0 位員工、0 個常用做法、0 件定時工作", "the apply line is only for the blocks");
   assert.strictEqual(action(foot, "preview").disabled, true, "ticking something that is already there never makes it appliable");
   await tickNow(main, "cards", "prof-aaaaaaaaaaaa", false);
   assert.strictEqual(action(foot, "save").disabled, true);
@@ -148,7 +148,7 @@ test("the buttons wait for a tick, in the blocks or in 「你現在的」, and t
 test("the dialog posts what is ticked in the blocks first and what the person has after, with the name, and says what was saved", async () => {
   setServer({ mine: [mineOne] });
   state.save = (body) => jsonResponse({ ok: true, template: { id: "tm-ffffffffffff", name: body.name, builtin: false, cards: [card("a", "客服", null, null, null), card("card_1", "虛構會計", "accountant", "haiku", "x")],
-    skills: [], routines: [] }, notes: [{ code: "full_mode_saved_safe", kind: "cards", index: 1, text: "完整模式不會存進團隊範本：這位員工存下來沒有出發模式，套用時一律是安全模式。" }] }, true, 201);
+    skills: [], routines: [] }, notes: [{ code: "full_mode_saved_safe", kind: "cards", index: 1, text: "「完全交給他（有風險）」不會存進團隊範本：這位員工存下來沒有開始工作模式，套用時一律是「每件事先問我」。" }] }, true, 201);
   const main = await open();
   await tickBlock(main, "cards", "shop", "service");
   await tickBlock(main, "skills", "tm-0123456789ab", "daily");
@@ -157,7 +157,7 @@ test("the dialog posts what is ticked in the blocks first and what the person ha
   await click(action(by(main, "data-templates", "foot"), "save"));
   const d = dialog();
   assert(d && attr(d, "data-templates") === "save", "the dialog is open");
-  assert.strictEqual(text(by(d, "data-templates", "save-summary")).split("。")[0], "這次會存：2 位員工、1 個技能、1 件例行工作");
+  assert.strictEqual(text(by(d, "data-templates", "save-summary")).split("。")[0], "這次會存：2 位員工、1 個常用做法、1 件定時工作");
   assert.deepStrictEqual(allBy(d, "data-tpl-save-item", "cards").map(text), ["客服", "虛構會計"]);
   assert.deepStrictEqual(allBy(d, "data-tpl-save-item", "skills").map(text), ["每日小結"]);
   assert.deepStrictEqual(allBy(d, "data-tpl-save-item", "routines").map(text), ["虛構例行"]);
@@ -169,8 +169,8 @@ test("the dialog posts what is ticked in the blocks first and what the person ha
     skills: [{ from: { template: "tm-0123456789ab", key: "daily" } }],
     routines: [{ routine_id: "r-aaaaaaaaaaaa" }] }]]);
   const after = dialog();
-  assert(text(after).includes("已存成團隊範本「我的新店」：2 位員工、0 個技能、0 件例行工作。"));
-  assert.strictEqual(text(by(after, "data-tpl-save-note", "full_mode_saved_safe")), "完整模式不會存進團隊範本：這位員工存下來沒有出發模式，套用時一律是安全模式。");
+  assert(text(after).includes("已存成團隊範本「我的新店」：2 位員工、0 個常用做法、0 件定時工作。"));
+  assert.strictEqual(text(by(after, "data-tpl-save-note", "full_mode_saved_safe")), "「完全交給他（有風險）」不會存進團隊範本：這位員工存下來沒有開始工作模式，套用時一律是「每件事先問我」。");
   assert(calls.filter((c) => c[1] === "/api/templates" && c[0] === "GET").length >= 2, "the page was read again behind the dialog");
   await click(action(after, "save-close"));
   assert.strictEqual(dialogs().length, 0);
@@ -184,12 +184,12 @@ test("the fixed words of the dialog are there word for word, and say nothing is 
   const d = dialog();
   const lines = by(d, "data-templates", "save-fixed").findAll((n) => n.tag === "li").map(text);
   assert.deepStrictEqual(lines, [
-    "存的是現在這一刻的複本：之後你改了原本的員工、技能或例行工作，這個團隊範本不會跟著變。",
-    "員工只存名字、職位、你寫在卡上的固定指示和 Claude 的模型。不存 AI 工具、技能卡、記憶、共用資料夾和聊天紀錄；完整模式的員工存下來也不帶出發模式，套用時一律是安全模式。",
-    "例行工作存名稱、內容、星期和時間，還有交給誰（那位員工也一起存才有，沒有的話套用時再選）；存下來沒有開關，套用時一律是關著的。技能存名稱和內容。",
-    "存之前每段字都會用和記憶、技能同一組規則檢查：有金鑰、密碼這類字不能存，像是叫員工不問你就做事的字要你多確認一次。",
+    "存的是現在這一刻的複本：之後你改了原本的員工、常用做法或定時工作，這個團隊範本不會跟著變。",
+    "員工只存名字、職位、你寫在卡上的固定指示和 Claude 的模型。不存 AI 工具、技能卡、記憶、共用資料夾和聊天紀錄；「完全交給他（有風險）」的員工存下來也不帶開始工作模式，套用時一律是「每件事先問我」。",
+    "定時工作存名稱、內容、星期和時間，還有交給誰（那位員工也一起存才有，沒有的話套用時再選）；存下來沒有開關，套用時一律是關著的。常用做法存名稱和內容。",
+    "存之前每段字都會用和記憶、常用做法同一組規則檢查：有金鑰、密碼這類字不能存，像是叫員工不問你就做事的字要你多確認一次。",
     "團隊範本只存在這台電腦，不會上傳，也不能匯出。"]);
-  assert(text(by(d, "data-templates", "save-summary")).includes("最多存 20 個團隊範本，一個最多 12 位員工、24 個技能、12 件例行工作。"));
+  assert(text(by(d, "data-templates", "save-summary")).includes("最多存 20 個團隊範本，一個最多 12 位員工、24 個常用做法、12 件定時工作。"));
   assert.deepStrictEqual(posts(), [], "opening the dialog posts nothing");
   await click(action(d, "cancel"));
   assert.strictEqual(dialogs().length, 0);
@@ -206,7 +206,7 @@ test("a refusal is said with the place it points at, the words are not repeated,
   typeName(d, "x");
   await click(action(d, "save-go"));
   const t = text(dialog());
-  assert(t.includes("第 1 個技能的內容有像金鑰或登入用代碼的東西，不能存進團隊範本。（技能：虛構技能）"), t);
+  assert(t.includes("第 1 個技能的內容有像金鑰或登入用代碼的東西，不能存進團隊範本。（常用做法：虛構技能）"), t);
   assert(!t.includes("已存成"));
   assert(action(dialog(), "save-go"), "the person can fix it and try again");
 });
@@ -225,7 +225,7 @@ test("a second yes: the save waits for 我確定, then posts the same again with
   typeName(dialog(), "要確認的");
   await click(action(dialog(), "save-go"));
   const warn = by(dialog(), "data-templates", "save-warn");
-  assert(warn && text(warn).includes("確定要存進團隊範本嗎？") && text(warn).includes("技能：虛構技能"));
+  assert(warn && text(warn).includes("確定要存進團隊範本嗎？") && text(warn).includes("常用做法：虛構技能"));
   assert.strictEqual(action(dialog(), "save-go").disabled, true, "waits for the yes");
   const box = by(warn, "data-tpl-save", "confirm");
   box.checked = true; box.dispatch("change"); await settle();
@@ -307,7 +307,7 @@ test("刪除 asks first, says only the template goes, posts an empty body, and t
   const del = () => action(by(h.dom().mainEl, "data-template-id", "tm-0123456789ab"), "delete");
   await click(del());
   let d = dialog();
-  assert(text(d).includes("刪除「我的店」") && text(d).includes("只刪這個團隊範本。用它建過的員工、技能、例行工作，和它是從哪裡存來的，都不會動。"));
+  assert(text(d).includes("刪除「我的店」") && text(d).includes("只刪這個團隊範本。用它建過的員工、常用做法、定時工作，和它是從哪裡存來的，都不會動。"));
   await click(d.find((n) => n.tag === "button" && text(n) === "取消"));
   assert.deepStrictEqual(posts(), []);
   await click(del());
@@ -332,7 +332,7 @@ test("source: the saving code posts only to the person's own routes, never build
   assert(!/innerHTML|insertAdjacentHTML|outerHTML/.test(BLOCK));
   const mine = BLOCK.slice(BLOCK.indexOf("// ---- the person's own team templates (P45-3)"));
   assert(mine.length > 3000, "the P45-3 part is marked");
-  const urls = Array.from(BLOCK.matchAll(/api\.(?:post|get)\(\s*[`"]([^`"]+)/g)).map((m) => m[1]).filter((u) => u !== "/api/templates" && u !== "/api/templates/preview" && !u.startsWith("/api/templates/appl"));   // P45-2's apply and undo are checked in templates.cjs
+  const urls = Array.from(BLOCK.matchAll(/api\.(?:post|get)\(\s*[`"]([^`"]+)/g)).map((m) => m[1]).filter((u) => u !== "/api/templates" && u !== "/api/templates/preview" && u !== "/api/agent-profiles" && !u.startsWith("/api/templates/appl"));   // P45-2's apply and undo are checked in templates.cjs
   assert.deepStrictEqual(urls.sort(), ["/api/templates/mine", "/api/templates/mine/${encodeURIComponent(template.id)}", "/api/templates/mine/${encodeURIComponent(template.id)}/delete"]);
   assert(!/export|匯入|上傳|下載/.test(mine.replace(/不能匯出|不會上傳/g, "")), "no way to export, import, upload or download");
 });

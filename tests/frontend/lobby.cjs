@@ -115,7 +115,7 @@ test("a flow whose task card is gone is still a card", () => {
   const f = flow("awaiting_approval", { attention: true, task_missing: true, task_title: "" });
   const g = group(live(), flowsOf([f]));
   assert.strictEqual(g.yourTurnFlows.length, 1);
-  assert(text(app.questCard(f, true)).includes("（任務卡已刪除或無法讀取）"));
+  assert(text(app.questCard(f, true)).includes("（專案已刪除或無法讀取）"));
 });
 
 test("P38-8: flows whose task card is gone or unreadable are put away, not at the front of the other tasks", () => {
@@ -150,7 +150,7 @@ test("P38-8: the board draws them folded, closed, after the other tasks, with a 
   assert.strictEqual(open.length, 2, "both cards exist in the page, one inside the fold");
   const first = open[0];
   assert(!text(first).includes("任務卡已刪除或無法讀取"), "the first card of the list is the readable one: " + text(first).slice(0, 40));
-  assert(fold.contains(open[1]) && text(open[1]).includes("任務卡已刪除或無法讀取"));
+  assert(fold.contains(open[1]) && text(open[1]).includes("專案已刪除或無法讀取"));
   // nothing unreadable: no fold
   const clean = app.boardSection(group(live(), flowsOf([real]))).find((s) => s.getAttribute("data-board") === "going");
   assert.strictEqual(clean.find((n) => n.getAttribute && n.getAttribute("data-board") === "missing"), null);
@@ -474,7 +474,7 @@ test("flows and agents share the first block: the flows come first, in API order
   assert.deepStrictEqual(cards.slice(0, 2).map((c) => c.getAttribute("data-flow-id")), [a.id, b.id]);
   assert.strictEqual(cards[2].tag, "div", "the agent's card is the existing session card");
   assert(text(turn).includes("1 個終端在等你") && text(turn).includes("2 則流程等你"));
-  assert(text(turn).includes("每 5 秒更新") && text(turn).includes("角色卡池"));
+  assert(text(turn).includes("每 5 秒更新") && text(turn).includes("員工詳細資料"));
   const going = main.find((n) => n.getAttribute && n.getAttribute("data-board") === "going");
   assert.strictEqual(going.findAll((n) => n.getAttribute && n.getAttribute("data-quest") === "flow").length, 1);
 });
@@ -517,7 +517,7 @@ test("runtime not connected and no flow card: the board says it cannot tell whet
   setPage({ live: live({ runtime: { available: false, problems: ["連不上"] } }), flows: flowsOf([flow("implementing")]) });
   const main = await open();
   const turn = main.find((n) => n.getAttribute && n.getAttribute("data-board") === "turn");
-  assert(text(turn).includes("VBear runtime 未連線，無法判斷有沒有終端在等你"));
+  assert(text(turn).includes("VBear 的背景程式未連線，無法判斷有沒有終端在等你"));
   assert(!text(turn).includes("沒有輪到你的任務"));
   assert(text(main).includes("無法連線到 VBear runtime"), "the page notice is kept");
   assert(!text(board(main)).includes("大廳目前沒有任務"));
@@ -548,12 +548,12 @@ test("all empty: one start block that points at the terminal workbench and expla
   setPage();
   const main = await open();
   const b = board(main);
-  assert(text(b).includes("大廳目前沒有任務。想開始第一個任務？"));
+  assert(text(b).includes("目前沒有任務。想開始第一個任務？"));
   const links = b.findAll(isEl("a"));
   assert.strictEqual(links.length, 1);
   assert.strictEqual(links[0].getAttribute("href"), "#/workbench");
-  assert.strictEqual(text(links[0]), "到終端工作台");
-  assert(text(b).includes("先按下方「＋ 任務卡（導入專案）」挑一個專案資料夾，再把角色卡放上任務卡的隊伍位置"));
+  assert.strictEqual(text(links[0]), "到工作台");
+  assert(text(b).includes("先按下方「＋ 加入一個資料夾」挑一個專案資料夾，再把員工放上專案的隊伍位置"));
   assert(!text(b).includes("右側「任務卡」分頁"));
   assert(!headings(main).includes("輪到你"), "the two blocks are replaced by the start block");
 });
@@ -706,7 +706,7 @@ test("the page: the three steps sit above the board, the next undone step has th
   assert(hs.indexOf("新手第一局") > hs.indexOf("進階") && hs.indexOf("新手第一局") < hs.indexOf("任務告示板"), "above the board (both in the advanced part, P47-2)");
   const html = main.findAll((n) => n.getAttribute && n.getAttribute("data-step")).map((n) => [n.getAttribute("data-step"), n.getAttribute("data-done")]);
   assert.deepStrictEqual(html, [["cards", "false"], ["task", "false"], ["team", "false"]]);
-  assert(text(host).includes("1. 拿角色卡") && text(host).includes("2. 導入專案，建立任務卡") && text(host).includes("3. 把隊伍放上任務卡"));
+  assert(text(host).includes("1. 新增員工") && text(host).includes("2. 加入一個資料夾，建立專案") && text(host).includes("3. 把隊伍放上專案"));
   const gos = host.findAll((n) => n.getAttribute && n.getAttribute("data-onboard-go"));
   assert.deepStrictEqual(gos.map((n) => n.getAttribute("data-onboard-go")), ["cards"], "one button, on the first step that is not done");
   assert.strictEqual(gos[0].getAttribute("href"), "#/team");

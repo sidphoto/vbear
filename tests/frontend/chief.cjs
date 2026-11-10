@@ -53,7 +53,7 @@ const preview = (over = {}) => ({ preview_id: "p" + "0".repeat(23), ok: true, bl
   sends_to: "Claude Code", ceo_tool: "claude", notice: null, cli: { version: "2.1.318", verified: true },
   disclosure: "開始後，你和 CEO 最近的對話（最多 20 則、12 KiB）與員工名單，會用你的 Claude 帳號送到 Anthropic（由本機的 Claude Code 送出）。",
   cost_note: "金額是 Claude Code 回報的估值；訂閱方案不等於實際帳單。沒有回報時，以每次上限計（最壞情況）。", ...over });
-const CODEX_NOTICE = "這張 CEO 是 Codex 的角色卡：你和它的對話會送給 Claude Code（Anthropic）整理成提議。";
+const CODEX_NOTICE = "這張 CEO 是 Codex 的員工：你和它的對話會送給 Claude Code（Anthropic）整理成提議。";
 const chiefView = (over = {}) => ({ id: COS, created_at: 1790000100, chat_id: CHAT, status: "running", state: "running", error_code: null, attempts: 1, retryable: [],
   spent_usd: "0", cost_source: null, limits: { per_call_usd: "0.3", total_usd: "0.9" }, read: { count: 6 }, note_chars: 0, plan: null, notes: [], dispatch_id: null, outcome: "none", ...over });
 const dview = (over = {}) => ({ id: DID, chief_id: COS, chat_id: CHAT, created_at: 1790000200, state: "proposed", started_by: null, started_by_text: null,
@@ -96,7 +96,7 @@ function serve(over = {}) {
     if (p === "/api/dispatch" && method === "GET") return jsonResponse({ dispatch: S.dispatches });
     if (p === "/api/actions") return jsonResponse(S.actions || { actions: [], unreadable: 0 });
     m = /^\/api\/dispatch\/(d-[0-9a-f]{12})(?:\/([a-z-]+))?$/.exec(p);
-    if (m && !m[2] && method === "GET") return S.views[m[1]] ? jsonResponse(S.views[m[1]]) : jsonResponse({ error: "找不到這份派工" }, false, 404);
+    if (m && !m[2] && method === "GET") return S.views[m[1]] ? jsonResponse(S.views[m[1]]) : jsonResponse({ error: "找不到這份分配工作" }, false, 404);
     if (m && m[2]) return S.post[m[2]] ? S.post[m[2]](body) : jsonResponse(S.views[m[1]] || dview());
     if (p === "/api/tasks") return jsonResponse({ tasks: [] });
     if (p === "/api/agent-profiles") return jsonResponse({ profiles: [] });
@@ -259,7 +259,7 @@ test("other blockers are said in the server's words and keep the start button aw
 });
 
 test("a preview the server refuses (not a CEO, the card cannot chat) is said and no dialog opens", async () => {
-  serve({ previewFail: "只有 CEO 職位的角色卡的聊天，才能請幕僚長安排" });
+  serve({ previewFail: "只有 CEO 職位的員工的聊天，才能請幕僚長安排" });
   const main = await open("#/chat/" + CHAT);
   await click(chiefItem(main));
   assert.strictEqual(dialog(), null);
@@ -325,7 +325,7 @@ test("a proposal on the chat page: the chief's words, the task, who, why, every 
   assert.strictEqual(find(card(main), "data-dispatch", "goal").value, "準備手工皂攤位");
   assert.deepStrictEqual(stepRows(main).map((r) => find(r, "data-dispatch", "step-text").value), ["請寫攤位介紹與價目表", "請算成本與定價", "請依定價改好價目表"]);
   assert.strictEqual(stepRows(main).length, 3);
-  assert(button(card(main), "確認派工") && button(card(main), "不採用"));
+  assert(button(card(main), "確認分配工作") && button(card(main), "不採用"));
 });
 
 test("the most it can cost: steps × the per-turn limit, and what is left today", async () => {
@@ -333,13 +333,13 @@ test("the most it can cost: steps × the per-turn limit, and what is left today"
   const main = await open("#/chat/" + CHAT);
   assert.strictEqual(costLine(main).includes("最多 US$1.50（3 步 × 每回合上限 US$0.50）"), true, costLine(main));
   assert(costLine(main).includes("今天還剩 US$2.71"), costLine(main));
-  assert(!costLine(main).includes("每天上限，VBear 會停下來"), "it fits in what is left");
+  assert(!costLine(main).includes("花費上限，VBear 會停下來"), "it fits in what is left");
 });
 
 test("when the most is more than what is left, it says the dispatch may stop at the daily limit and how to go on", async () => {
   withProposal({ cost: { steps: 3, per_turn_usd: "0.5", max_usd: "1.5", day_left_usd: "1.20" } });
   const main = await open("#/chat/" + CHAT);
-  assert(costLine(main).includes("做到一半碰到每天上限") && costLine(main).includes("按「繼續」"), costLine(main));
+  assert(costLine(main).includes("做到一半碰到花費上限") && costLine(main).includes("按「繼續」"), costLine(main));
 });
 
 test("the cost line follows the steps: delete one and the most falls", async () => {
@@ -356,7 +356,7 @@ test("the employees say that the employees still ask for every command, and that
   const t = text(card(main));
   assert(t.includes("每個指令") && t.includes("都問你"), t);
   assert(t.includes("收不回來") && t.includes("停止"), t);
-  assert(t.includes("安全模式") && t.includes("技能"), "the new employee: safe mode, no skill: " + t);
+  assert(t.includes("「每件事先問我」") && t.includes("技能"), "the new employee: safe mode, no skill: " + t);
   assert(t.includes("上一步") && t.includes("資料"), "the next step gets the last reply, as data: " + t);
 });
 
@@ -385,7 +385,7 @@ test("changing the title, the goal, a new employee's name and model is marked an
   await type(find(n1, "data-new-field", "name"), "記帳會計師");
   await pick(find(n1, "data-new-field", "model_alias"), "sonnet");
   assert(findAll(card(main), "data-dispatch", "edited").filter((n) => !n.hidden).length >= 4);
-  await click(button(card(main), "確認派工"));
+  await click(button(card(main), "確認分配工作"));
   const sent = posts("/confirm")[0].body;
   assert.strictEqual(sent.proposal_sha, SHA);
   assert.strictEqual(sent.title, "週末市集擺攤（手工皂）");
@@ -397,7 +397,7 @@ test("changing the title, the goal, a new employee's name and model is marked an
 test("confirming sends exactly the five fields the server takes, the plan as the person left it", async () => {
   withProposal();
   const main = await open("#/chat/" + CHAT);
-  await click(button(card(main), "確認派工"));
+  await click(button(card(main), "確認分配工作"));
   assert.strictEqual(posts("/confirm").length, 1);
   assert.deepStrictEqual(Object.keys(posts("/confirm")[0].body).sort(), ["goal", "new_cards", "proposal_sha", "steps", "title"]);
   assert.deepStrictEqual(posts("/confirm")[0].body.steps, [{ who: "C1", text: "請寫攤位介紹與價目表" }, { who: "N1", text: "請算成本與定價" },
@@ -412,7 +412,7 @@ test("deleting a step sends one fewer; the last step cannot be deleted", async (
   await click(button(stepRows(main)[1], "刪掉這一步"));
   assert(findAll(card(main), "data-dispatch", "edited").some((n) => !n.hidden), "marked");
   assert(text(card(main)).includes("你刪掉了 1 步"), text(card(main)));
-  await click(button(card(main), "確認派工"));
+  await click(button(card(main), "確認分配工作"));
   assert.deepStrictEqual(posts("/confirm")[0].body.steps.map((s) => s.text), ["請寫攤位介紹與價目表", "請依定價改好價目表"]);
   withProposal({ plan: { ...dview().plan, steps: [dview().plan.steps[0]] } });
   const one = await open("#/chat/" + CHAT);
@@ -424,7 +424,7 @@ test("a step can be handed to someone else and moved up or down", async () => {
   const main = await open("#/chat/" + CHAT);
   await pick(find(stepRows(main)[0], "data-dispatch", "step-who"), "N1");
   await click(button(stepRows(main)[2], "上移"));
-  await click(button(card(main), "確認派工"));
+  await click(button(card(main), "確認分配工作"));
   assert.deepStrictEqual(posts("/confirm")[0].body.steps, [{ who: "N1", text: "請寫攤位介紹與價目表" }, { who: "C1", text: "請依定價改好價目表" }, { who: "N1", text: "請算成本與定價" }]);
 });
 
@@ -441,12 +441,12 @@ test("a new employee taken out leaves their steps with no one: the card says so 
   withProposal();
   const main = await open("#/chat/" + CHAT);
   await click(button(find(card(main), "data-new", "N1"), "不要這位新員工"));
-  const confirm = button(card(main), "確認派工");
+  const confirm = button(card(main), "確認分配工作");
   assert.strictEqual(confirm.disabled, true);
   assert(text(find(card(main), "data-dispatch", "why-disabled")).includes("請選一位員工"), text(card(main)));
   await pick(find(stepRows(main)[1], "data-dispatch", "step-who"), "C1");
-  assert.notStrictEqual(button(card(main), "確認派工").disabled, true);
-  await click(button(card(main), "確認派工"));
+  assert.notStrictEqual(button(card(main), "確認分配工作").disabled, true);
+  await click(button(card(main), "確認分配工作"));
   assert.deepStrictEqual(posts("/confirm")[0].body.new_cards, [], "a new employee nobody works for is not made");
 });
 
@@ -455,18 +455,18 @@ const MADE_N1 = (withdrawn) => ({ created_cards: [{ ref: "N1", name: "會計師"
 test("an employee made by 「自己動手第 1 項」 and taken back: a step still for them will not confirm; handing it over does (P40-6)", async () => {
   withProposal(MADE_N1(true));
   const main = await open("#/chat/" + CHAT);
-  assert.strictEqual(button(card(main), "確認派工").disabled, true);
+  assert.strictEqual(button(card(main), "確認分配工作").disabled, true);
   const why = text(find(card(main), "data-dispatch", "why-disabled"));
   assert(why.includes("會計師") && why.includes("撤回") && why.includes("第 2 步"), why);
   await pick(find(stepRows(main)[1], "data-dispatch", "step-who"), "C1");
-  assert.notStrictEqual(button(card(main), "確認派工").disabled, true);
+  assert.notStrictEqual(button(card(main), "確認分配工作").disabled, true);
   assert.strictEqual(text(find(card(main), "data-dispatch", "why-disabled")), "");
 });
 
 test("an employee that is on is not in the way of confirming", async () => {
   withProposal(MADE_N1(false));
   const main = await open("#/chat/" + CHAT);
-  assert.notStrictEqual(button(card(main), "確認派工").disabled, true);
+  assert.notStrictEqual(button(card(main), "確認分配工作").disabled, true);
 });
 
 test("the card says what really happens to the new employees: made already (item 1 was on) or made on confirming", async () => {
@@ -477,7 +477,7 @@ test("the card says what really happens to the new employees: made already (item
   main = await open("#/chat/" + CHAT);
   const t = text(card(main));
   assert(t.includes("新員工已經建好了") && !t.includes("VBear 會建上面的新員工"), t);
-  assert(t.includes("按「確認派工」之後") && t.includes("任務卡"), t);
+  assert(t.includes("按「確認分配工作」之後") && t.includes("專案"), t);
 });
 
 test("a new employee's choices: the position without the CEO, the tools the proposal could name, a model only for Claude Code", async () => {
@@ -491,7 +491,7 @@ test("a new employee's choices: the position without the CEO, the tools the prop
   assert(find(n1, "data-new-field", "model_alias"));
   await pick(find(n1, "data-new-field", "tool"), "codex");
   assert.strictEqual(find(find(card(main), "data-new", "N1"), "data-new-field", "model_alias"), null, "Codex has no model alias");
-  await click(button(card(main), "確認派工"));
+  await click(button(card(main), "確認分配工作"));
   assert.strictEqual(posts("/confirm")[0].body.new_cards[0].tool, "codex");
   assert.strictEqual(posts("/confirm")[0].body.new_cards[0].model_alias, "");
 });
@@ -503,7 +503,7 @@ test("the questions of the chief of staff come first, and a plan with no step ca
   assert(t.includes("幕僚長想先問你") && t.includes("週末是哪一天？") && t.includes("要賣幾種？"), t);
   assert(t.indexOf("幕僚長想先問你") < t.indexOf("任務"), "first");
   assert(t.includes("回到和 CEO 的對話"), "what to do: " + t);
-  assert.strictEqual(button(card(main), "確認派工"), null);
+  assert.strictEqual(button(card(main), "確認分配工作"), null);
   assert(button(card(main), "不採用"));
 });
 
@@ -518,8 +518,8 @@ test("what VBear took out is listed, with the codes turned into names", async ()
 test("a lamp that is red: confirming is off and the reason is written; not adopting still works", async () => {
   withProposal({}, { lamp: "red" });
   const main = await open("#/chat/" + CHAT);
-  assert.strictEqual(button(card(main), "確認派工").disabled, true);
-  assert(text(find(card(main), "data-dispatch", "why-disabled")).includes("每天上限") && text(find(card(main), "data-dispatch", "why-disabled")).includes("亮紅燈"), text(card(main)));
+  assert.strictEqual(button(card(main), "確認分配工作").disabled, true);
+  assert(text(find(card(main), "data-dispatch", "why-disabled")).includes("今天的用量到你設的上限了") && find(find(card(main), "data-dispatch", "why-disabled"), "data-limit", "go"), text(card(main)));
   assert.notStrictEqual(button(card(main), "不採用").disabled, true);
 });
 
@@ -536,14 +536,14 @@ test("not adopting asks first, says nothing will happen and that the chief's cos
 });
 
 test("a refusal on confirming (the proposal changed, an employee is gone) is shown in the server's words and nothing moves", async () => {
-  withProposal({}, { post: { confirm: () => jsonResponse({ code: "card_changed", error: "有一位要派工的員工在提議之後被改過了，請重新整理再確認" }, false, 409) } });
+  withProposal({}, { post: { confirm: () => jsonResponse({ code: "card_changed", error: "有一位要分配工作的員工在提議之後被改過了，請重新整理再確認" }, false, 409) } });
   global.location.hash = "";
   const main = await open("#/chat/" + CHAT);
-  await click(button(card(main), "確認派工"));
+  await click(button(card(main), "確認分配工作"));
   const e = find(card(main), "data-dispatch", "error");
   assert(e && text(e).includes("被改過了"), text(card(main)));
   assert.notStrictEqual(global.location.hash, "#/dispatch/" + DID);
-  assert.notStrictEqual(button(card(main), "確認派工").disabled, true, "the person may try again");
+  assert.notStrictEqual(button(card(main), "確認分配工作").disabled, true, "the person may try again");
 });
 
 test("a proposal that was already decided is not drawn as a card on the chat page; it is a line with its state", async () => {
@@ -582,7 +582,7 @@ const step = (seq, state, over = {}) => ({ seq, who: seq === 2 ? "N1" : "C1", na
   cost_usd: state === "ended" ? "0.012" : null, ended_reason: state === "ended" ? "result" : null, ...over });
 const running = (over = {}) => dview({ state: "running", started_by: "you", started_by_text: "你確認的", steps: [step(1, "ended"), step(2, "running"), step(3, "pending")],
   created_cards: [{ ref: "N1", name: "會計師", profile_id: PROF_A, withdrawn: false }],
-  events: [{ seq: 1, at: 1790000300, kind: "confirmed", by: "you", edited: false, what: "確認了派工，開始準備", by_text: "你確認的" }],
+  events: [{ seq: 1, at: 1790000300, kind: "confirmed", by: "you", edited: false, what: "確認了分配工作，開始準備", by_text: "你確認的" }],
   can: { confirm: false, dismiss: false, stop: true, continue: false, delete: false, withdraw: [PROF_A] }, task_id: "t-abc", ...over });
 const stateOf = (main) => findAll(main, "data-dispatch", "step-row").map((n) => attr(n, "data-step-state"));
 const withView = (v, extra = {}) => serve({ views: { [v.id]: v }, dispatches: [row(v)], ...extra });
@@ -599,7 +599,7 @@ test("the list: every dispatch with its state and steps, a damaged one said, an 
   assert(find(main, "data-dispatch", "actions-link"));
   serve();
   const empty = await open("#/dispatch");
-  assert(text(empty).includes("還沒有派工") && text(empty).includes("請幕僚長安排"));
+  assert(text(empty).includes("還沒有分配工作") && text(empty).includes("請幕僚長安排"));
 });
 
 test("a running dispatch: each step says whether it is not started, being done, waiting for the person's allow, done or not done, and links to the employee's chat", async () => {
@@ -646,7 +646,7 @@ test("no stop, continue or delete button when the server says they do not apply"
 });
 
 test("paused: the reason in words (which step, which tool, the limit, when it comes back or unknown) and the button 「繼續」", async () => {
-  const words = "今天的花費到了每天上限 US$3，本機明天 0:00 重新計算；到時候按「繼續」接著做第 2 步。";
+  const words = "今天的花費到了花費上限 US$3，本機明天 0:00 重新計算；到時候按「繼續」接著做第 2 步。";
   withView(running({ state: "paused", steps: [step(1, "ended"), step(2, "pending"), step(3, "pending")], pause: { reason: "daily_limit", until: 1790100000, text: words },
     can: { confirm: false, dismiss: false, stop: true, continue: true, delete: false, withdraw: [PROF_A] } }));
   const main = await open("#/dispatch/" + DID);
@@ -718,14 +718,14 @@ test("the task card VBear made is linked; the things done are listed with who de
   assert.strictEqual(attr(find(main, "data-dispatch", "task-link"), "href"), "#/workbench?task=t-abc");
   const ev = findAll(main, "data-dispatch", "event");
   assert.strictEqual(ev.length, 1);
-  assert(text(ev[0]).includes("確認了派工") && text(ev[0]).includes("你確認的"));
+  assert(text(ev[0]).includes("確認了分配工作") && text(ev[0]).includes("你確認的"));
 });
 
 test("deleting a dispatch asks first and says that the employees, the task card and the chats stay", async () => {
   withView(running({ state: "stopped", can: { confirm: false, dismiss: false, stop: false, continue: false, delete: true, withdraw: [] } }));
   const main = await open("#/dispatch/" + DID);
   await click(find(main, "data-dispatch", "delete"));
-  assert(text(dialog()).includes("員工、任務卡和聊天都留著"), text(dialog()));
+  assert(text(dialog()).includes("員工、專案和聊天都留著"), text(dialog()));
   await click(button(dialog(), "刪除"));
   assert.strictEqual(posts("/delete").length, 1);
   assert.strictEqual(global.location.hash, "#/dispatch");
@@ -735,7 +735,7 @@ test("a dispatch that still waits for the person shows the proposal card on its 
   withView(dview());
   const main = await open("#/dispatch/" + DID);
   assert(card(main), "the card is here too");
-  await click(button(card(main), "確認派工"));
+  await click(button(card(main), "確認分配工作"));
   assert.strictEqual(posts("/confirm").length, 1);
 });
 
@@ -765,12 +765,12 @@ test("what a model wrote in a step stays text on the dispatch page", async () =>
 
 // ---- 「AI 自己做了什麼」 --------------------------------------------------------------------------------------------------------------
 
-const action = (over = {}) => ({ at: 1790000300, dispatch_id: DID, seq: 1, kind: "confirmed", what: "確認了派工，開始準備", by: "you", by_text: "你確認的", profile_id: null, can_stop: false, can_withdraw: false, ...over });
+const action = (over = {}) => ({ at: 1790000300, dispatch_id: DID, seq: 1, kind: "confirmed", what: "確認了分配工作，開始準備", by: "you", by_text: "你確認的", profile_id: null, can_stop: false, can_withdraw: false, ...over });
 
 test("the list: what was done, when, who decided (you, or 自己動手 item 1 or 2), a link to the dispatch", async () => {
   serve({ actions: { unreadable: 0, actions: [
     action({ seq: 5, kind: "step_sent", what: "送出第 1 步給「文案小編」（已經送出，收不回來）", by: "auto2", by_text: "自己動手第 2 項", can_stop: true }),
-    action({ seq: 3, kind: "card_created", what: "建了新員工「會計師」（安全模式，沒有技能）", by: "auto1", by_text: "自己動手第 1 項", profile_id: PROF_A, can_withdraw: true }),
+    action({ seq: 3, kind: "card_created", what: "建了新員工「會計師」（「每件事先問我」，沒有技能）", by: "auto1", by_text: "自己動手第 1 項", profile_id: PROF_A, can_withdraw: true }),
     action({ seq: 1 })] } });
   const main = await open("#/actions");
   const rows = findAll(main, "data-action", "row");
@@ -814,7 +814,7 @@ test("an empty list, and dispatches that could not be read, are said", async () 
   assert(text(main).includes("AI 還沒有自己做過任何事"));
   serve({ actions: { actions: [action()], unreadable: 2 } });
   main = await open("#/actions");
-  assert(text(main).includes("2 份派工的紀錄讀不出來"));
+  assert(text(main).includes("2 份分配工作的紀錄讀不出來"));
 });
 
 test("looking at the list asks and writes nothing; the page links to the dispatches and to the settings", async () => {
@@ -848,10 +848,10 @@ test("the board shows the two kinds with their words, a link, and counts them in
   const turn = sections.find((n) => attr(n, "data-board") === "turn");
   const cards = findAll(turn, "data-dispatch", "board-card");
   assert.strictEqual(cards.length, 2);
-  assert(text(cards[0]).includes("派工提議") && text(cards[0]).includes("週末市集擺攤") && text(cards[0]).includes("確認"), text(cards[0]));
-  assert(text(cards[1]).includes("派工暫停") && text(cards[1]).includes("繼續"), text(cards[1]));
+  assert(text(cards[0]).includes("分配工作提議") && text(cards[0]).includes("週末市集擺攤") && text(cards[0]).includes("確認"), text(cards[0]));
+  assert(text(cards[1]).includes("分配工作暫停") && text(cards[1]).includes("繼續"), text(cards[1]));
   assert(cards[0].find((n) => n.tag === "a" && attr(n, "href") === "#/dispatch/" + DID));
-  assert(text(turn).includes("1 份派工提議等你") && text(turn).includes("1 件派工暫停"), text(turn));
+  assert(text(turn).includes("1 份分配工作提議等你") && text(turn).includes("1 件分配工作暫停"), text(turn));
 });
 
 test("a change in the dispatches changes the board's key, so the board repaints", () => {
@@ -886,7 +886,7 @@ test("a message VBear sent for a dispatch is said so over it and is not shown as
 test("an origin that is not exactly a dispatch id and a step of 1 to 4 is not believed", () => {
   for (const origin of [{ dispatch: "d-zz", step: 2 }, { dispatch: DID, step: 9 }, { dispatch: DID, step: 0 }, { dispatch: DID, step: "2" }, "x", [], { dispatch: DID }]) {
     const t = text(app.chatLine({ seq: 2, at: 1, kind: "user_message", turn: 1, text: "hi", origin }));
-    assert(t.includes("你・") && !t.includes("VBear 依派工"), JSON.stringify(origin));
+    assert(t.includes("你・") && !t.includes("VBear 依分配工作"), JSON.stringify(origin));
   }
 });
 

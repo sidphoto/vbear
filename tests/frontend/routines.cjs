@@ -259,13 +259,13 @@ test("no skills, or a book that cannot be read, is said in the picker; the form 
   let main = await open();
   await click(act(main, "new"));
   await click(act(by(main, "data-routines", "form"), "from-skill"));
-  assert(text(h.dom().bodyEl.find((n) => attr(n, "data-skill") === "picker")).includes("還沒有存任何技能"));
+  assert(text(h.dom().bodyEl.find((n) => attr(n, "data-skill") === "picker")).includes("還沒有存任何常用做法"));
   setServer({ routines: [], book: null });
   main = await open();
   await click(act(main, "new"));
   const form = by(main, "data-routines", "form");
   await click(act(form, "from-skill"));
-  assert(text(h.dom().bodyEl.findAll((n) => attr(n, "data-skill") === "picker").pop()).includes("讀不到技能"));
+  assert(text(h.dom().bodyEl.findAll((n) => attr(n, "data-skill") === "picker").pop()).includes("讀不到常用做法"));
   by(form, "data-routine-field", "text").value = "照樣能自己寫";
   assert.strictEqual(by(form, "data-routine-field", "text").value, "照樣能自己寫");
 });
@@ -342,7 +342,7 @@ test("the chat list shows the routine's title where the server sent one", async 
   setHandler((url) => {
     const p = url.split("?")[0];
     if (p === "/api/chats") return jsonResponse({ chats: [
-      { id: "c-0123456789abcdef", profile_id: "p-writer", name: "文案小編", routine_title: "例行工作：市集日報 11/09 08:00", engine: "claude", turns: 1, spent_usd: "0.10", last_at: 1, open: false, waiting: false },
+      { id: "c-0123456789abcdef", profile_id: "p-writer", name: "文案小編", routine_title: "定時工作：市集日報 11/09 08:00", engine: "claude", turns: 1, spent_usd: "0.10", last_at: 1, open: false, waiting: false },
       { id: "c-fedcba9876543210", profile_id: "p-writer", name: "文案小編", engine: "claude", turns: 1, spent_usd: "0.10", last_at: 1, open: false, waiting: false }],
       cards: [], problems: [], ledger: null, limits: null });
     return null;
@@ -350,20 +350,20 @@ test("the chat list shows the routine's title where the server sent one", async 
   const main = await open("#/chat");
   const rows = main.findAll((n) => attr(n, "data-chat") === "row");
   assert.strictEqual(rows.length, 2);
-  assert(text(rows[0]).includes("例行工作：市集日報 11/09 08:00"));
-  assert(text(rows[1]).includes("文案小編") && !text(rows[1]).includes("例行工作"));
+  assert(text(rows[0]).includes("定時工作：市集日報 11/09 08:00"));
+  assert(text(rows[1]).includes("文案小編") && !text(rows[1]).includes("定時工作"));
 });
 
 test("「AI 自己做了什麼」 lists a routine VBear started, links to its chat, offers no stop and no withdraw", async () => {
   setServer();
   setHandler((url) => {
     const p = url.split("?")[0];
-    if (p === "/api/actions") return jsonResponse({ actions: [{ at: 1794000000, dispatch_id: null, seq: 0, kind: "routine_started", what: "例行工作「市集日報」開始了", by: "auto3", by_text: "自己動手第 3 項", profile_id: null, can_stop: false, can_withdraw: false, routine_id: ROUTINE.id, chat_id: "c-0123456789abcdef" }], unreadable: 0 });
+    if (p === "/api/actions") return jsonResponse({ actions: [{ at: 1794000000, dispatch_id: null, seq: 0, kind: "routine_started", what: "定時工作「市集日報」開始了", by: "auto3", by_text: "自己動手第 3 項", profile_id: null, can_stop: false, can_withdraw: false, routine_id: ROUTINE.id, chat_id: "c-0123456789abcdef" }], unreadable: 0 });
     return null;
   });
   const main = await open("#/actions");
   const row = by(main, "data-action", "row");
-  assert(row && text(row).includes("例行工作「市集日報」開始了") && text(row).includes("自己動手第 3 項"));
+  assert(row && text(row).includes("定時工作「市集日報」開始了") && text(row).includes("自己動手第 3 項"));
   assert.strictEqual(attr(row, "data-by"), "auto3");
   assert.strictEqual(by(row, "data-action", "routine-chat").getAttribute("href"), "#/chat/c-0123456789abcdef");
   assert.strictEqual(row.find((n) => n.tag === "button"), null);

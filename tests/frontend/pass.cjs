@@ -505,7 +505,7 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
     assert.deepStrictEqual(shield(n), [], "an untested level has no shield");
     assert.deepStrictEqual(shield(c), ["none"], "unrestricted has the empty shield");
     for (const line of [w, n, c]) assert.strictEqual(walk(line).filter((x) => x.tag === "svg" && /pass-mark/.test(x.getAttribute("class") || "")).length, 1);
-    assert.ok(textOf(front).includes("另有這次出發的暫存區："));
+    assert.ok(textOf(front).includes("另有這次開始工作的暫存區："));
   });
 
   await test("passFront: the legend names the three shields, says what has none, and every shield is the same art as the card's", () => {
@@ -536,7 +536,7 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
     const fixes = {
       intent_unspecified: ["intents", "現在決定"], read_deny_unenforceable: ["intents", "調整權限意圖"], readonly_unverified: ["intents", "調整權限意圖"],
       test_deny_unenforceable: ["intents", "調整權限意圖"], deploy_not_available: ["intents", "調整權限意圖"], intents_not_supported: ["intents", "調整權限意圖"],
-      tool_not_launchable: ["tool", "改選陣營"], commit_not_enforceable: ["commit", "回去勾選知悉"],
+      tool_not_launchable: ["tool", "改選 AI 工具"], commit_not_enforceable: ["commit", "回去勾選知悉"],
     };
     for (const [code, [act, text]] of Object.entries(fixes)) {
       const f = pure.passFix(code);
@@ -643,7 +643,7 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
     await tick(8);
     const wiz = body.children.filter((c) => c.getAttribute && c.getAttribute("role") === "dialog").pop();
     assert.notStrictEqual(wiz, d);
-    assert.ok(findText(wiz, "陣營就是這張卡用哪個工具"), "step 2 of the editor");
+    assert.ok(findText(wiz, "這位員工用哪個 AI 工具"), "step 2 of the editor");
     assert.ok(byData(wiz, "data-cw", "intents")[0].hasAttribute("open"), "the intents are open");
     // decide: write allow
     const sel = walk(wiz).find((n) => n.tag === "select" && n.getAttribute("aria-label") === "編輯寫入");
@@ -811,7 +811,7 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
   });
 
   await test("source: the old words are gone from the pass and the card's intent note points at the shield", () => {
-    assert.strictEqual(vm.runInContext("CARD_INTENT_NOTE", pure), "權限意圖是隊伍分工的標記，不代表 VBear 已經限制這個程式的真實能力；真正的限制，看出發通行證上的盾牌。");
+    assert.strictEqual(vm.runInContext("CARD_INTENT_NOTE", pure), "權限意圖是隊伍分工的標記，不代表 VBear 已經限制這個程式的真實能力；真正的限制，看開始前的檢查上的盾牌。");
     assert.ok(!/防具（這次/.test(app));
   });
 

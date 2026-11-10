@@ -86,7 +86,7 @@ test("setupTryView: only an installed tool has it; idle, asking again, running a
   assert(/大約花不到 US\$0\.01/.test(v.note), "the estimate is on the page before anything is pressed");
   v = app.setupTryView(installed("agy"), { phase: "confirm" });
   assert.deepStrictEqual(v.buttons.map((b) => b.key), ["try-confirm", "try-cancel"]);
-  assert(/大約花不到 US\$0\.01/.test(v.note) && /每天上限/.test(v.note));
+  assert(/大約花不到 US\$0\.01/.test(v.note) && /花費上限/.test(v.note));
   v = app.setupTryView(installed("agy"), { phase: "running" });
   assert.deepStrictEqual(v.buttons, []);
   assert(/正在試/.test(v.note));

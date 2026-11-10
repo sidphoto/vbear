@@ -275,7 +275,7 @@ class OtherDocumentsTests(unittest.TestCase):
 
     def test_the_glossary_has_the_terms_and_the_shared_folder_sentence(self):
         text = read("GLOSSARY.md")
-        for term in ("**聊天用的 AGY 設定資料夾**：", "**AGY 的沙盒**：", "**讀取卡**：", "**估計花費**：", "**改內容再問**：", SHARED_SENTENCE):
+        for term in ("**聊天用的 AGY 設定資料夾**：", "**AGY 的保護範圍**：", "**讀取卡**：", "**估計花費**：", "**改內容再問**：", SHARED_SENTENCE):
             self.assertIn(term, text, term)
         self.assertNotIn("AGY 的員工要再確認「讀到的檔案內容會送到 Google」", text)
 

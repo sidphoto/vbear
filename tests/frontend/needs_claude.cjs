@@ -58,7 +58,7 @@ async function open(hash) {
 const notes = (main) => byAttr(main, "data-needs-claude", "note");
 
 // every page that works only through Claude Code, and a word that proves the page itself still drew
-const PAGES = [["meetings", "#/meetings", "會議"], ["staffing", "#/staffing", "組隊會議"], ["chat", "#/chat", "對話紀錄"], ["skills (translation)", "#/skills", "技能庫"]];
+const PAGES = [["meetings", "#/meetings", "會議"], ["staffing", "#/staffing", "組隊會議"], ["chat", "#/chat", "對話紀錄"], ["skills (translation)", "#/skills", "AI 工具的外掛清單"]];
 
 const tests = [];
 const test = (name, fn) => tests.push([name, fn]);
@@ -126,7 +126,7 @@ test("the note is the same component on every page: same title, same way to get 
 test("skills page: the note is only for translating with Claude Code, not when the engine is Codex", async () => {
   setServer(statusOf(row("claude", "not_installed")), "codex");
   const main = await open("#/skills");
-  assert(text(main).includes("技能庫"));
+  assert(text(main).includes("AI 工具的外掛清單"));
   assert.strictEqual(notes(main).length, 0);
 });
 
