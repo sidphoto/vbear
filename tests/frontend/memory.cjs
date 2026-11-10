@@ -492,11 +492,11 @@ test("a page that sends no cards shows no switches and no guess", async () => {
   assert(text(main).includes("在終端機（完整模式）出發時不帶記憶"));
 });
 
-test("the nav has the memory page after the chat, the route is known, and the code keeps its rules", () => {
+test("(P47-1) the memory page is a page of the 員工 item of the menu (it lights it), the route is known, and the code keeps its rules", () => {
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
-  assert(html.includes('data-nav="memory"'));
-  assert(html.indexOf('data-nav="chat"') < html.indexOf('data-nav="memory"') && html.indexOf('data-nav="memory"') < html.indexOf('data-nav="dispatch"'));
+  assert(html.includes('data-nav="employees"'));
   const source = fs.readFileSync(path.join(root, "app.js"), "utf8");
+  assert(/\bmemory: "employees"/.test(source.slice(source.indexOf("const NAV_PARENT = {"), source.indexOf("const ADVANCED_NAV"))), "the memory page lights 員工");
   assert(/top === "memory"\) await viewMemory\(\)/.test(source));
   const part = source.slice(source.indexOf("// ---------- memory (P42-1"), source.indexOf("// ---------- meetings (P34-5)"));
   assert(part.length > 3000);

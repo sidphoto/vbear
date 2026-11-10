@@ -450,8 +450,10 @@ test("a run that was a missed time is told in words: how many were lost, or that
   assert(!t.includes("asleep_") && !t.includes("superseded"), t);
 });
 
-test("the nav has the page, the bar sits over main, and the CSS can hide it", () => {
-  assert(/<a href="#\/routines" data-nav="routines">/.test(HTML));
+test("(P47-1) the page is a page of the 工作 item of the menu, the bar sits over main, and the CSS can hide it", () => {
+  assert(/<a href="#\/work" data-nav="work">/.test(HTML));
+  const appSrc = fs.readFileSync(path.join(__dirname, "..", "..", "web", "app.js"), "utf8");
+  assert(/\broutines: "work"/.test(appSrc.slice(appSrc.indexOf("const NAV_PARENT = {"), appSrc.indexOf("const ADVANCED_NAV"))), "the routines light 工作");
   assert(/id="waiting-bar"[^>]*hidden/.test(HTML));
   assert(HTML.indexOf('id="waiting-bar"') < HTML.indexOf('<main id="main"'));
   assert(/\.waiting-bar\[hidden\]/.test(fs.readFileSync(path.join(__dirname, "..", "..", "web", "style.css"), "utf8")));

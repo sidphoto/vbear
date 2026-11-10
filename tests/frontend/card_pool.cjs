@@ -1016,7 +1016,7 @@ async function test(name, fn) {
     assert.ok(!/\p{Extended_Pictographic}/u.test(poolCode), "emoji in the card pool code");
     assert.ok(!/https?:\/\//.test(poolCode.split("http://www.w3.org/2000/svg").join("")), "external resource (the SVG namespace is a name, not a load)");
     const html = fs.readFileSync(path.join(__dirname, "..", "..", "web", "index.html"), "utf8");
-    assert.ok(html.includes("</span>角色卡池</a>") && !html.includes("Agent 團隊"));
+    assert.ok(html.includes("</span>員工詳細資料</a>") && !html.includes("Agent 團隊"));   // (P47-1) the pool's menu item is in the advanced part, as 員工詳細資料
   });
 
   await test("honesty: the pool shows no stats, levels, rarity, stars or draws; no attendance; the intents carry their disclaimer", async () => {

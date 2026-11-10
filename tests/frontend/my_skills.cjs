@@ -113,8 +113,10 @@ test("the page says first what a skill is and that it is not a skill card, and h
   assert(text(q(main, "none")).includes("還沒有存任何技能"));
   assert(text(q(main, "used")).includes("0／100"));
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
-  assert(/<a href="#\/my-skills" data-nav="my-skills">[^<]*<span aria-hidden="true">[^<]*<\/span>技能<\/a>/.test(html));
-  assert(html.indexOf('data-nav="shared"') < html.indexOf('data-nav="my-skills"'), "below the shared folder");
+  // (P47-1) the page has no item of its own in the menu now: it is a page of 工作 and lights that item
+  assert(/<a href="#\/work" data-nav="work">[^<]*<span aria-hidden="true">[^<]*<\/span>工作<\/a>/.test(html));
+  const appSrc = fs.readFileSync(path.join(root, "app.js"), "utf8");
+  assert(/"my-skills": "work"/.test(appSrc.slice(appSrc.indexOf("const NAV_PARENT = {"), appSrc.indexOf("const ADVANCED_NAV"))), "lights 工作");
 });
 
 test("the skills are listed with the name, the first 80 characters, where they came from and when; markup stays text", async () => {
@@ -666,7 +668,7 @@ test("the code keeps its rules: no markup written, no emoji, no outside address,
   assert(!/\/api\/(chats|groups|config|settings|native|agent-profiles|memory)|\/messages|\/answer|api\.(patch|del)\(/.test(part));
   assert(!/\.click\(\)|\.submit\(\)/.test(part), "no pressing of the send button for the person");
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
-  const nav = html.split("\n").find((line) => line.includes('data-nav="my-skills"'));
+  const nav = html.split("\n").find((line) => line.includes('data-nav="work"'));
   assert(nav && !/\p{Extended_Pictographic}/u.test(nav), "no emoji in the navigation line");
 });
 

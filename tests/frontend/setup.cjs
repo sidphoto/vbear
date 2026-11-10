@@ -237,8 +237,10 @@ test("the route and the nav: #/setup is a page, the nav and the settings page le
   const main = await open("#/setup");
   assert(byAttr(main, "data-setup", "page").length === 1);
   const html = fs.readFileSync(path.join(__dirname, "..", "..", "web", "index.html"), "utf8");
-  assert(/<a href="#\/setup" data-nav="setup">[^<]*<span aria-hidden="true">[^<]*<\/span>開始設定<\/a>/.test(html));
-  assert(html.indexOf('data-nav="setup"') < html.indexOf('data-nav="office"'), "near the top of the nav");
+  // (P47-1) the start-up page has no item of its own in the menu: it is a page of 設定 (it lights that item), and the settings page leads to it
+  assert(/<a href="#\/settings" data-nav="settings">[^<]*<span aria-hidden="true">[^<]*<\/span>設定<\/a>/.test(html));
+  const appSrc = fs.readFileSync(path.join(__dirname, "..", "..", "web", "app.js"), "utf8");
+  assert(/\bsetup: "settings"/.test(appSrc.slice(appSrc.indexOf("const NAV_PARENT = {"), appSrc.indexOf("const ADVANCED_NAV"))), "the start-up lights 設定");
   const link = app.setupSettings ? app.setupSettings() : null;
   assert(!link || attr(link.find((n) => attr(n, "data-setup") === "open"), "href") === "#/setup");
 });
