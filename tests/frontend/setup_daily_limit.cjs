@@ -62,7 +62,7 @@ async function open() {
   return h.dom().mainEl;
 }
 const section = (main) => main.find((n) => attr(n, "data-setup-slot") === "daily-limit");
-const choices = (main) => section(main).findAll((n) => attr(n, "data-daily-choice"));
+const choices = (main) => section(main).findAll((n) => ["1", "3", "10"].includes(attr(n, "data-daily-choice")));
 const choiceButton = (main, v) => section(main).find((n) => attr(n, "data-daily-pick") === String(v));
 const click = async (node) => { node.dispatch("click"); await settle(); };
 const posts = () => calls.filter((c) => c[0] === "POST" && c[1] === "/api/setup/daily-limit");
@@ -82,6 +82,9 @@ test("the page offers US$1, US$3 and US$10, in that order, each with a sentence 
     assert(/聊天/.test(text(note)) && /會議/.test(text(note)), "in terms of chat turns and meetings: " + text(note));
     assert(/最多|最壞|上限/.test(text(note)), "says it is the most, not a promise: " + text(note));
   }
+  assert.strictEqual(section(main).tag, "details");
+  assert.strictEqual(attr(section(main), "open"), null, "folded by default");
+  assert(text(main).includes("之後隨時可以從「設定」的「AI 工具」回到這一頁"));
   assert(/每天/.test(text(section(main))) && /0 點/.test(text(section(main))), "says what the day is");
   assert(/設定/.test(text(section(main))), "says it can be changed later in the settings");
 });
@@ -108,10 +111,12 @@ test("the selected option follows what the server has; a number that is none of 
   assert(text(section(main)).includes("US$2.5"), "the number in force is shown");
 });
 
-test("choosing sends only the number, once, and then shows the result", async () => {
+test("choosing stages the number; Save sends only the number, once, and shows the result", async () => {
   setServer({ daily: 3 });
   const main = await open();
   await click(choiceButton(main, 10));
+  assert.strictEqual(posts().length, 0);
+  await click(section(main).find((n) => attr(n, "data-limit-save") === ""));
   assert.deepStrictEqual(posts().map((c) => c[2]), [{ daily_usd: 10 }]);
   const result = section(main).find((n) => attr(n, "data-setup") === "daily-result");
   assert(result, "the result is shown");
@@ -128,6 +133,8 @@ test("the result names each limit that was brought down, with the number before 
   });
   const main = await open();
   await click(choiceButton(main, 1));
+  assert.strictEqual(posts().length, 0);
+  await click(section(main).find((n) => attr(n, "data-limit-save") === ""));
   const t = text(section(main).find((n) => attr(n, "data-setup") === "daily-result"));
   assert(t.includes("US$1"), t);
   assert(/每場會議[^，。；]*US\$1\.5[^，。；]*US\$1/.test(t), t);
@@ -141,6 +148,8 @@ test("a refusal from the server is shown in its words, nothing is called done, a
   setServer({ daily: 3, post: () => jsonResponse({ error: "每天上限沒有存進去：磁碟寫不進去" }, false, 503) });
   const main = await open();
   await click(choiceButton(main, 1));
+  assert.strictEqual(posts().length, 0);
+  await click(section(main).find((n) => attr(n, "data-limit-save") === ""));
   const err = section(main).find((n) => attr(n, "data-setup") === "daily-error");
   assert(err && text(err).includes("磁碟寫不進去"), err && text(err));
   assert(!section(main).find((n) => attr(n, "data-setup") === "daily-result"));
