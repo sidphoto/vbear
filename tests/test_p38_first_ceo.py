@@ -194,6 +194,77 @@ class TheHomeNoteTests(FirstCeoCase):
         self.assertEqual(self.req("GET", "/api/config")[1]["config"]["first_ceo_id"], "")
 
 
+class WantedToolTests(FirstCeoCase):
+    """P48-3 (D6): GET /api/first-ceo?tool=<id> makes the plan for the AI the person picked, and never for another one."""
+
+    def wanted(self, tool):
+        return self.req("GET", "/api/first-ceo?tool=" + tool)
+
+    def test_the_picked_tool_wins_over_a_ready_claude_code(self):
+        self.ready("claude", "codex")
+        st, r = self.wanted("codex")
+        self.assertEqual(st, 200, r)
+        self.assertEqual((r["can_create"], r["tool"], r["tool_name"], r["go"]), (True, "codex", "Codex", None))
+        self.assertEqual(r["launch_mode"], "safe")
+        self.assertIs(r["chat_ready"], False)
+        self.assertIn("聊天用的 Codex", r["chat_note"])
+
+    def test_without_a_pick_the_first_ready_tool_is_still_taken(self):
+        self.ready("claude", "codex")
+        st, r = self.req("GET", "/api/first-ceo")
+        self.assertEqual((st, r["tool"]), (200, "claude"))
+
+    def test_a_picked_tool_that_is_not_ready_is_not_made_and_not_swapped(self):
+        self.ready("claude")
+        self.install("codex")
+        self.set_exit("codex", 1)
+        st, r = self.wanted("codex")
+        self.assertEqual(st, 200, r)
+        self.assertEqual((r["needed"], r["can_create"], r["go"], r["tool"], r["tool_name"]), (True, False, "setup", None, None))
+        self.assertIn("Codex", r["reason"])
+        self.assertIn("還沒準備好", r["reason"])
+        self.assertIn("換一家", r["reason"])
+
+    def test_a_picked_tool_that_is_not_installed_is_not_swapped_either(self):
+        self.ready("claude", "codex")
+        st, r = self.wanted("agy")
+        self.assertEqual(st, 200, r)
+        self.assertEqual((r["can_create"], r["tool"]), (False, None))
+        self.assertIn("AGY", r["reason"])
+
+    def test_only_the_three_chat_tools_can_be_picked(self):
+        self.ready("claude")
+        for bad in ("grok", "mcode", "xai", "CLAUDE", "..%2Fclaude", "claude%20", "%00"):
+            st, r = self.wanted(bad)
+            self.assertEqual(st, 400, (bad, r))
+
+    def test_a_blank_pick_means_no_pick(self):
+        self.ready("claude")
+        st, r = self.req("GET", "/api/first-ceo?tool=")
+        self.assertEqual((st, r["tool"]), (200, "claude"))
+
+    def test_the_pick_changes_nothing_on_disk_and_starts_no_card(self):
+        self.ready("claude", "codex")
+        self.wanted("codex")
+        st, r = self.req("GET", "/api/agent-profiles")
+        self.assertEqual((st, r["profiles"]), (200, []))
+
+    def test_the_module_never_falls_back_when_a_tool_is_wanted(self):
+        rows = [{"id": "claude", "ready": True}, {"id": "codex", "ready": False}]
+        plan = first_ceo.plan([], rows, wanted="codex")
+        self.assertEqual((plan["can_create"], plan["tool"], plan["go"]), (False, None, "setup"))
+        self.assertEqual(first_ceo.plan([], rows, wanted="claude")["tool"], "claude")
+        self.assertEqual(first_ceo.plan([], rows)["tool"], "claude")
+        with self.assertRaises(ValueError):
+            first_ceo.plan([], rows, wanted="grok")
+
+    def test_a_person_with_a_card_is_still_not_shown_the_step(self):
+        self.ready("claude", "codex")
+        self.make_card("claude")
+        st, r = self.wanted("codex")
+        self.assertEqual((st, r["needed"], r["can_create"]), (200, False, False))
+
+
 class DocsTests(unittest.TestCase):
     ROOT = Path(__file__).resolve().parent.parent
 

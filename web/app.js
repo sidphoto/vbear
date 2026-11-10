@@ -14148,7 +14148,7 @@ async function viewSetup() {
     const leave = el("button", { class: "btn primary", type: "button", "data-setup": "leave", disabled: !canLeave }, SETUP_LEAVE_LABEL);
     leave.addEventListener("click", () => run(leave, async () => {
       if (shown.setup_done !== true) await api.post("/api/config", { setup_done: true });
-      location.hash = ceoStepWanted(await ceoPlan()) ? "#/ceo" : "#/";          // P38-8: no card to chat with yet: make the first CEO
+      location.hash = ceoStepShown(await ceoPlan()) ? "#/ceo" : "#/";          // P38-8: no card to chat with yet: make the first CEO (P48-3: also when the picked AI is not ready, so the page says why)
     }));
     const recheck = el("button", { class: "btn", type: "button", "data-setup": "recheck" }, "重新檢查");
     recheck.addEventListener("click", () => run(recheck, () => refresh(false, true)));
@@ -14191,8 +14191,13 @@ const CEO_COST = "建立員工不花錢，也不會讓 CEO 開始做任何事。
 const CEO_AGY_NOTE = "這位 CEO 會用 AGY：和它的對話內容會送到 Google，它會用到你自己裝的 AGY 技能。AGY 的聊天要先通過驗證，才能開始聊。";
 const CEO_MODE = "每件事先問我：CEO 只能在自己的工作資料夾裡動手，要執行指令或改檔案前，都會先問你，你按允許才做。";
 const CEO_OPENING_NOTE = "上面這句開場是 VBear 先幫你填好的，可以改成你自己想說的話。按「送出」才會真的送出，也才會開始用你的 AI 方案。";
+const CEO_OPENING_NOTE_YOURS = "這是你剛才打的字，還沒送出。按「送出」才會送。";
+const CEO_OPENING_NOTE_CHOICE = "上面這句是你選的開場，可以接著改。按「送出」才會真的送出，也才會開始用你的 AI 方案。";
+const CEO_PICK_KEY = "vbear-setup-pick";          // written by the start-up page (P48-1) when the person presses 「選這個」; only read here
+const CEO_PICKS = ["claude", "codex", "agy"];
 const CEO_NAME_MAX = 200;
 const CEO_INSTRUCTIONS_MAX = 2000;
+const ceoVbearOpenings = new Set();   // the opening sentences VBear itself filled in (the server's words); anything else in a draft is the person's own
 const ceoDrafts = new Map();          // chat id -> the opening sentence put in its box; taken (and gone) when that chat is opened.
                                       // P47-4: before the chat exists (the AI tool cannot chat yet) the key is the employee's id; it moves to the chat's id when one is opened
 
@@ -14206,14 +14211,27 @@ function ceoMoveDraft(profileId, chatId) {
   ceoDrafts.delete(profileId);
   if (typeof t === "string" && t) ceoDrafts.set(chatId, t);
 }
+// The AI the person picked in the start-up (P48-1 keeps it in the browser); anything else that may be there counts as no pick.
+function ceoPickedTool() {
+  try {
+    const v = localStorage.getItem(CEO_PICK_KEY);
+    return typeof v === "string" && CEO_PICKS.includes(v) ? v : "";
+  } catch (_) { return ""; }
+}
 async function ceoPlan() {
   try {
-    const r = await api.get("/api/first-ceo");
+    const pick = ceoPickedTool();
+    const r = await api.get(pick ? `/api/first-ceo?tool=${encodeURIComponent(pick)}` : "/api/first-ceo");       // the same path with the pick as a query (ADR 0014; 15b lists it)
     return r && typeof r === "object" ? r : null;
   } catch (_) { return null; }
 }
 // The step is for a person who has no card to chat with and a ready tool to make one on; anything the server did not say
 // plainly counts as "not needed".
+// P48-3: the step's page is opened for anyone who still has no card to chat with, also when the AI they picked is not ready (the page then says why
+// and offers nothing to make); a plan that could not be read leaves the person on the home page.
+function ceoStepShown(plan) {
+  return !!plan && plan.needed === true;
+}
 function ceoStepWanted(plan) {
   return !!plan && plan.needed === true && plan.can_create === true && typeof plan.tool === "string" && plan.tool !== "";
 }
@@ -14223,6 +14241,7 @@ function ceoStepWanted(plan) {
 // page with the card chosen, which says why.
 async function ceoOpenChat(profileId, opening, reuseId) {
   let chatId = reuseId || "";
+  if (opening) ceoVbearOpenings.add(opening);       // P48-3: the page that opens the chat can tell VBear's sentence from words the person typed
   // The AI tool must be able to chat before the conversation is opened: when it is not (not checked for chat yet, held back by an administrator's policy,
   // not logged in), the person goes to the page that says why and has one action, and the opening waits under the employee's id.
   // Only a state that was read and says "start" opens it: a read that fails, a card that is not in the list and a missing chat support are not a go
@@ -14294,19 +14313,27 @@ async function viewCeo() {
   });
   const glance = chatSupportGlance(chatsRes);
   const mine = glance ? glance.find((g) => g.id === plan.tool) : null;
-  const toolState = !mine ? "（聊天的狀態讀不到）" : mine.ready ? "（已就緒）" : mine.state === "policy" ? "（這台電腦有管理員設定，VBear 不能用它聊天）"
+  // P48-3: the line follows the state that was read: 「可以聊天了」 only when a chat can start, and a safety check that is running is said so
+  const sup = chatsRes && chatsRes.support && typeof chatsRes.support === "object" ? chatsRes.support : null;
+  const part = sup ? (plan.tool === "claude" ? sup : sup[plan.tool]) : null;
+  const checking = !!part && typeof part === "object" && part.verify && part.verify.running === true;
+  const toolState = !mine ? "（聊天的狀態讀不到）" : mine.ready ? "（可以聊天了）" : mine.state === "policy" ? "（這台電腦有管理員設定，VBear 不能用它聊天）"
+    : mine.state === "unverified" && checking ? "（聊天安全檢查還在做，通常要幾分鐘；你可以先建立 CEO，做完才能開始聊）"
     : mine.state === "unverified" ? "（第一次聊天前要先做一次安全檢查，建立後會帶你做）" : "（聊天現在還不能用，建立後會告訴你原因）";
   const toolLine = el("p", { "data-ceo": "tool" }, el("strong", null, "用哪個 AI 工具："), `${plan.tool_name || plan.tool}${toolState}`);
+  // P48-3: what is read once and not needed to press the button is folded; the mode line and (AGY) the line about Google are not
+  const more = el("details", { class: "fold ceo-more", "data-ceo": "more" }, el("summary", null, "詳細資訊"),
+    el("label", { class: "ceo-field" }, el("span", null, "CEO 的說明（可以改，也可以先不動）"), about),
+    plan.chat_note ? el("p", { class: "small", "data-ceo": "chat-note" }, plan.chat_note, " ", el("a", { href: "#/setup" }, "到開始設定")) : null,
+    el("p", { class: "small muted", "data-ceo": "limits" }, CEO_LIMITS),
+    el("p", { class: "small muted", "data-ceo": "cost" }, CEO_COST));
   setKids(main, head, el("p", { class: "lede" }, CEO_LEDE),
     el("section", { class: "panel pad ceo-form", "data-ceo": "form" },
       el("label", { class: "ceo-field" }, el("span", null, "名字"), name),
-      el("label", { class: "ceo-field" }, el("span", null, "CEO 的說明（可以改，也可以先不動）"), about),
       toolLine,
       el("p", { class: "small", "data-ceo": "mode" }, CEO_MODE),
       plan.tool === "agy" ? el("p", { class: "small", "data-ceo": "agy-note" }, CEO_AGY_NOTE) : null,
-      plan.chat_note ? el("p", { class: "small", "data-ceo": "chat-note" }, plan.chat_note, " ", el("a", { href: "#/setup" }, "到開始設定")) : null,
-      el("p", { class: "small muted", "data-ceo": "limits" }, CEO_LIMITS),
-      el("p", { class: "small muted", "data-ceo": "cost" }, CEO_COST),
+      more,
       errorBox,
       el("div", { class: "row" }, go, el("a", { class: "btn", href: "#/", "data-ceo": "later" }, "先不要，回首頁"))));
 }
@@ -14717,7 +14744,7 @@ function chatLimitsText(limits, ledger) {
 }
 
 // P47-4: what the page of one employee whose chat has to be prepared says and offers (pure). `card`: one of GET /api/chats' cards; `data`:
-// the whole answer (support, ledger...). -> { kind: "start" | "verify" | "link", reason, label, href?, verify?: { engine, version, title, cost } }.
+// the whole answer (support, ledger...). -> { kind: "start" | "running" | "verify" | "link", reason, label, href?, verify?: { engine, version, title, cost } }.
 function chatPrepState(card, data) {
   if (!card || typeof card !== "object") return null;
   const name = card.name || "這位員工";
@@ -14740,6 +14767,10 @@ function chatPrepState(card, data) {
     return linkSetup("到 AI 工具看看", `這台電腦的 ${tool} 有管理員設定，VBear 不能用它聊天。可以到「AI 工具」看看有沒有別的工具能用。`);
   }
   const why = `${tool} ${word}，先處理這一步才能和 ${name} 聊天。`;
+  // P48-3 (D10): the safety check was started elsewhere (the start-up page) and is still going: nothing to press, the chat opens by itself when it passes
+  if (state === "unverified" && part && part.verify && typeof part.verify === "object" && part.verify.running === true) {
+    return { kind: "running", label: "", reason: `${tool}的聊天安全檢查還在做（通常要幾分鐘）。做完會自動開始和 ${name} 的對話。`, version };
+  }
   if (state === "unverified") {
     if (engine === "agy-chat") return { kind: "verify", label: "驗證聊天", reason: why, verify: { engine: "agy", version, title: "驗證 AGY 的聊天", cost: CHAT_AGY_VERIFY_COST } };
     if (engine === "codex-chat") return { kind: "verify", label: "先做一次安全檢查", reason: why, verify: { engine: "codex", version, title: "做一次安全檢查", cost: CHAT_VERIFY_COST_CODEX } };
@@ -14974,7 +15005,13 @@ async function viewChat(id, params) {
     const status = part && part.verify && typeof part.verify === "object" ? part.verify : null;
     const running = (status && status.running === true) || ui.pending === true;
     let action = null;
-    if (st && running && st.kind === "verify") action = el("p", { class: "small", "data-chat": "prep-running", role: "status" }, "安全檢查進行中，通常要幾分鐘…");
+    // P48-3: a check that is running opens the chat by itself when it passes; one that failed (back to 'verify' with nothing running) does not, until the person asks again
+    if (st && st.kind === "running") prepAuto = true;
+    else if (st && st.kind === "verify" && !running) prepAuto = false;
+    if (st && st.kind === "running") {
+      action = el("div", null, el("p", { class: "small", "data-chat": "prep-running", role: "status" }, "安全檢查進行中，這一頁會自己更新，不用重新整理。"),
+        el("p", { class: "small" }, el("a", { href: "#/chat" }, "看所有對話紀錄")));
+    } else if (st && running && st.kind === "verify") action = el("p", { class: "small", "data-chat": "prep-running", role: "status" }, "安全檢查進行中，通常要幾分鐘…");
     else if (st && st.kind === "start") {
       action = el("button", { type: "button", class: "btn primary", "data-chat": "prep-action", disabled: lampRed || prepStarting, on: { click: () => prepStart() } }, st.label);
     } else if (st && st.kind === "verify") {
@@ -15104,6 +15141,71 @@ function chatMoreMenu(items) {
   return { node: wrap, button, list, open, close: () => close(false) };
 }
 
+// ---------- CEO opening choices (v0.22, P48-3) ----------------------------------------------------------------------------------
+// Two small buttons under the box of a CEO's conversation nobody has spoken in yet. A press only puts words in the box and gives it the
+// focus: no request is made, nothing is sent (the person's own press of the send button is the only thing that sends). They go away when
+// the person changes the words, or once a message was sent; the person's own words are never replaced.
+const CEO_CHOICES = [
+  { key: "questions", label: "請你先問我幾個問題，再幫我整理計畫", text: "請你先問我幾個問題，了解我想做什麼，再幫我整理成一份計畫。" },
+  { key: "have-one", label: "我已經有一件想做的事", text: "我想做的事是：" },
+];
+// -> { node, sync }: `node` holds the buttons and the line under the box; `sync()` redraws them from the words in the box (call it when they may have changed).
+// `sent()`: how many messages the person sent in this conversation; `yours`: words the person typed earlier that were put back in the box ("" for none).
+function ceoOpeningChoices(input, opts) {
+  const node = el("div", { class: "chat-choices", "data-chat": "opening-choices" });
+  const note = el("div", { "data-chat": "opening-note-host" });
+  const isChoice = (t) => CEO_CHOICES.some((c) => c.text === t);
+  const noteText = () => {
+    const t = input.value;
+    if (!t) return "";
+    if (ceoVbearOpenings.has(t)) return CEO_OPENING_NOTE;
+    if (isChoice(t)) return CEO_OPENING_NOTE_CHOICE;
+    return opts.yours && t === opts.yours ? CEO_OPENING_NOTE_YOURS : "";
+  };
+  const shown = () => opts.ceo && opts.sent() === 0 && (input.value.trim() === "" || ceoVbearOpenings.has(input.value) || isChoice(input.value));
+  let last = null;
+  const sync = () => {
+    const key = `${shown()}|${noteText()}`;
+    if (key === last) return;
+    last = key;
+    setKids(node, shown() ? CEO_CHOICES.map((c) => el("button", { type: "button", class: "btn small", "data-chat": "opening-choice", "data-choice": c.key,
+      on: { click: () => {
+        input.value = c.text;
+        input.focus();
+        if (typeof input.setSelectionRange === "function") input.setSelectionRange(c.text.length, c.text.length);
+        last = null; sync();
+      } } }, c.label)) : null);
+    const t = noteText();
+    setKids(note, t ? el("p", { class: "small", "data-ceo": "opening-note" }, t) : null);
+  };
+  input.addEventListener("input", sync);
+  return { node, note, sync };
+}
+// ---------- end of CEO opening choices -------------------------------------------------------------------------------------------
+
+// ---------- the hint to ask the chief of staff (v0.22, P48-3) ---------------------------------------------------------------------
+// After the CEO's reply that reads like a plan, a small card under it offers 「請幕僚長安排」. The button is the function of the 「⋯」 menu's item
+// (the chief of staff's desk `open`): it asks for the preview and opens the dialog that says the cost and where the words go, and only that
+// dialog's own start button spends anything. The rule is literal, a question on the page and not a claim that the plan is done.
+const CEO_HINT_TEXT = "計畫整理好了嗎？可以請幕僚長照這份計畫分配工作給員工。幕僚長會先給你看提議，你確認了才會做。";
+const CEO_LIST_LINE = /^\s*(?:\d{1,2}[.、]\s*(?!\d)\S|[一二三四五六七八九十]{1,3}、\s*\S|[-•・]\s+\S|[•・]\s*\S)/;
+// `records`: the conversation's records, oldest first. True when the last thing said is the CEO's reply, the person spoke at least twice,
+// and the reply has three lines or more that start like a list.
+function ceoPlanShaped(records) {
+  const talk = (Array.isArray(records) ? records : []).filter((r) => r && (r.kind === "user_message" || r.kind === "reply") && typeof r.text === "string");
+  if (!talk.length || talk[talk.length - 1].kind !== "reply") return false;
+  if (talk.filter((r) => r.kind === "user_message").length < 2) return false;
+  return talk[talk.length - 1].text.split(/\r?\n/).filter((l) => CEO_LIST_LINE.test(l)).length >= 3;
+}
+function ceoChiefHint(chief, onNo) {
+  return el("div", { class: "chat-hint", "data-chat": "chief-hint", role: "note" },
+    el("p", { class: "small" }, CEO_HINT_TEXT),
+    el("div", { class: "row" },
+      el("button", { type: "button", class: "btn small primary", "data-chat": "chief-hint-go", on: { click: () => chief.open() } }, "請幕僚長安排"),
+      el("button", { type: "button", class: "btn small", "data-chat": "chief-hint-no", on: { click: onNo } }, "先不用")));
+}
+// ---------- end of the hint ------------------------------------------------------------------------------------------------------
+
 async function viewChatDetail(token, id) {
   let all;
   try { all = await chatReadAll(id); }
@@ -15134,7 +15236,23 @@ async function viewChatDetail(token, id) {
   if (ownerId) { if (ceoDrafts.has(id)) ceoDrafts.delete(ownerId); else ceoMoveDraft(ownerId, id); }   // one set of words per chat, the newest; never pasted twice
   const opening = ceoTakeDraft(id);        // P38-8: the first CEO's opening sentence: put in the box, sent only by the send button
   if (opening) input.value = opening;
-  const openingNote = opening ? el("p", { class: "small", "data-ceo": "opening-note" }, CEO_OPENING_NOTE) : null;
+  // P48-3: only a CEO's conversation nobody has spoken in has the two opening choices; the line under the box says whose words are in it
+  let sentNow = 0;                          // messages the person sent from this page (the records may come a moment later)
+  const talkSeen = [];                      // the records that are words said (the person's and the reply), oldest first
+  const ceoChat = !all.group && !!all.card && all.card.position === "planner";
+  const openers = ceoOpeningChoices(input, { ceo: ceoChat, sent: () => sentNow + talkSeen.filter((r) => r.kind === "user_message").length, yours: opening && !ceoVbearOpenings.has(opening) ? opening : "" });
+  const hintBox = el("div", { "data-chat": "chief-hint-host" });
+  let chiefRef = null, hintDismissed = false;
+  const hintWanted = () => {
+    if (!chiefRef || hintDismissed || busy || view.more === true || turnOpen()) return false;
+    const cards = view.live && Array.isArray(view.live.cards) ? view.live.cards : [];
+    return cards.length === 0 && ceoPlanShaped(talkSeen);
+  };
+  let hintNode = null;
+  const syncHint = () => {
+    if (!hintWanted()) { if (hintNode) { hintNode = null; setKids(hintBox, null); } return; }
+    if (!hintNode) { hintNode = ceoChiefHint(chiefRef, () => { hintDismissed = true; syncHint(); }); setKids(hintBox, hintNode); }
+  };
   const sendBtn = el("button", { type: "button", class: "btn primary", "data-chat": "send", on: { click: () => send() } }, "送出");
   const stopBtn = el("button", { type: "button", class: "btn", "data-chat": "stop", on: { click: () => stop() } }, "停止這一回合");
   const sendNote = el("p", { class: "small muted", "data-chat": "send-note" });
@@ -15178,6 +15296,8 @@ async function viewChatDetail(token, id) {
     sendBtn.disabled = Boolean(busy || blocked || turnOpen());
     stopBtn.hidden = !turnOpen();
     setKids(sendNote, noteText || (turnOpen() ? "員工還在處理上一則訊息。" : blocked ? "現在不能送訊息。" : ""));
+    openers.sync();
+    syncHint();
   };
   const drawLive = () => {
     const live = view.live && typeof view.live === "object" ? view.live : null;
@@ -15200,6 +15320,7 @@ async function viewChatDetail(token, id) {
     for (const r of records) {
       if (!r || typeof r.seq !== "number" || r.seq <= lastSeq) continue;
       lastSeq = r.seq;
+      if (r.kind === "user_message" || r.kind === "reply") talkSeen.push(r);
       if (r.kind === "plan_usage") planRecord = r;
       const line = chatLine(r, { engine: engineOf(), remember: rememberLine, saveSkill: saveSkillLine, who: view.card && view.card.name });
       if (line) { transcript.append(line); if (line.origin) chatOriginFill(line, line.origin); }
@@ -15300,7 +15421,8 @@ async function viewChatDetail(token, id) {
     try {
       await api.post(`/api/chats/${encodeURIComponent(id)}/messages`, { text });
       input.value = "";
-      if (openingNote) openingNote.remove();
+      sentNow += 1;
+      openers.sync();
       await pollOnce();
     } catch (e) {
       // The day's limit stopped it (nothing was sent, nothing was spent): said in plain words with the way to the settings; the words stay in the box.
@@ -15386,10 +15508,13 @@ async function viewChatDetail(token, id) {
   const groupNote = inGroup ? el("p", { class: "small", "data-chat": "group-note" },
     `這是群組「${typeof inGroup.name === "string" ? inGroup.name : ""}」裡的對話，要說話請到群組裡。 `,
     el("a", { href: `#/chat/group/${encodeURIComponent(inGroup.id)}` }, "回到群組")) : null;
-  const composer = inGroup ? null : el("div", { class: "chat-composer" }, input,
-    el("div", { class: "row" }, sendBtn, stopBtn, skillUseButton(input)), sendNote, limitBox, openingNote);
+  const composer = inGroup ? null : el("div", { class: "chat-composer" }, input, openers.node,
+    el("div", { class: "row" }, sendBtn, stopBtn, skillUseButton(input)), sendNote, limitBox, openers.note);
   const isCeo = !inGroup && !!all.card && all.card.position === "planner";        // P40: only a CEO's chat has 「請幕僚長安排」
   const chief = isCeo ? chiefDesk(id, all.card) : null;
+  chiefRef = chief;
+  syncHint();
+  openers.sync();
   const suggest = inGroup ? null : memorySuggestDesk(id);                   // P42-4: 「整理要記住的事」, one-to-one chats only
   const skillDesk = inGroup ? null : skillSuggestDesk(id);                  // P44-5: 「整理成常用做法」, one-to-one chats only
   // Deleting a chat asks first and says what stays; it is only in the 「⋯」 menu, away from the send button.
@@ -15412,7 +15537,7 @@ async function viewChatDetail(token, id) {
   ].filter((x, i, arr) => x !== null || (i > 0 && arr[i - 1] !== null));
   const more = inGroup ? null : chatMoreMenu(menuItems);
   setKids(headBox, el("div", { class: "chat-head-top" }, titleBox, more ? more.node : null), lineBox, detailsBox);
-  setKids(main, crumbs([["員工", "#/employees"], [view.card && view.card.name || id]]), headBox, groupNote, chief ? chief.node : null, suggest ? suggest.node : null, skillDesk ? skillDesk.node : null, noteBox, transcript, liveBox, composer);
+  setKids(main, crumbs([["員工", "#/employees"], [view.card && view.card.name || id]]), headBox, groupNote, chief ? chief.node : null, suggest ? suggest.node : null, skillDesk ? skillDesk.node : null, noteBox, transcript, liveBox, hintBox, composer);
   activeViewCleanup = () => { stopStream(); if (more) more.close(); if (chief) chief.stop(); if (suggest) suggest.stop(); if (skillDesk) skillDesk.stop(); };
   stream();
   if (opening) input.focus();
@@ -21017,6 +21142,10 @@ if (typeof module !== "undefined" && module.exports) {
     viewChat,
     viewCeo,
     ceoStepWanted,
+    ceoStepShown,
+    ceoPlanShaped,
+    chatPrepState,
+    ceoDrafts,
     MEETING_BUBBLES,
     MEETING_ERROR_TEXT,
     MEETING_MONEY_WHY,

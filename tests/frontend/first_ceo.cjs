@@ -103,7 +103,7 @@ test("with no card to chat with, #/ceo shows the step: a name, a plain sentence 
   assert.strictEqual(name.value, "CEO");
   assert.strictEqual(about.value, INSTRUCTIONS);
   assert.strictEqual(about.tag, "textarea");
-  assert(/Claude Code/.test(text(ceo(main, "tool"))) && /已就緒/.test(text(ceo(main, "tool"))));
+  assert(/Claude Code/.test(text(ceo(main, "tool"))) && /可以聊天了/.test(text(ceo(main, "tool"))));       // (P48-3) 「已就緒」 became 「可以聊天了」: said only when a chat can start
   assert(/每件事先問我/.test(text(ceo(main, "mode"))) && /先問你/.test(text(ceo(main, "mode"))), "safe mode, said in words");       // (P47-4) the new name of the mode
   const go = ceo(main, "create");
   assert.strictEqual(go.tag, "button");
@@ -178,7 +178,7 @@ test("AGY: the card can be made on a ready AGY (the last choice), and the page s
     chat_note: "AGY 聊天要先通過驗證：到聊天頁按「驗證聊天」（用你的 Google 方案）。" }), supportExtra: { agy: { state: "unverified" } } });
   const main = await open("#/ceo");
   // the tool is there, but its chat is not checked yet: the page does not say 「已就緒」 (fix47), it says the check comes first
-  assert(/AGY/.test(text(ceo(main, "tool"))) && /先做一次安全檢查/.test(text(ceo(main, "tool"))) && !/已就緒/.test(text(ceo(main, "tool"))));
+  assert(/AGY/.test(text(ceo(main, "tool"))) && /先做一次安全檢查/.test(text(ceo(main, "tool"))) && !/已就緒|可以聊天了/.test(text(ceo(main, "tool"))));
   const note = text(ceo(main, "agy-note"));
   assert(note.includes("送到 Google") && note.includes("AGY 技能") && note.includes("通過驗證"), note);
   assert(/驗證聊天/.test(text(ceo(main, "chat-note"))));
@@ -292,6 +292,26 @@ test("「開始使用」 on the start-up page leads to the step when there is no
   main = await open("#/setup");
   await click(byAttr(main, "data-setup", "leave"));
   assert.strictEqual(global.location.hash, "#/", "a plan that cannot be read never traps the person");
+});
+
+test("P48-3: the AI the person picked is not ready (another one is): 「下一步：建立 CEO」 still opens the step, which says why and offers nothing to make", async () => {
+  const REASON = "你選的 Codex 還沒準備好，回開始設定把它準備好，或換一家。";
+  setPage({ config: { setup_done: false }, plan: plan({ can_create: false, go: "setup", tool: null, tool_name: null, reason: REASON }) });
+  global.localStorage.setItem("vbear-setup-pick", "codex");
+  let main = await open("#/setup");
+  await click(byAttr(main, "data-setup", "leave"));
+  assert(FETCH_LOG.some((c) => c.url === "/api/first-ceo?tool=codex"), "the plan was asked for the picked AI");
+  assert.strictEqual(global.location.hash, "#/ceo", "not the home page: the person is told why");
+  main = await open("#/ceo");
+  assert(text(main).includes(REASON));
+  assert.strictEqual(ceo(main, "create"), null, "nothing can be made on another AI");
+  assert.strictEqual(attr(ceo(main, "setup-go"), "href"), "#/setup");
+  global.localStorage._store = {};
+  // a person who has a card to chat with is still sent to the home page, and so is a plan that could not be read
+  setPage({ config: { setup_done: false }, plan: plan({ needed: false, can_create: false, tool: null }) });
+  main = await open("#/setup");
+  await click(byAttr(main, "data-setup", "leave"));
+  assert.strictEqual(global.location.hash, "#/");
 });
 
 // ---- the lobby ---------------------------------------------------------------------------------------------------

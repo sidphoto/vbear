@@ -902,7 +902,7 @@ def make_handler(console: Console):
                         return self._error(403, "重新檢查需要主控台標頭")
                     return self._setup_tools(force)
                 if path == "/api/first-ceo":
-                    return self._first_ceo()
+                    return self._first_ceo(parse_qs(url.query).get("tool", [""])[0])
                 if path == "/api/settings/autonomy":
                     return self._autonomy_view()
                 if path == "/api/setup/daily-limit":
@@ -1732,8 +1732,10 @@ def make_handler(console: Console):
             except ai_tool_status.StoreError as exc:
                 return self._error(503, str(exc))
 
-        def _first_ceo(self):
+        def _first_ceo(self, wanted=""):
             """What the first-CEO step needs (vbear/first_ceo.py): read-only, it makes no card and starts no tool."""
+            if wanted and wanted not in dict(first_ceo.TOOLS):
+                return self._error(400, "tool 必須是 claude、codex 或 agy")
             try:
                 profiles = agent_profiles.list_profiles(
                     known_skills=set(console.skill_index().keys()),
@@ -1743,7 +1745,7 @@ def make_handler(console: Console):
                 return self._error(503, "角色資料無法讀取，請到角色頁處理。")
             except ai_tool_status.StoreError as exc:
                 return self._error(503, str(exc))
-            return self._json(first_ceo.plan(profiles, rows))
+            return self._json(first_ceo.plan(profiles, rows, wanted=wanted or None))
 
         def _setup_settle(self):
             """The first look at the start-up (the home page asks once while the person has not finished it): a person who
