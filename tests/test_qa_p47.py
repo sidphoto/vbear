@@ -20,6 +20,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -1048,6 +1049,47 @@ class RunTests(unittest.TestCase):
         with mock.patch.object(qa.urllib.request, "urlopen", lambda req, timeout=None: Slow()):
             with self.assertRaises(qa.Stop):
                 run.wait("an answer", lambda: (console.call("/api/x")[1] or {}).get("ready"))
+
+    def test_a_real_http_answer_that_trickles_is_given_up_when_the_time_left_is_over(self):
+        # R4: a real urllib call against a little local server (a random loopback port, not VBear) that sends its status line and headers,
+        # or an error's body, a byte at a time: each byte is quicker than the socket timeout, the whole is not. The call must end near the
+        # time left, whatever part of the answer is slow.
+        import socket
+        import time as _time
+        replies = {
+            "headers": b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\n\r\n" + b'{"ready": true}',
+            "error": b"HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: 40\r\n\r\n" + b'{"ok": false, "error": "x", "code": "y"}',
+        }
+        for name, raw in replies.items():
+            srv = socket.socket()
+            srv.bind(("127.0.0.1", 0))
+            srv.listen(1)
+            port = srv.getsockname()[1]
+            slow_from = 0 if name == "headers" else raw.index(b"\r\n\r\n") + 4
+
+            def serve():
+                conn, _ = srv.accept()
+                try:
+                    conn.recv(65536)
+                    for i, byte in enumerate(raw):
+                        conn.sendall(bytes([byte]))
+                        if i >= slow_from:
+                            _time.sleep(0.02)
+                except OSError:
+                    pass
+                finally:
+                    conn.close()
+            t = threading.Thread(target=serve, daemon=True)
+            t.start()
+            console = qa.Console(port, "t", timeout=5.0)
+            end = _time.monotonic() + 0.2
+            console.budget = lambda: end - _time.monotonic()
+            began = _time.monotonic()
+            code, data = console.call("/api/x")
+            took = _time.monotonic() - began
+            srv.close()
+            self.assertEqual((code, data), (0, None), name)
+            self.assertLess(took, 0.45, f"{name}: the call ended near the time left, not when the answer was done ({took:.3f} s)")
 
     def test_a_probe_that_answers_after_the_deadline_is_not_taken(self):
         b = qa.Browser.__new__(qa.Browser)

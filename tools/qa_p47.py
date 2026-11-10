@@ -741,22 +741,23 @@ class Console:
         req = urllib.request.Request(
             f"http://127.0.0.1:{self.port}{path}", method=method, data=json.dumps(body).encode() if body is not None else None,
             headers={"X-VBear": "1", "Content-Type": "application/json", "Authorization": f"Bearer {self.token}"})
+        if not callable(self.budget):
+            return self._once(req, timeout)
+        # Inside a wait the whole call (status line, headers, body, an error's body) is held to what is left, not each socket read: it runs
+        # on its own thread and is given up when the time is over (the thread ends by itself at its socket timeout; nothing waits for it).
+        box = []
+        worker = threading.Thread(target=lambda: box.append(self._once(req, timeout)), daemon=True)
+        worker.start()
+        worker.join(max(0.0, self.budget()))
+        if worker.is_alive() or not box or self.budget() <= 0:
+            return 0, None
+        return box[0]
+
+    @staticmethod
+    def _once(req, timeout):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                if not callable(self.budget):
-                    return resp.status, json.loads(resp.read() or b"null")
-                # inside a wait the whole answer, not each socket read, is held to what is left: read in pieces and give up past it
-                parts = []
-                while True:
-                    if self.budget() <= 0:
-                        return 0, None
-                    piece = resp.read1(65536) if hasattr(resp, "read1") else resp.read(65536)
-                    if not piece:
-                        break
-                    parts.append(piece)
-                if self.budget() <= 0:
-                    return 0, None
-                return resp.status, json.loads(b"".join(parts) or b"null")
+                return resp.status, json.loads(resp.read() or b"null")
         except urllib.error.HTTPError as exc:
             try:
                 data = json.loads(exc.read() or b"null")
