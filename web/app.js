@@ -8112,6 +8112,7 @@ async function viewSettings(params) {   // params: the address's ?key=value (P47
             el("div", null, el("div", { class: "t" }, "外觀"),
               el("select", { on: { change: (e) => setTheme(e.target.value) } },
                 [["auto", "跟隨系統"], ["light", "淺色"], ["dark", "深色"]].map(([v, t]) => el("option", { value: v, selected: store.get("theme", "auto") === v }, t)))))),
+        limits,                                                   // P52-3: 「用量與上限」 above 「通知」
         notifySettings(),
         el("div", { class: "panel pad" },
           el("h2", { style: "margin-bottom:6px" }, "使用紀錄"),
@@ -8133,7 +8134,6 @@ async function viewSettings(params) {   // params: the address's ?key=value (P47
             el("li", null, "VBear 只寫自己的資料夾", advanced ? ["：", el("span", { class: "mono" }, home(c.state_dir))] : "", "。"),
             el("li", null, "員工由 VBear 在背後啟動；指令視窗預設只看不打字，你按「接手」才會送出你打的字。"),
             el("li", null, "通知只在這台 Mac 上顯示，內容只有件數（要在「通知」打開）。"))),
-    limits,
     advanced ? el("section", { "data-settings-advanced": "" },
       translationSettings(conf, saveConf), onboardingSettings(conf, saveConf),
       el("div", { class: "panel pad" },
@@ -21308,11 +21308,11 @@ function openTemplatesSave(ctx) {
   const per = limits.per_template || { cards: 12, skills: 24, routines: 12 };
   const state = { confirm: false, error: "", warn: null, done: null, busy: false };
   const titleId = "tpl-save-title";
-  const input = el("input", { type: "text", maxlength: String(limits.max_name || 40), "data-tpl-save": "name", "aria-label": "團隊範本的名稱", placeholder: "取一個名字" });
+  const input = el("input", { type: "text", class: "input", maxlength: String(limits.max_name || 40), "data-tpl-save": "name", "aria-label": "團隊範本的名稱", placeholder: "取一個名字" });
   const bodyBox = el("div", { "data-templates": "save-body" });
   const foot = el("div", { class: "modal-actions", "data-templates": "save-foot" });
   const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-templates": "save" },
-    el("div", { class: "modal-box", style: "max-width: 680px; max-height: 88vh; overflow-y: auto;" },
+    el("div", { class: "modal-box tpl-dialog", style: "max-width: 680px; max-height: 88vh; overflow-y: auto;" },
       el("h2", { id: titleId, tabindex: "-1" }, "存成團隊範本"), bodyBox, foot));
   document.body.append(modal);
   const close = withModalA11y(modal, () => modal.remove());
@@ -21356,7 +21356,7 @@ function openTemplatesSave(ctx) {
       return;
     }
     const kids = [
-      el("label", { class: "small" }, "名稱（1 到 40 個字）　", input),
+      el("label", { class: "small tpl-save-name" }, "名稱（1 到 40 個字）", input),
       el("p", { class: "small", "data-templates": "save-summary" },
         `這次會存：${items.cards.length} 位員工、${items.skills.length} 個常用做法、${items.routines.length} 件定時工作。` +
         `最多存 ${limits.max_mine || 20} 個團隊範本，一個最多 ${per.cards} 位員工、${per.skills} 個常用做法、${per.routines} 件定時工作。`),
@@ -21462,7 +21462,7 @@ function openTemplatesUndo(ctx, apply) {
   const bodyBox = el("div", { "data-templates": "undo-body" });
   const foot = el("div", { class: "modal-actions", "data-templates": "undo-foot" });
   const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-templates": "undo" },
-    el("div", { class: "modal-box", style: "max-width: 680px; max-height: 88vh; overflow-y: auto;" },
+    el("div", { class: "modal-box tpl-dialog", style: "max-width: 680px; max-height: 88vh; overflow-y: auto;" },
       el("h2", { id: titleId, tabindex: "-1" }, "復原這次套用"), bodyBox, foot));
   document.body.append(modal);
   const close = withModalA11y(modal, () => modal.remove());
@@ -21555,7 +21555,7 @@ function openTemplatesPreview(ctx) {
   const bodyBox = el("div", { "data-templates": "preview-body" });
   const foot = el("div", { class: "modal-actions", "data-templates": "preview-foot" });
   const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-templates": "preview" },
-    el("div", { class: "modal-box", style: "max-width: 720px; max-height: 88vh; overflow-y: auto;" },
+    el("div", { class: "modal-box tpl-dialog", style: "max-width: 720px; max-height: 88vh; overflow-y: auto;" },
       el("h2", { id: titleId, tabindex: "-1" }, "預覽這次套用"), bodyBox, foot));
   document.body.append(modal);
   const close = withModalA11y(modal, () => modal.remove());

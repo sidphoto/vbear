@@ -2147,3 +2147,14 @@ input[type="checkbox"] { width: 18px; height: 18px; flex: none; accent-color: va
 /* P52-2 (v0.25.0): a tool whose version VBear does not know is said like the other states that hold a tool back (the theme's own colours); its folded technical details sit under the card's line. */
 .setup-pick-state[data-setup-status="unsupported"] { color: var(--bad); }
 .setup-pick .plain-tech { margin: 0; }
+
+/* P52-3 (v0.25.0): the team-template dialogs (save, preview, undo). The box scrolls and its button bar stays at the bottom: the bar is sticky and the box has no
+   bottom padding of its own (that padding is what showed the content under the bar), so the bar carries it. On a narrow screen the buttons wrap and never
+   run wider than the box; the name box of 存成團隊範本 is on its own line in the site's input style. */
+.modal-box.tpl-dialog { padding-bottom: 0; }
+.tpl-dialog .modal-actions { flex-wrap: wrap; position: sticky; bottom: 0; background: var(--panel); padding-block: 10px 16px; margin-top: 0; z-index: 1; }
+.tpl-dialog .modal-actions .btn { max-width: 100%; }
+.modal-box [data-templates="save-foot"], .modal-box [data-templates="undo-foot"] { position: sticky; bottom: 0; background: var(--panel); flex-wrap: wrap; padding-block: 10px 16px; margin-top: 0; z-index: 1; }
+.tpl-save-name { display: grid; gap: 4px; min-width: 0; }
+.tpl-save-name .input { width: 100%; }
+@media (max-width: 520px) { .tpl-dialog .modal-actions .btn { flex: 1 1 100%; justify-content: center; } }
