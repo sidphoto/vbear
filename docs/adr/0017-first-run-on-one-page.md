@@ -53,7 +53,7 @@ ADR 0013 第 3 點寫「還沒有員工時只顯示三步」：那三步是三�
 - 啟動邊界沒有碰：`agent_launch.py`、`runtime/*`、`chat_service.py`、`*_verify.py`、`chat_check.py`、`cli_versions.py`、`admin_policy.py` 都沒有改；聊天驗證仍是每個版本、每台 Mac 自己做一次，不跨版本沿用。
 - 伺服器對 `setup_done` 的判斷（`/api/setup/settle`：有 AI 就緒的舊使用者算完成、只提示一次）沒有改；改的只有畫面在「沒完成」時不再導去 `#/setup`（第 7 點）。
 - 每天花費上限照舊預設收起（ADR 0013 第 5 點）、照舊問得到改得到；上限的任何一道把關都沒有動。
-- `homeFirstSteps`（舊的三步）留在程式裡但首頁不再呼叫；之後確認沒有別處用到再刪。
+- `homeFirstSteps`（舊的三步）與它專用的 `homeToolStep`、`.home-step` 樣式已移除（整合到 v0.23.0 的首頁時確認沒有別處用到）。
 
 ## 考慮過的其他選項
 

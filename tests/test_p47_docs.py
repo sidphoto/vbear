@@ -257,7 +257,7 @@ class ReadmeAndReferenceTests(unittest.TestCase):
     def test_the_architecture_has_the_section_and_names_things_the_page_has(self):
         self.assertIn("## Plain navigation — `web/index.html`, `web/app.js` (v0.21)", self.arch)
         part = section(self.arch, "## Plain navigation — `web/index.html`, `web/app.js` (v0.21)", "## Easy start 2 — `web/app.js`, `macos/VBear/main.swift`, `vbear/spend_keep.py`, `vbear/first_ceo.py` (v0.22)")
-        for name in ("syncAdvancedNav", "NAV_PARENT", "viewHome", "homeWaiting", "homeTeam", "homeToday", "homeAsk", "homeFirstSteps", "viewEmployees", "viewWork",
+        for name in ("syncAdvancedNav", "NAV_PARENT", "viewHome", "homeWaiting", "homeTeam", "homeToday", "homeAsk", "homeFirstRun", "viewEmployees", "viewWork",
                      "openChatWith", "plainWords", "plainNotice", "limitReachedNotice", "dailyLimitEditor", "chatPrepState", "navPageName", "wireNavMenu"):
             self.assertIn(name, part, name)
             self.assertRegex(self.app, rf"(function|const) {name}\b", f"web/app.js has {name}")

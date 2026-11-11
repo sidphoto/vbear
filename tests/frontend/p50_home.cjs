@@ -542,10 +542,13 @@ const GETS = ["/api/overview", "/api/skills", "/api/roles", "/api/live", "/api/f
     assert.strictEqual(one(nobody.main, "data-home", "page").getAttribute("data-home-layout"), "top", "the three steps are not centred");
   });
 
-  await test("a person with no employee: the three steps as before under the hidden title, nothing of the box", async () => {
+  await test("a person with no employee: the first run (P52-1, in place of the old three steps) under the hidden title, in the page's column, with the greeting's look for its big line; nothing of the box", async () => {
     const page = await home(world({ profiles: [], cards: [] }));
-    assert.ok(one(page.main, "data-home", "first-steps"));
-    assert.strictEqual(all(page.main, (n) => n.getAttribute && n.getAttribute("data-home-step")).length, 3);
+    const first = one(page.main, "data-home", "first-run");
+    assert.ok(first && one(page.main, "data-home", "page").contains(first), "in the same 720px column");
+    assert.strictEqual(one(page.main, "data-home", "first-steps"), null);
+    assert.strictEqual(all(page.main, (n) => n.getAttribute && n.getAttribute("data-home-step")).length, 0);
+    assert.ok(all(first, (n) => typeof n.className === "string" && n.className.includes("home-greeting") && n.className.includes("home-first-title")).length === 1, "the big line has the greeting's class");
     assert.ok(!askBox(page) && !one(page.main, "data-home", "greeting"));
     assert.ok(all(page.main, (n) => n.tag === "h1")[0].className.includes("sr-only"));
   });

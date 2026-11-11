@@ -641,7 +641,7 @@ function check16dPace(times, forced) {
   });
 
   await test("source: the home page and its blocks keep the plan's data-* names, and the CSS has its own marked part", () => {
-    for (const k of ["data-home-loading", "loading-note", "chat_card", "first-steps"]) assert.ok(SOURCE.includes(k), k);
+    for (const k of ["data-home-loading", "loading-note", "chat_card", "first-run"]) assert.ok(SOURCE.includes(k), k);
     for (const k of ["waiting", "team", "today", "ask"]) assert.ok(SOURCE.includes(`"${k}"`), k);
     assert.ok(/\/\* P48-2 /.test(CSS), "style.css has the P48-2 part");
   });

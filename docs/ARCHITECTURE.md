@@ -618,7 +618,7 @@ v0.21.0 (ADR 0013) changes what the page shows and nothing on the server: Python
   `settings`, `setup`, `welcome` → 設定; the rest → 進階); every route of v0.20.0 still draws, and an advanced page opened while advanced mode is off gets one
   line saying so. `navPageName` and `wireNavMenu` keep the phone's menu button (a row of four items and a 進階 button until v0.22; since v0.23 the whole bar is a drawer behind the button).
 - **Pages.** `viewHome` draws 等你決定 (`homeWaiting`, the same entries in both modes), 我的員工 (`homeTeam`), 今天 (`homeToday`) and the box 「想做什麼？跟 CEO 說」
-  (`homeAsk`), or the three steps (`homeFirstSteps`) when there is no employee; in advanced mode the old home's sections are drawn below, by the same functions.
+  (`homeAsk`), or the first run on one page (`homeFirstRun`, v0.25) when there is no employee; in advanced mode the old home's sections are drawn below, by the same functions.
   `viewEmployees` (`#/employees`) and `viewWork` (`#/work`) read only existing GET routes. `openChatWith(profileId, { text })` finds or opens the one-to-one chat of
   an employee and, from the home box, makes the one `POST …/messages` of the person's press; if the employee is busy, has a card waiting or cannot chat yet it
   sends nothing and leaves the words in that chat's box (rule 15c).

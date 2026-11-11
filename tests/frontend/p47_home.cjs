@@ -741,9 +741,9 @@ function check15c(log, phase, typed, messages) {
     assert.ok(!/innerHTML|insertAdjacentHTML|outerHTML/.test(src));
     assert.ok(!/\p{Extended_Pictographic}/u.test(src));
     assert.ok(!/https?:\/\//.test(src));
-    for (const f of ["viewEmployees", "viewWork", "openChatWith", "homeWaiting", "homeToday", "homeAsk", "homeFirstSteps"]) assert.ok(new RegExp(`function ${f}\\b`).test(src), f);
+    for (const f of ["viewEmployees", "viewWork", "openChatWith", "homeWaiting", "homeToday", "homeAsk", "homeFirstRun"]) assert.ok(new RegExp(`function ${f}\\b`).test(src), f);
     assert.ok(!/US\$/.test(src), "the home page and the employees' page show no amount");
-    for (const k of ["waiting", "team", "today", "ask", "ask-input", "ask-send", "first-steps", "limit-reached"]) assert.ok(src.includes(`"${k}"`), k);
+    for (const k of ["waiting", "team", "today", "ask", "ask-input", "ask-send", "first-run", "limit-reached"]) assert.ok(src.includes(`"${k}"`), k);
     assert.ok(/\.home-avatar/.test(CSS) && /P47-2 home/.test(CSS), "the CSS has its own marked part");
   });
 

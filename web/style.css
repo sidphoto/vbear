@@ -124,13 +124,6 @@ button, input, select { font: inherit; color: inherit; }
 .home-avatar-off { opacity: .6; }
 .home-avatar-name { font-weight: 650; overflow-wrap: anywhere; text-align: center; }
 .home-avatar-why { text-align: center; overflow-wrap: anywhere; }
-.home-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
-.home-step { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
-.home-step.done { border-color: var(--ok); }
-.home-step.off { opacity: .6; }
-.home-step-mark { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 700; flex: none; }
-.home-step.done .home-step-mark { background: var(--ok-soft); color: var(--ok); }
-.home-step-body { flex: 1 1 auto; display: grid; gap: 2px; min-width: 0; }
 .home-advanced { margin-top: 36px; padding-top: 12px; border-top: 1px solid var(--line); }
 .home-employee .card-top { align-items: center; justify-content: flex-start; gap: 12px; }
 .work-links { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 8px; }
@@ -138,7 +131,6 @@ button, input, select { font: inherit; color: inherit; }
 .work-link-name { font-weight: 650; min-width: 9em; }
 @media (max-width: 720px) {
   .home-person { width: 96px; }
-  .home-step { flex-wrap: wrap; }
 }
 
 .stage { min-width: 0; }
@@ -2043,13 +2035,10 @@ input[type="checkbox"] { width: 18px; height: 18px; flex: none; accent-color: va
 }
 
 /* P50-3 (v0.23.0, ADR 0015): the look. The colours are the neutral tokens at the top of this file (the values changed there, not here). What is here: buttons are pills,
-   a card keeps its frame and loses its shadow, the home page has no card frames or fills (the steps for a person with no employee are plain lines), and the green accent
+   a card keeps its frame and loses its shadow, the home page has no card frames or fills, and the green accent
    is only the main action and the item you are on. The status colours, the office, the cards of the game and the faction frames are not touched. */
 .btn { border-radius: 999px; }
 .card { box-shadow: none; }
-.home-page .home-steps { gap: 0; }
-.home-page .home-step { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; padding: 12px 2px; }
-.home-page .home-step.done { border-bottom-color: var(--line); }
 .home-page .home-block { border: 0; background: transparent; box-shadow: none; }
 
 /* P51-1 (v0.24.0, ADR 0016): the chat reads like text, in one 720px column. What the employee says has no frame, no fill, no shadow; what you say is a soft --panel-2 bubble
@@ -2134,14 +2123,24 @@ input[type="checkbox"] { width: 18px; height: 18px; flex: none; accent-color: va
 .chat-list-box .mt-row:last-child { border-bottom: 0; }
 .chat-wait-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--warn); }
 
-/* P52-1 (v0.25.0): the first run of a person with no employee is one block of the home page (ADR 0017): a big line, the picker, the chosen tool's steps and the CEO's name. Only the
-   theme's own variables; the cards, checks and the name box are the start-up and CEO pages' own classes. */
-.home-first-title { font-size: 22px; line-height: 1.35; margin: 0 0 4px; overflow-wrap: anywhere; }
-.home-first-run .setup-picker { margin-top: 12px; }
-.home-first-ceo { display: grid; gap: 8px; max-width: 46rem; margin-top: 12px; }
+/* P52-1 (v0.25.0): the first run of a person with no employee is one block of the home page (ADR 0017), in the same 720px column as the greeting and the box (v0.23.0): the big line has
+   the greeting's own look (.home-greeting), the picker and the chosen tool's steps are the start-up page's pieces but frameless like the rest of the home page (a line, no fill), the buttons are the
+   pills of the theme, and the name box is the CEO page's own. Only the theme's own variables. */
+.home-first-run { margin-top: 0; }
+.home-page[data-home-layout="top"] .home-first-run { padding-top: min(8vh, 72px); }
+.home-first-title { margin-bottom: 8px; }
+.home-first-sub { margin: 0 0 22px; text-align: center; }
+.home-first-run .setup-picker { margin-top: 0; }
+.home-first-run .setup-pick, .home-first-run .setup-tool { background: transparent; }
+.home-first-run .setup-pick[data-state="ready"], .home-first-run .setup-tool[data-state="ready"] { border-color: var(--line-2); }
+.home-first-run .setup-check-confirm { background: transparent; }
+.home-first-run .setup-daily-choice { background: transparent; }
+.home-first-run .setup-picked { justify-content: center; gap: 6px 14px; }
+.home-first-ceo { display: grid; gap: 8px; margin-top: 12px; }
 .home-first-ceo p { margin: 0; overflow-wrap: anywhere; }
-.home-first-ceo .row { flex-wrap: wrap; }
-.home-first-foot { margin-top: 18px; }
+.home-first-ceo .row { flex-wrap: wrap; justify-content: center; }
+.home-first-foot { margin-top: 22px; text-align: center; }
+@media (max-width: 720px) { .home-first-run .setup-picker { grid-template-columns: 1fr; } }
 @media (max-width: 520px) { .home-first-ceo .btn { flex: 1 1 100%; justify-content: center; } }
 
 /* P52-2 (v0.25.0): a tool whose version VBear does not know is said like the other states that hold a tool back (the theme's own colours); its folded technical details sit under the card's line. */

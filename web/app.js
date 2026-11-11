@@ -2402,7 +2402,8 @@ async function viewHome() {
   // A person who has not finished the start-up may be sent there: until the server has settled that, only the title and the line saying what is being waited for are
   // drawn (the blocks of the home page are not shown to someone who is about to be sent away).
   const gating = setupGateWanted(configRes);
-  if (gating) setKids(main, title, homeLoadingLine("setup", "正在確認開始設定…")); else drawFrame();
+  // (the title of the waiting state is its own element: a node has one parent, and the column that is drawn after the server has settled it keeps the real title)
+  if (gating) setKids(main, el("h1", { class: "sr-only" }, WORDS.home.use), homeLoadingLine("setup", "正在確認開始設定…")); else drawFrame();
 
   // what each block needs before it can say anything; a block that waited 60 seconds is read with what there is
   const NEED = {
@@ -3020,16 +3021,6 @@ function chatSupportGlance(data) {
   return [["claude", "Claude Code", sub(sup), "verified"], ["codex", "Codex", sub(sup.codex), "ready"], ["agy", "AGY", sub(sup.agy), "ready"]]
     .map(([id, name, state, good]) => ({ id, name, state, ready: state === good }));
 }
-// The line of step 1: whether a chat can start with the tools there are, in plain words. -> { done, line }
-function homeToolStep(toolReady, rows, glance) {
-  const unread = rows ? "還沒有就緒的 AI 工具。" : "讀不到 AI 工具的狀態。";
-  if (!glance) return { done: false, line: toolReady ? "AI 工具已就緒，但讀不到聊天的狀態。" : unread };
-  if (glance.some((g) => g.ready)) return { done: true, line: "已經有可以聊天的 AI 工具就緒了。" };
-  const held = glance.find((g) => g.state === "policy");
-  if (held) return { done: false, line: `這台電腦的 ${held.name} 有管理員設定，VBear 不能用它聊天。` };
-  if (glance.some((g) => g.state === "unverified")) return { done: false, line: "AI 工具已就緒，第一次聊天前要先做一次安全檢查（建立 CEO 後會帶你做）。" };
-  return { done: false, line: toolReady ? "AI 工具已就緒，但聊天現在還不能用，到「看 AI 工具」看原因。" : unread };
-}
 // ---- the first run on the home page (v0.25, P52-1, ADR 0017) ----
 // A person with no employee picks one AI here, prepares it with the start-up page's own pieces (setupPickerNode, setupKit) and makes the CEO with the CEO page's own request
 // (ceoCreate): one page instead of three. Every step is the person's own press: nothing is chosen, checked, logged in or made by the page. The safety check is the
@@ -3117,7 +3108,7 @@ function homeFirstRun(env) {
       errorBox,
       el("div", { class: "row" }, go));
   };
-  const frame = () => [el("h2", { class: "home-first-title" }, FIRST_TITLE), el("p", { class: "small muted" }, FIRST_SUB)];
+  const frame = () => [el("h2", { class: "home-greeting home-first-title" }, FIRST_TITLE), el("p", { class: "small muted home-first-sub" }, FIRST_SUB)];
   const foot = () => el("p", { class: "small muted home-first-foot" }, el("a", { href: "#/setup", "data-home": "first-setup-link" }, FIRST_SETUP_LINK));
   function draw() {
     if (!env.alive()) return;
@@ -3170,23 +3161,7 @@ function homeFirstRun(env) {
   update(true);
   return { node: host, update, tick };
 }
-function homeFirstSteps(toolsRes, chatsRes, loading) {
-  const rows = toolsRes && typeof toolsRes === "object" && Array.isArray(toolsRes.tools) ? toolsRes.tools : null;
-  const ready = !!rows && rows.some((t) => t && ["claude", "codex", "agy"].includes(t.id) && t.ready === true);
-  // while the tools and the chat support are still being read, step 1 says so: it draws no conclusion before the answer
-  const toolStep = loading ? { done: false, line: null } : homeToolStep(ready, rows, chatSupportGlance(chatsRes));
-  const step = (n, cls, title, line, action) => el("li", { class: `home-step ${cls}`, "data-home-step": String(n) },
-    el("span", { class: "home-step-mark", "aria-hidden": "true" }, cls.includes("done") ? "✓" : String(n)),
-    el("div", { class: "home-step-body" }, el("strong", null, title),
-      line === null ? el("span", { class: "small muted", "data-home-loading": "first-steps" }, "正在看你的 AI 工具…") : el("span", { class: "small muted" }, line)), action || null);
-  return el("section", { class: "section home-block", "data-home": "first-steps" },
-    el("h2", null, "歡迎！三步就能開始。"),
-    el("ol", { class: "home-steps" },
-      step(1, toolStep.done ? "done" : "", "準備 AI 工具", toolStep.line,
-        el("a", { class: "btn small", href: "#/setup" }, "看 AI 工具")),
-      step(2, "", "建立 CEO", "他會先問你幾個問題，再幫你整理計畫。", el("a", { class: "btn small primary", href: "#/ceo" }, "建立 CEO")),
-      step(3, "off", "說第一句話", "建立 CEO 之後就能說。", null)));
-}
+// ---- end of the first run on the home page ----
 
 // ---- 員工 (#/employees) ----
 async function viewEmployees() {

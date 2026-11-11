@@ -313,7 +313,7 @@ function judge19a(log, { engine, shown, passedBefore, confirmed }) {
 // 19a (source): the requests of the safety check are written only inside setupKit, in the handler of 「確認，開始」; the home block names neither of them.
 function judge19aSource(src) {
   const bad = [];
-  const hs = src.indexOf("function homeFirstRun("), he = src.indexOf("function homeFirstSteps(");
+  const hs = src.indexOf("function homeFirstRun("), he = src.indexOf("// ---- end of the first run on the home page");
   const ks = src.indexOf("function setupKit("), ke = src.indexOf("// ---------- end of the setup kit");
   if (hs < 0 || he < hs || ks < 0 || ke < ks) return ["the parts are not where they are expected"];
   const home = src.slice(hs, he), kit = src.slice(ks, ke);
@@ -360,7 +360,7 @@ function judge19bSource(src) {
   for (const i of calls) if (!/addEventListener\("click"/.test(src.slice(Math.max(0, i - 700), i))) bad.push("a call of ceoCreate that is not inside a click handler");
   if ([...src.matchAll(/api\.post\("\/api\/agent-profiles"/g)].filter((m) => m.index > src.indexOf("async function ceoCreate(") && m.index < src.indexOf("async function viewCeo(")).length !== 1) bad.push("the card is not made in ceoCreate");
   // P52-5: in the home block `setup_done` is written only from inside the press's click handler (never when the block is built, loaded or redrawn)
-  const from = src.indexOf("function homeFirstRun("), to = src.indexOf("function homeFirstSteps(");
+  const from = src.indexOf("function homeFirstRun("), to = src.indexOf("// ---- end of the first run on the home page");
   if (from >= 0 && to > from) {
     const part = src.slice(from, to);
     for (const m of part.matchAll(/setup_done\s*:\s*true/g)) {
@@ -688,7 +688,7 @@ function judge19bSource(src) {
 
   await test("19a judge (source): the real page passes; a home block that asks for the check itself, or a verify outside 「確認，開始」, is caught", () => {
     assert.deepStrictEqual(judge19aSource(SOURCE), []);
-    const mk = (home, kit) => `function homeFirstRun(env) {${home}}\nfunction homeFirstSteps() {}\nfunction setupKit(ctx) { ${kit} }\n// ---------- end of the setup kit`;
+    const mk = (home, kit) => `function homeFirstRun(env) {${home}}\n// ---- end of the first run on the home page ----\nfunction setupKit(ctx) { ${kit} }\n// ---------- end of the setup kit`;
     const good = `const checkOn = { confirm: async (id) => { await api.post("/api/chat-support/verify", {}); }, };\n  return { toolCard };`;
     assert.deepStrictEqual(judge19aSource(mk("", good)), []);
     assert.ok(judge19aSource(mk("api.post('/api/chat-support/verify', {});", good)).some((m) => /home block/.test(m)));
@@ -769,9 +769,9 @@ function judge19bSource(src) {
 
   await test("P52-5 judge (source): the real page writes setup_done only inside the press's click; a source that writes it when the block is built is caught", () => {
     assert.deepStrictEqual(judge19bSource(SOURCE), []);
-    assert.ok(SOURCE.slice(SOURCE.indexOf("function homeFirstRun("), SOURCE.indexOf("function homeFirstSteps(")).includes("setup_done"), "the home block does write it, in its click");
+    assert.ok(SOURCE.slice(SOURCE.indexOf("function homeFirstRun("), SOURCE.indexOf("// ---- end of the first run on the home page")).includes("setup_done"), "the home block does write it, in its click");
     const click = `a.addEventListener("click", async () => { await ceoCreate(plan, n, i); });\n`;
-    const shell = (inside) => `async function ceoCreate(plan, name, instructions) { await api.post("/api/agent-profiles", {}); }\nfunction homeFirstRun(env) {${inside}${click}${click}}\nfunction homeFirstSteps() {}\nasync function viewCeo() {}`;
+    const shell = (inside) => `async function ceoCreate(plan, name, instructions) { await api.post("/api/agent-profiles", {}); }\nfunction homeFirstRun(env) {${inside}${click}${click}}\n// ---- end of the first run on the home page ----\nasync function viewCeo() {}`;
     assert.deepStrictEqual(judge19bSource(shell("")), []);
     assert.ok(judge19bSource(shell("api.post('/api/config', { setup_done: true });")).some((m) => /outside the click/.test(m)));
   });
@@ -802,7 +802,7 @@ function judge19bSource(src) {
 
   await test("source: the home block is built with el(), has no innerHTML, no emoji, no outside resource and runs no AI tool; its style is its own part at the end of the style sheet", () => {
     const start = SOURCE.indexOf("// ---- the first run on the home page (v0.25, P52-1");
-    const end = SOURCE.indexOf("function homeFirstSteps(");
+    const end = SOURCE.indexOf("// ---- end of the first run on the home page");
     assert.ok(start > 0 && end > start, "the part has its own marked place");
     const part = SOURCE.slice(start, end);
     assert.ok(part.length > 3000);
@@ -814,7 +814,8 @@ function judge19bSource(src) {
     assert.ok(css.length < CSS.length && css.length > 200, "P52-1 has its own part at the end of the style sheet");
     assert.ok(!/url\(|@import|https?:\/\//.test(css));
     assert.ok(!/#[0-9a-fA-F]{3,6}\b/.test(css), "colours come from the theme variables");
-    assert.ok(SOURCE.includes("function homeFirstSteps("), "the old three steps are kept");
+    assert.ok(!SOURCE.includes("function homeFirstSteps(") && !SOURCE.includes("homeToolStep"), "the old three steps are gone (nobody calls them)");
+    assert.ok(!/\.home-step\b/.test(CSS), "and so is their style");
   });
 
   console.log(`\n${passed} passed`);

@@ -145,11 +145,13 @@ test("buttons are pills; a card has no shadow and keeps its border", () => {
   assert.strictEqual(propOf(".card", "border"), "1px solid var(--line)", "the border stays");
 });
 
-test("the home blocks have no card frame or fill: the steps of a person with no employee are lines, not boxes", () => {
-  const step = lastRule(".home-page .home-step");
-  assert.ok(/border:\s*0/.test(step) && /background:\s*transparent/.test(step), step);
+test("the home blocks have no card frame or fill: the first run of a person with no employee (P52-1, in place of the old three steps) is frameless like the rest, in the same column", () => {
+  const block = lastRule(".home-page .home-block");
+  assert.ok(/border:\s*0/.test(block) && /background:\s*transparent/.test(block), block);
   assert.ok(!/box-shadow:\s*var/.test(lastRule(".home-block") || ""));
-  assert.ok(/\.home-page \.home-steps/.test(CSS), "the steps stand in the same column");
+  const pick = lastRule(".home-first-run .setup-pick");
+  assert.ok(/background:\s*transparent/.test(pick), "the picker's cards have no fill of their own on the home page: " + pick);
+  assert.ok(!/\.home-step\b/.test(CSS), "the old three steps' style is gone");
 });
 
 test("the shadow token is neutral black, not a warm tone", () => {
