@@ -2143,3 +2143,7 @@ input[type="checkbox"] { width: 18px; height: 18px; flex: none; accent-color: va
 .home-first-ceo .row { flex-wrap: wrap; }
 .home-first-foot { margin-top: 18px; }
 @media (max-width: 520px) { .home-first-ceo .btn { flex: 1 1 100%; justify-content: center; } }
+
+/* P52-2 (v0.25.0): a tool whose version VBear does not know is said like the other states that hold a tool back (the theme's own colours); its folded technical details sit under the card's line. */
+.setup-pick-state[data-setup-status="unsupported"] { color: var(--bad); }
+.setup-pick .plain-tech { margin: 0; }

@@ -1027,6 +1027,15 @@ function wordsToAvoid(scope) {
   return out;
 }
 
+// What is said of a tool whose version VBear does not know (its chat support is `unsupported`, or the server's sentences that mean it). `version` is only what the server's
+// data gave: nothing is looked up here, and no number is written into this function (guard 19c). No word about going back to an older version.
+function versionUnknownWords(tool, version) {
+  const name = typeof tool === "string" && tool ? tool : "AI 工具";
+  const v = typeof version === "string" ? version.trim() : "";
+  const text = v ? `你的 ${name} 是 ${v} 版，VBear 還不認得這一版，所以先不能用它聊天。` : `你的 ${name} 的版本 VBear 還不認得，所以先不能用它聊天。`;
+  return { text, next: "等 VBear 出新版就能用。" };
+}
+
 const LIMIT_SETTINGS_HREF = "#/settings?open=limits";
 const LIMIT_REACHED_TEXT = "今天的用量到你設的上限了，所以這則沒有送出（沒有花錢）。明天 0 點會重新算；要現在繼續，可以調高上限。";
 // The sentences the server and the screen really say, said in plain words with what to do next (ADR 0013 decision 8). The server's own
@@ -1046,6 +1055,10 @@ const PLAIN_ERRORS = [
     text: "這個 AI 工具還沒做過聊天用的安全檢查，所以現在不能聊天。", next: "到這位員工的準備頁，做一次安全檢查，通過後就能聊。" },
   { key: "chat_admin_policy", re: /這台 Mac 上有管理員政策或系統設定，可能蓋過 VBear 的設定，所以不啟動聊天/,
     text: "這台電腦的 AI 工具有管理員設定，VBear 不能用它聊天。", next: "可以到「AI 工具」看看有沒有別的工具能用。" },
+  // P52-2: the tool updated itself and VBear does not know that version. The tool and the version are taken out of the server's own sentence (never looked up); `build` says it.
+  { key: "version_unknown", re: /(?:VBear 沒有 )?(Claude Code|Codex|AGY) (\d\S*) (?:的聊天模式常數|沒有聊天模式的常數|沒有管理員政策來源清單，不能啟動|不是 VBear 能聊天的版本)/,
+    build: (m) => versionUnknownWords(m[1], m[2]) },
+  { key: "version_unknown_bare", re: /沒有這個 (Claude Code|Codex|AGY) 版本的聊天模式常數|VBear 沒有這個版本的聊天模式常數/, build: (m) => versionUnknownWords(m[1] || "", "") },
   { key: "orphan", re: /孤兒翻譯/, label: true, swaps: [[/孤兒翻譯/g, "找不到原技能的翻譯"]] },
   // P48-6: the browser's own words when a request never reached the server (Chrome, WebKit in the Mac app, Firefox); the server says none of them.
   { key: "server_lost", re: /^(?:TypeError:\s*)?(?:Failed to fetch|Load failed|NetworkError when attempting to fetch resource\.?)$/i,
@@ -1066,6 +1079,7 @@ function plainWords(x) {
   const hit = PLAIN_ERRORS.find((e) => e.re.test(raw) && !(e.normalOnly && onAdvancedPage()));
   if (!hit) return none;
   if (hit.limit) return { text: LIMIT_REACHED_TEXT, next: "", detail: raw, known: true, limit: true };
+  if (hit.build) { const b = hit.build(hit.re.exec(raw)); return { text: b.text, next: b.next, detail: raw, known: true, limit: false }; }
   if (hit.swaps) {
     const swapped = hit.swaps.reduce((s, [re, to]) => s.replace(re, to), raw);
     return { text: swapped, next: hit.next || "", detail: hit.label ? "" : raw, known: true, limit: false };
@@ -3124,7 +3138,7 @@ function homeFirstRun(env) {
         el("div", { "data-home": "first-prepare" },
           row ? el("ul", { class: "setup-list" }, kit.toolCard(row, true)) : notice("warn", `讀不到 ${vendor.maker} 這個 AI 工具的狀態。`),
           el("div", { class: "row" }, recheckBtn())),
-        st.kind === "ready" ? ceoPart(vendor) : el("p", { class: "small", "data-home": "first-reason" }, "還不能建立 CEO：" + st.text),
+        st.kind === "ready" ? ceoPart(vendor) : el("div", { "data-home": "first-reason" }, el("p", { class: "small" }, setupMissingLine(vendor, st)), st.raw ? plainTechFold(st.raw) : null),
       ];
     }
     if (!loading && rows) askDaily();
@@ -14505,7 +14519,29 @@ function setupVendorStatus(vendor, toolsRes, chats) {
   if (sup.state === "not_installed") return { kind: "not_installed", text: "還沒安裝" };
   if (sup.state === "not_logged_in") return { kind: "chat_login", text: "已登入，還要登入聊天用的 Codex" };
   if (sup.state === "unknown" || sup.state === "version_unreadable") return { kind: "unread", text: "已登入；讀不到版本，聊天的狀態不明" };
+  if (sup.state === "unsupported") {          // P52-2: the tool updated itself; the version is the server's (the chat support, else the tool's own row), the server's sentence is kept whole
+    const u = versionUnknownWords(v.tool, sup.version || (typeof row.version === "string" ? row.version : ""));
+    return { kind: "unsupported", text: u.text + u.next, raw: sup.why };
+  }
   return { kind: "blocked", text: "已登入，但現在不能聊天" };
+}
+
+// P52-2: the step that is missing for a tool that cannot chat yet, as one plain line, said from the state that was read (`st`: what setupVendorStatus said of it) and from nothing else.
+// "" when the tool is ready to chat. Used on the home page's first run and on the CEO page.
+function setupMissingLine(vendor, st) {
+  const tool = (vendor && vendor.tool) || "這個 AI 工具";
+  const s = st && typeof st === "object" ? st : { kind: "unread", text: "狀態讀不到" };
+  const t = typeof s.text === "string" ? s.text : "";
+  if (s.kind === "ready") return "";
+  if (s.kind === "not_installed") return `還差一步：安裝 ${tool}（${t}）。`;
+  if (s.kind === "not_logged_in") return `還差一步：登入 ${tool}（${t}）。`;
+  if (s.kind === "chat_login") return `還差一步：登入聊天用的 ${tool}（${t}）。`;
+  if (s.kind === "unverified") return "還差一步：做一次聊天安全檢查（每個新版本第一次聊天前都要做一次）。";
+  if (s.kind === "running") return "聊天安全檢查還在做，做完就能建立 CEO。";
+  if (s.kind === "policy") return `這台 Mac 有管理員設定，VBear 不能用 ${tool} 聊天。可以按「換一家」選別家。`;
+  if (s.kind === "unsupported") return t;
+  if (s.kind === "unread") return `現在讀不到狀態，不知道還差哪一步：${t}。按「重新檢查」再讀一次。`;
+  return `${tool} 現在不能聊天。`;
 }
 
 // The server's sentence as a plain line and, when the table knows it, the original kept for 「技術細節」.
@@ -14564,6 +14600,7 @@ function setupCheckView(id, row, chats, st) {
     } else chat = ["todo", "每個新版本第一次聊天前都要做一次。", {}];
   } else if (sup.state === "not_installed" || sup.state === "not_logged_in") chat = ["todo", "", {}];
   else if (sup.state === "unknown" || sup.state === "version_unreadable") chat = ["unknown", "讀不到版本，所以不知道這個版本通過了沒有。", {}];
+  else if (sup.state === "unsupported") { const u = versionUnknownWords(tool, sup.version || (typeof r.version === "string" ? r.version : "")); chat = ["fail", u.text + u.next, { raw: sup.why, next: SETUP_CHANGE_HINT }]; }
   else { const line = setupPlainLine(sup.why || `${tool} 現在不能聊天。`); chat = ["fail", line.text, { raw: line.raw, next: SETUP_CHANGE_HINT }]; }
   add("chat", chatLabel, chat[0], chat[1], chat[2]);
   const working = s.phase === "trying" || s.phase === "verifying";
@@ -14597,6 +14634,7 @@ function setupPickerNode(status, onPick) {
       el("p", { class: "small muted setup-text" }, v.account),
       st ? el("p", { class: "setup-text setup-pick-state", "data-setup-status": st.kind }, "這台 Mac：" + st.text)
         : el("p", { class: "setup-text setup-pick-state", "data-setup": "loading" }, "這台 Mac：" + SETUP_LOOKING),
+      st && st.raw ? plainTechFold(st.raw) : null,
     ];
     if (st) body.push(el("button", { class: "btn small primary", type: "button", "data-setup-pick-go": v.id, on: { click: () => onPick(v.id) } }, "選這個"));
     return el("div", { class: "setup-pick", "data-setup-pick": v.id }, body);
@@ -14838,7 +14876,7 @@ async function viewSetup() {
       : [setupPickerNode((v) => setupVendorStatus(v, shown, chats), choose)];
     const others = vendor ? rows.filter((r) => r && r.id !== vendor.id) : [];
     setKids(host,
-      anyReady ? null : notice("info", SETUP_NONE_READY),
+      anyReady || vendor ? null : notice("info", SETUP_NONE_READY),          // P52-2: once a tool is chosen its card says what is missing; this line would only repeat it
       top,
       dailySection(),
       others.length ? el("details", { class: "section setup-others", "data-setup": "others" }, el("summary", null, SETUP_OTHERS_TITLE),
@@ -14962,13 +15000,20 @@ async function viewCeo() {
   const token = seq;
   const plan = await ceoPlan();
   const chatsRes = plan && plan.needed === true ? await api.get("/api/chats").catch(() => null) : null;       // only to say whether a chat can start with the tool
+  // P52-2: a plan that cannot be made on the AI the person chose says which step is missing; that needs the tools' own state (the path the start-up page reads)
+  const missingFor = plan && plan.needed === true && !ceoStepWanted(plan) ? setupVendorOf(ceoPickedTool()) : null;
+  const toolsRes = missingFor ? await api.get("/api/setup/tools").catch(() => null) : null;
   const main = claim(token);
   if (token !== seq) return;
   const head = el("h1", null, CEO_TITLE);
   if (!plan) { setKids(main, head, notice("bad", "讀不到建立 CEO 需要的資料，請稍後再試。")); return; }
   if (plan.needed !== true) { setKids(main, head); location.hash = "#/"; return; }       // a person who has a card to chat with is not shown the step
   if (!ceoStepWanted(plan)) {
+    const st = missingFor ? setupVendorStatus(missingFor, toolsRes, chatsRes) : null;
+    const missing = st ? setupMissingLine(missingFor, st) : "";
     setKids(main, head, notice("info", typeof plan.reason === "string" && plan.reason ? plan.reason : "目前沒有可以用的 AI 工具。"),
+      missing ? el("p", { "data-ceo": "missing" }, missing) : null,
+      st && st.raw ? plainTechFold(st.raw) : null,
       el("p", null, el("a", { class: "btn primary", href: "#/setup", "data-ceo": "setup-go" }, "到開始設定")));
     return;
   }
@@ -14999,7 +15044,11 @@ async function viewCeo() {
   const sup = chatsRes && chatsRes.support && typeof chatsRes.support === "object" ? chatsRes.support : null;
   const part = sup ? (plan.tool === "claude" ? sup : sup[plan.tool]) : null;
   const checking = !!part && typeof part === "object" && part.verify && part.verify.running === true;
+  // P52-2: the tool updated itself and VBear does not know that version: the same plain sentence as everywhere, the server's own behind 「技術細節」
+  const unknown = mine && mine.state === "unsupported" ? versionUnknownWords(plan.tool_name || plan.tool, part && typeof part === "object" ? (part.detected || part.version) : "") : null;
+  const unknownRaw = unknown && part && typeof part === "object" ? (typeof part.message === "string" && part.message ? part.message : typeof part.why === "string" ? part.why : "") : "";
   const toolState = !mine ? "（聊天的狀態讀不到）" : mine.ready ? "（可以聊天了）" : mine.state === "policy" ? "（這台電腦有管理員設定，VBear 不能用它聊天）"
+    : unknown ? `（${unknown.text}${unknown.next}）`
     : mine.state === "unverified" && checking ? "（聊天安全檢查還在做，通常要幾分鐘；你可以先建立 CEO，做完才能開始聊）"
     : mine.state === "unverified" ? "（第一次聊天前要先做一次安全檢查，建立後會帶你做）" : "（聊天現在還不能用，建立後會告訴你原因）";
   const toolLine = el("p", { "data-ceo": "tool" }, el("strong", null, "用哪個 AI 工具："), `${plan.tool_name || plan.tool}${toolState}`);
@@ -15013,6 +15062,7 @@ async function viewCeo() {
     el("section", { class: "panel pad ceo-form", "data-ceo": "form" },
       el("label", { class: "ceo-field" }, el("span", null, "名字"), name),
       toolLine,
+      unknownRaw ? plainTechFold(unknownRaw) : null,
       el("p", { class: "small", "data-ceo": "mode" }, CEO_MODE),
       plan.tool === "agy" ? el("p", { class: "small", "data-ceo": "agy-note" }, CEO_AGY_NOTE) : null,
       more,
@@ -15449,6 +15499,11 @@ function chatPrepState(card, data) {
   if (state === "policy") {            // not something to verify: the administrator's settings on this computer hold the tool back
     return linkSetup("到 AI 工具看看", `這台電腦的 ${tool} 有管理員設定，VBear 不能用它聊天。可以到「AI 工具」看看有沒有別的工具能用。`);
   }
+  if (state === "unsupported") {       // P52-2: the tool updated itself; the server's sentence goes behind 「技術細節」 (`raw`)
+    const u = versionUnknownWords(tool, version);
+    const raw = part && typeof part.message === "string" && part.message ? part.message : part && typeof part.why === "string" ? part.why : "";
+    return { ...linkSetup("到 AI 工具看看", u.text + u.next), raw };
+  }
   const why = `${tool} ${word}，先處理這一步才能和 ${name} 聊天。`;
   // P48-3 (D10): the safety check was started elsewhere (the start-up page) and is still going: nothing to press, the chat opens by itself when it passes
   if (state === "unverified" && part && part.verify && typeof part.verify === "object" && part.verify.running === true) {
@@ -15706,6 +15761,7 @@ async function viewChat(id, params) {
     } else if (st) action = el("a", { class: "btn primary", href: st.href, "data-chat": "prep-action" }, st.label);
     setKids(prepBox,
       el("p", { class: "lede", "data-chat": "prep-reason" }, st ? st.reason : "找不到這位員工。"),
+      st && st.raw ? plainTechFold(st.raw) : null,
       lampRed ? limitReachedNotice(null, { text: "今天的用量到你設的上限了，所以現在不能開始聊天（沒有花錢）。明天 0 點會重新算；要現在繼續，可以調高上限。" }) : null,
       action,
       !running && status && typeof status.message === "string" && status.message && st && st.kind !== "start"
@@ -21686,7 +21742,7 @@ if (typeof module !== "undefined" && module.exports) {
     NAV_PARENT,
     syncAdvancedNav,
     PLAIN_ERRORS,
-    plainWords,
+    plainWords, versionUnknownWords, setupMissingLine,
     plainNotice,
     plainLine,
     limitReachedNotice,

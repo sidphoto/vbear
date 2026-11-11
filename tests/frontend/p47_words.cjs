@@ -179,7 +179,7 @@ const ENGLISH = /[A-Za-z]{4,}/;
       assert.ok(e.key && !keys.has(e.key), `a key, once: ${e.key}`);
       keys.add(e.key);
       assert.ok(e.re instanceof RegExp || (e.re && typeof e.re.test === "function"), e.key);
-      assert.ok(e.limit === true || typeof e.text === "string" || Array.isArray(e.swaps), `${e.key} says something`);
+      assert.ok(e.limit === true || typeof e.text === "string" || Array.isArray(e.swaps) || typeof e.build === "function", `${e.key} says something`);       // P52-2: a rule may build its words from the sentence (the tool and the version in it)
       if (typeof e.text === "string") assert.ok(!/[A-Za-z]{4,}/.test(e.text.replace(/VBear/g, "")), `${e.key}: ${e.text}`);
     }
   });

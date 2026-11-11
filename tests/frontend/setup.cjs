@@ -196,6 +196,7 @@ test("「我登入好了」marks the tool, the row becomes ready, and the mark c
 
 test("you can leave only when a tool is ready; leaving saves the mark and goes to the lobby; the page can be come back to", async () => {
   setPage({ tools: [installed("claude"), row("codex"), row("agy"), row("grok")] });
+  global.localStorage._store = {};          // P52-2: the first line is for a page where no AI is chosen yet (once one is, its card says what is missing); an earlier test left a choice here
   let main = await open("#/setup");
   let leave = byAttr(main, "data-setup", "leave")[0];
   assert.strictEqual(leave.disabled, true);

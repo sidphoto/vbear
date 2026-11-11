@@ -438,6 +438,24 @@ function judge19bSource(src) {
     assert.strictEqual(h(page, "first-ceo-create"), null);
   });
 
+  await test("P52-2: the line says which step is missing, from the state that was read: not installed, not logged in, no safety check yet, an administrator's settings, a version VBear does not know", async () => {
+    const lineOf = async (over) => text(h(await firstPage(over, { storage: { [PICK]: "claude" } }), "first-reason"));
+    assert.ok((await lineOf({})).includes("還差一步：安裝 Claude Code"), "not installed");
+    assert.ok((await lineOf({ tools: [installedRow("claude"), trow("codex"), trow("agy"), trow("grok")] })).includes("還差一步：登入 Claude Code"), "not logged in");
+    assert.ok((await lineOf(readyClaude())).includes("還差一步：做一次聊天安全檢查"), "no safety check yet");
+    assert.ok((await lineOf({ ...readyClaude(), support: supportOf({ state: "policy", message: "管理員設定擋住了" }) })).includes("有管理員設定"), "an administrator's settings");
+    const UNKNOWN = "VBear 沒有 Claude Code 2.1.999 的聊天模式常數，所以不能聊天。VBear 目前能聊天的版本：2.1.318。處理方式：安裝其中一個版本，或等 VBear 更新。";
+    const page = await firstPage({ tools: [readyRow("claude", { version: "2.1.999" }), trow("codex"), trow("agy"), trow("grok")], support: supportOf({ state: "unsupported", detected: "2.1.999", message: UNKNOWN }) }, { storage: { [PICK]: "claude" } });
+    const unknown = h(page, "first-reason");
+    assert.ok(text(unknown).includes("你的 Claude Code 是 2.1.999 版，VBear 還不認得這一版，所以先不能用它聊天。等 VBear 出新版就能用。"), text(unknown));
+    const fold = all(unknown, (n) => n.getAttribute && n.getAttribute("data-plain") === "tech");
+    assert.strictEqual(fold.length, 1, "the server's sentence is behind the technical details");
+    assert.ok(text(fold[0]).includes(UNKNOWN));
+    assert.strictEqual(h(page, "first-ceo-create"), null);
+    assert.strictEqual(h(page, "first-recheck").tag, "button", "and a way to read again");
+    assert.deepStrictEqual(posts(page), []);
+  });
+
   await test("chats that cannot be read: a ready tool is said to have an unknown chat state; nothing can be made", async () => {
     const page = await firstPage({ ...readyClaude(), chatsFail: true }, { storage: { [PICK]: "claude" } });
     assert.ok(text(h(page, "first-prepare")).includes("讀不到"), text(h(page, "first-prepare")));
