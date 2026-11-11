@@ -201,7 +201,7 @@ test("C6 the props are 2x, small, beside the title, and the office never relies 
 
 
 // ---- shared: the camp frames, as the page's css holds them ------------------------------------------------------------
-const THEME_INK = { light: { ink: "#1f2522", ink2: "#4a524d" }, dark: { ink: "#e9ece8", ink2: "#bcc3be" } };
+const THEME_INK = { light: { ink: "#17191a", ink2: "#4b5052" }, dark: { ink: "#ecedeb", ink2: "#bfc3c2" } };   // P50-3: the theme's neutral inks (the card tokens below must equal them)
 const CAMPS = ["anthropic", "openai", "google", "other"];
 function cssVars(block) { return Object.fromEntries([...block.matchAll(/--([a-z0-9-]+):\s*(#[0-9a-fA-F]{6})/g)].map((m) => [m[1], m[2]])); }
 function ruleLine(prefix, sel) { return CSS_SRC.split("\n").find((l) => l.startsWith(prefix + sel + " {")); }

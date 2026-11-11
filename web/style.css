@@ -1,12 +1,14 @@
 :root {
-  --bg: #f4f1ea;
-  --panel: #fffdf8;
-  --panel-2: #f8f4ec;
-  --ink: #1f2522;
-  --ink-2: #4a524d;
-  --ink-3: #737b75;
-  --line: #e2dccf;
-  --line-2: #d3cbbb;
+  /* Neutral greys (v0.23, see the P50-3 part at the end; no green, no beige); the side bar is one step off the page (--side-bg); the green accent is only for the main actions and the item you are on */
+  --bg: #ffffff;
+  --panel: #ffffff;
+  --panel-2: #f5f5f4;
+  --side-bg: #f7f7f6;
+  --ink: #17191a;
+  --ink-2: #4b5052;
+  --ink-3: #686e70;
+  --line: #e6e6e3;
+  --line-2: #d6d6d2;
   --accent: #2f5d50;
   --accent-ink: #f3efe4;
   --accent-soft: #e2ece7;
@@ -15,8 +17,8 @@
   --warn: #9a6a00;     --warn-soft: #fbf0d4;
   --bad: #b3372b;      --bad-soft: #f8e2de;
   --info: #2f5f8f;     --info-soft: #e1ebf5;
-  --mute: #6b6f6c;     --mute-soft: #ebe8e1;
-  --shadow: 0 1px 2px rgba(40, 35, 25, .06), 0 4px 14px rgba(40, 35, 25, .05);
+  --mute: #6b6f6c;     --mute-soft: #f0f0ee;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .06), 0 4px 14px rgba(0, 0, 0, .05);
   /* the home board's cards (design lobby v1.2): the frame and bar of a card that waits for you, and badge ink
      dark enough for 4.5:1 on the soft backgrounds */
   --quest-edge: #8a5a00; --quest-bar: #8a5a00;
@@ -41,12 +43,12 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #151917; --panel: #1c211f; --panel-2: #222826; --ink: #e9ece8; --ink-2: #bcc3be;
-    --ink-3: #8c948f; --line: #2d3431; --line-2: #3a423e; --accent: #7fb8a4; --accent-ink: #10201a;
+    --bg: #111213; --panel: #17191a; --panel-2: #1e2021; --side-bg: #0c0d0e; --ink: #ecedeb; --ink-2: #bfc3c2;
+    --ink-3: #8d9394; --line: #26282a; --line-2: #34373a; --accent: #7fb8a4; --accent-ink: #10201a;
     --accent-soft: #23332d; --gold: #e0b25c;
     --ok: #74c793; --ok-soft: #1d3326; --warn: #e4b54f; --warn-soft: #3a2f14;
     --bad: #f08a7d; --bad-soft: #3d201c; --info: #86b4e3; --info-soft: #1c2b3b;
-    --mute: #9aa09c; --mute-soft: #2a2f2d;
+    --mute: #9aa09c; --mute-soft: #242628;
     --quest-edge: #e4b54f; --quest-bar: #e4b54f; --quest-ok: #74c793; --quest-warn: #e4b54f; --quest-mute: #9aa09c;
     --vn-red: #DA251D; --vn-on-red: #ffffff; --vn-red-ink: #ff8f85;
     --vn-red-deep: #d9776b; --vn-gold: #ffcd00;
@@ -59,12 +61,12 @@
   }
 }
 :root[data-theme="dark"] {
-  --bg: #151917; --panel: #1c211f; --panel-2: #222826; --ink: #e9ece8; --ink-2: #bcc3be;
-  --ink-3: #8c948f; --line: #2d3431; --line-2: #3a423e; --accent: #7fb8a4; --accent-ink: #10201a;
+  --bg: #111213; --panel: #17191a; --panel-2: #1e2021; --side-bg: #0c0d0e; --ink: #ecedeb; --ink-2: #bfc3c2;
+  --ink-3: #8d9394; --line: #26282a; --line-2: #34373a; --accent: #7fb8a4; --accent-ink: #10201a;
   --accent-soft: #23332d; --gold: #e0b25c;
   --ok: #74c793; --ok-soft: #1d3326; --warn: #e4b54f; --warn-soft: #3a2f14;
   --bad: #f08a7d; --bad-soft: #3d201c; --info: #86b4e3; --info-soft: #1c2b3b;
-  --mute: #9aa09c; --mute-soft: #2a2f2d;
+  --mute: #9aa09c; --mute-soft: #242628;
   --quest-edge: #e4b54f; --quest-bar: #e4b54f; --quest-ok: #74c793; --quest-warn: #e4b54f; --quest-mute: #9aa09c;
   --vn-red: #DA251D; --vn-on-red: #ffffff; --vn-red-ink: #ff8f85;
   --vn-red-deep: #d9776b; --vn-gold: #ffcd00;
@@ -86,7 +88,7 @@ button, input, select { font: inherit; color: inherit; }
 .skip:focus { left: 8px; }
 
 .shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 100vh; }
-.side { position: sticky; top: 0; height: 100vh; padding: 20px 14px; border-right: 1px solid var(--line); background: var(--panel-2); display: flex; flex-direction: column; gap: 18px; }
+.side { position: sticky; top: 0; height: 100vh; padding: 20px 14px; border-right: 1px solid var(--line); background: var(--side-bg); display: flex; flex-direction: column; gap: 18px; }
 .brand { display: flex; gap: 10px; align-items: center; padding: 4px 8px; }
 .brand-mark { display: grid; place-items: center; width: 36px; height: 36px; }
 .brand-mark img { display: block; width: 32px; height: 32px; filter: var(--brand-mark-filter); }  /* 32 x 32 grid at 32 px: one pixel per cell */
@@ -96,7 +98,7 @@ button, input, select { font: inherit; color: inherit; }
 .nav a { display: flex; gap: 10px; align-items: center; padding: 9px 10px; border-radius: 9px; color: var(--ink-2); text-decoration: none; }
 .nav a span { width: 18px; text-align: center; color: var(--ink-3); }
 .nav a:hover { background: var(--mute-soft); color: var(--ink); }
-.nav a[aria-current="page"] { background: var(--accent-soft); color: var(--ink); font-weight: 600; }
+.nav a[aria-current="page"] { background: var(--mute-soft); color: var(--accent); font-weight: 600; }
 .nav a[aria-current="page"] span { color: var(--accent); }
 /* P47-1 nav: the advanced part of the menu shows only when the advanced mode is on (the page takes the hidden attribute off) */
 .nav [hidden] { display: none; }
@@ -2039,3 +2041,13 @@ input[type="checkbox"] { width: 18px; height: 18px; flex: none; accent-color: va
 @media (prefers-reduced-motion: reduce) {
   .side-panel { transition: none; }
 }
+
+/* P50-3 (v0.23.0, ADR 0015): the look. The colours are the neutral tokens at the top of this file (the values changed there, not here). What is here: buttons are pills,
+   a card keeps its frame and loses its shadow, the home page has no card frames or fills (the steps for a person with no employee are plain lines), and the green accent
+   is only the main action and the item you are on. The status colours, the office, the cards of the game and the faction frames are not touched. */
+.btn { border-radius: 999px; }
+.card { box-shadow: none; }
+.home-page .home-steps { gap: 0; }
+.home-page .home-step { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; padding: 12px 2px; }
+.home-page .home-step.done { border-bottom-color: var(--line); }
+.home-page .home-block { border: 0; background: transparent; box-shadow: none; }
