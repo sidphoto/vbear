@@ -9,6 +9,7 @@
 
 import Cocoa
 import WebKit
+import UserNotifications
 
 // Scripted acceptance can select a port without ever probing the user's console.
 let testPort = ProcessInfo.processInfo.environment["VBEAR_APP_PORT"].flatMap(Int.init)
@@ -90,6 +91,138 @@ func pickerReplyScript(requestId: String, status: String, path: String?) -> Stri
           let json = String(data: data, encoding: .utf8) else { return nil }
     return "window.__vbearFolderPicked(\(json))"
 }
+
+// ---- the number of things that wait, the Dock, the window title and the Mac notification (v0.22, P48-4) ---------------
+// The page posts {count, notify} to the script message handler `vbearWaiting` (count: a whole number 0 to 999; notify: whether the person turned the
+// notification on in the page's settings), and {ask: true} when the person presses that switch. Nothing else is taken: the words of the window title,
+// the Dock and the notification are made here from the number, never copied from the page. This section opens no connection (no network call and no
+// subprocess) and keeps nothing on disk. The decisions are plain functions so a test can run them without a window or the notification center.
+
+let waitingMessage = "vbearWaiting"
+
+enum WaitingRequest: Equatable {
+    case ignore                         // not ours to answer
+    case count(Int, notify: Bool)       // the number, and whether to tell the person when it grows
+    case ask                            // the person pressed the switch: ask the system for the allowance (the only time it is asked)
+}
+
+/// A whole number that is not a boolean in disguise (a boolean that crosses the bridge is an NSNumber too).
+func waitingInteger(_ value: Any) -> Int? {
+    if let n = value as? NSNumber {
+        if CFGetTypeID(n) == CFBooleanGetTypeID() { return nil }
+        let d = n.doubleValue
+        guard d == d.rounded(), abs(d) < 1_000_000 else { return nil }
+        return Int(d)
+    }
+    return nil
+}
+
+func waitingBoolean(_ value: Any) -> Bool? {
+    guard let n = value as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() else { return nil }
+    return n.boolValue
+}
+
+func waitingRequest(frameIsMain: Bool, scheme: String, host: String, port: Int, serverPort: Int, body: Any) -> WaitingRequest {
+    guard frameIsMain, isConsoleOrigin(scheme: scheme, host: host, port: port, serverPort: serverPort),
+          let dict = body as? [String: Any] else { return .ignore }
+    if dict.count == 1, let ask = dict["ask"], waitingBoolean(ask) == true { return .ask }
+    guard dict.count == 2, let rawCount = dict["count"], let rawNotify = dict["notify"],
+          let count = waitingInteger(rawCount), (0...999).contains(count), let notify = waitingBoolean(rawNotify) else { return .ignore }
+    return .count(count, notify: notify)
+}
+
+func waitingClamped(_ count: Int) -> Int { min(max(count, 0), 999) }
+
+/// `VBear`, or `(N) VBear`: the number and nothing else.
+func waitingTitle(count: Int) -> String {
+    let n = waitingClamped(count)
+    return n > 0 ? "(\(n)) VBear" : "VBear"
+}
+
+/// The Dock icon's number; none when nothing waits.
+func waitingBadge(count: Int) -> String? {
+    let n = waitingClamped(count)
+    return n > 0 ? String(n) : nil
+}
+
+/// The notification: a fixed form with the number in it.
+func waitingNote(count: Int) -> (title: String, body: String) {
+    ("VBear", "有 \(waitingClamped(count)) 件事等你決定")
+}
+
+/// Tell the person only when more things wait than the last number seen, and VBear is not the window in front.
+func waitingShouldNotify(previous: Int?, count: Int, appIsActive: Bool) -> Bool {
+    guard let previous = previous else { return false }
+    return count > previous && !appIsActive
+}
+
+/// What was last seen while the notification was on. A number seen with the switch off (or a read that was not whole: the page says notify false then)
+/// is not recorded, so turning the switch on, or a read that comes back whole, does not read as "something new".
+struct WaitingRecord {
+    private(set) var last: Int?
+    mutating func see(count: Int, notify: Bool, appIsActive: Bool) -> Bool {
+        guard notify else { return false }
+        let before = last
+        last = count
+        return waitingShouldNotify(previous: before, count: count, appIsActive: appIsActive)
+    }
+}
+
+/// The system's answer as one of the three words the page knows.
+func waitingAnswer(granted: Bool, failed: Bool) -> String {
+    failed ? "unavailable" : (granted ? "granted" : "denied")
+}
+
+func waitingAnswerScript(_ answer: String) -> String? {
+    guard ["granted", "denied", "unavailable"].contains(answer) else { return nil }
+    return "window.vbearNotifyAnswer && window.vbearNotifyAnswer(\"\(answer)\")"
+}
+
+/// A press on the notification brings the app forward and shows the home page; the line is fixed.
+let waitingOpenScript = "location.hash = \"#/\""
+
+/// The side effects. It is made only when the window is (never in the tests).
+final class WaitingBridge: NSObject, UNUserNotificationCenterDelegate {
+    private var record = WaitingRecord()
+    var show: (String?, String?) -> Void = { _, _ in }        // (window title, Dock badge)
+    var answer: (String) -> Void = { _ in }                    // to the page
+    var goHome: () -> Void = {}
+
+    func attach() { UNUserNotificationCenter.current().delegate = self }
+
+    func receive(count: Int, notify: Bool) {
+        show(waitingTitle(count: count), waitingBadge(count: count))
+        if record.see(count: count, notify: notify, appIsActive: NSApp.isActive) { post(count: count) }
+    }
+
+    /// The only place the system is asked for the allowance: after the person pressed the switch in the page.
+    func askForAllowance() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { granted, error in
+            DispatchQueue.main.async { self.answer(waitingAnswer(granted: granted, failed: error != nil)) }
+        }
+    }
+
+    func clear() { show("VBear", nil) }
+
+    private func post(count: Int) {
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return }
+            let words = waitingNote(count: count)
+            let content = UNMutableNotificationContent()
+            content.title = words.title
+            content.body = words.body
+            center.add(UNNotificationRequest(identifier: "vbear-waiting", content: content, trigger: nil))
+        }
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        DispatchQueue.main.async { self.goHome() }
+        completionHandler()
+    }
+}
+// ---- end of the waiting bridge ---------------------------------------------------------------------------------------
 
 func randomToken() -> String {
     var bytes = [UInt8](repeating: 0, count: 32)
@@ -173,6 +306,7 @@ func freePort() -> Int {
 final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, NSMenuItemValidation {
     var window: NSWindow!
     let folderGate = FolderPickerGate()
+    var waiting: WaitingBridge?
     var webView: WKWebView!
     var server: Process?
     var port = defaultPort
@@ -195,6 +329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         if testPort != nil { config.websiteDataStore = .nonPersistent() }
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
         config.userContentController.add(self, name: folderPickerMessage)
+        config.userContentController.add(self, name: waitingMessage)
         webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -207,6 +342,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         window.center()
         if testPort == nil { window.setFrameAutosaveName("VBearMain") }
         window.makeKeyAndOrderFront(nil)
+        startWaiting()
         showMessage("VBear 正在啟動…", detail: "第一次開啟會先整理你的技能與工作紀錄，可能需要一點時間。")
         DispatchQueue.global(qos: .userInitiated).async { self.connect() }
     }
@@ -217,6 +353,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == waitingMessage { receiveWaiting(message); return }
         guard message.name == folderPickerMessage else { return }
         let origin = message.frameInfo.securityOrigin
         switch pickerRequest(frameIsMain: message.frameInfo.isMainFrame, scheme: origin.protocol, host: origin.host,
@@ -243,6 +380,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             }
         }
     }
+
+    func startWaiting() {
+        let bridge = WaitingBridge()
+        bridge.show = { [weak self] title, badge in
+            self?.window.title = title ?? "VBear"
+            NSApp.dockTile.badgeLabel = badge
+        }
+        bridge.answer = { [weak self] word in
+            if let script = waitingAnswerScript(word) { self?.webView.evaluateJavaScript(script, completionHandler: nil) }
+        }
+        bridge.goHome = { [weak self] in
+            NSApp.activate(ignoringOtherApps: true)
+            self?.window.makeKeyAndOrderFront(nil)
+            self?.webView.evaluateJavaScript(waitingOpenScript, completionHandler: nil)
+        }
+        bridge.attach()
+        waiting = bridge
+    }
+
+    func receiveWaiting(_ message: WKScriptMessage) {
+        let origin = message.frameInfo.securityOrigin
+        switch waitingRequest(frameIsMain: message.frameInfo.isMainFrame, scheme: origin.protocol, host: origin.host,
+                              port: origin.port, serverPort: port, body: message.body) {
+        case .ignore: return
+        case .count(let n, let notify): waiting?.receive(count: n, notify: notify)
+        case .ask: waiting?.askForAllowance()
+        }
+    }
+
+    // A page that is replaced has no number any more: until the new one tells, the title and the Dock show none.
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) { waiting?.clear() }
 
     // Launch has its own detached server lifecycle. Never assign it to `server`.
     func launchBrowser() {

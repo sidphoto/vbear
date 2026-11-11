@@ -635,6 +635,47 @@ v0.21.0 (ADR 0013) changes what the page shows and nothing on the server: Python
   `tests/test_autonomy_guard.py` (15a, 15b); `tools/qa_p47.py` drives a headless Chrome over `--remote-debugging-pipe` (no TCP port) through five tasks on v0.20.0 and v0.21.0
   and compares steps, stuck steps, the characters to read and where the chat box sits on a phone (`tests/test_qa_p47.py` tests only its pure functions and an in-memory page).
 
+## Easy start 2 — `web/app.js`, `macos/VBear/main.swift`, `vbear/spend_keep.py`, `vbear/first_ceo.py` (v0.22)
+
+v0.22.0 (ADR 0014) changes what the start-up page and the home page ask and show, adds one local notification and fixes #86. There is no new route, setting key
+or kind of chat event; none of the files that start or check an AI tool changed (`docs/SECURITY-MODEL.md`, "Easy start 2 (v0.22)").
+
+- **The picker.** `viewSetup` first draws `setupPickerNode`: three cards in a fixed order (Claude Code, Codex, AGY) and a grey 「之後支援」 line for a vendor VBear cannot
+  chat with (xAI Grok); the others are in a closed 「其他 AI 工具」. The pick is `localStorage` key `vbear-setup-pick` (`SETUP_PICK_KEY`, read by `setupPickRead()`,
+  written only by `setupPickWrite()` on 「選這個」; 「換一家」 writes nothing). The picked card expands to the old tool row and `setupCheckNode`, a checklist whose
+  items carry `data-setup-check-item` and a result (通過, 沒過, 還沒做, 進行中, 讀不到). Its one button opens the confirm area (`setupCheckConfirmLines`, with the vendor's cost
+  constants `CHAT_VERIFY_COST_CLAUDE`, `CHAT_VERIFY_COST_CODEX` and `CHAT_AGY_VERIFY_COST` and `SETUP_TRY_ESTIMATE`); only 「確認，開始」 sends `POST /api/setup/tools/<id>/try
+  {"confirmed": true}` and, if this version has not passed, `POST /api/chat-support/verify {engine, version}`. The prepare page of a chat (`chatPrepState`) knows a running
+  check, polls it on the page's existing tick and opens the chat when it passes.
+- **The first CEO.** The create-CEO page sends the stored pick as `GET /api/first-ceo?tool=<id>`; `server.py` refuses a value that is not a known tool with a 400 and
+  `first_ceo.plan(..., wanted=None)` plans on that tool only: a tool that is not ready gives `can_create: false` and a reason, and nothing is swapped in. Without a pick the order of v0.21.0 is kept.
+  The explanations are in `<details data-ceo="more">`; `CEO_MODE` and the AGY "to Google" sentence stay in view. The opening choices (`ceoOpeningChoices`, `data-chat="opening-choice"`) only fill the
+  box; `ceoPlanShaped(records)` decides when the hint (`ceoChiefHint`, `data-chat="chief-hint"`) is shown, and its button calls the same `chief.open()` as the 「⋯」 item.
+- **Home, frame first.** `viewHome` draws the frame and `homeLoadingLine` (`data-home-loading`) in each block; a line `data-home="loading-note"` appears after 3 seconds and lists what is still
+  being read; after 60 seconds a block says 「讀不到…」. The logo `<img>` is retried once with `?r=1`, then replaced by the letters 「VB」 (`data-brand="text"`).
+- **The waiting model.** `homeWaitingRows()` is the one place that lists what waits for the person: the old entries and, since v0.22, the chats with a permission card (`waiting === true` in
+  `GET /api/chats`, row kind `chat_card`, `data-home-row="chat_card"`). It returns `{rows, notes, complete}`; the number is the count of rows, the page title is `VBear` or `(N) VBear`
+  (`waitingTitleText`, digits only, no number when `complete` is false). Other sources are read every 5 seconds on the home page and the chat list is reused for `WAITING_REUSE_MS` (30 seconds),
+  except on entering the home page and on a press of a row's button; the other pages' 30-second timer reads it after the cache has expired. The timer goes on while the page is hidden only when the
+  notification switch is on.
+- **The bridge to the app.** The page posts `{count, notify}` (count 0 to 999) to `window.webkit.messageHandlers.vbearWaiting`, and `{ask: true}` when the person presses the notification
+  switch; the app answers by calling `window.vbearNotifyAnswer("granted" | "denied" | "unavailable")`. `macos/VBear/main.swift` sets the Dock number and the window title from the number, asks the system once
+  (`requestAuthorization`, `.alert` only) and, when `notify` is true, the count is higher than the last one seen and the app is not in front, posts one notification with the fixed identifier
+  `vbear-waiting`, titled 「VBear」, body 「有 N 件事等你決定」. It has no `URLSession`, `URLRequest` or `Process`. The switch (`notifySettings()`) is `data-settings="notify"` / `data-setting="notify"`, stored in
+  `localStorage` key `vbear-notify` (`notifyIsOn()`: only the value `on` means on; off by default; a browser uses its own `Notification` the same way). `macos/test_waiting_bridge.sh` and `macos/smoke_test.sh` check the app side without a Mac window.
+- **Spend kept after a delete (`vbear/spend_keep.py`).** `keep(rec, per_call, kind)` writes `<state>/spend-keep/<kind>-<id>.json` (folder 0700, files 0600; kinds `meeting`, `staffing`, `chief`,
+  `memory_suggest`, `skill_suggest`) before the record is removed: `{"v": 1, "kind", "id", "deleted_at", "turns": [{"state": "done", "started_at", "ended_at", "evidence": {"cost_usd"}}]}`.
+  `with_kept(kind, kinds)` adds the files younger than two days (`KEEP`) to the kinds the day's spending sums, so the day never gets smaller; a file that is bad or unknown makes the day unknown
+  (`spend_unknown`) and spending stops. Hidden dot files are ignored; the module's own temporary files (`<name>.json.<8 letters or digits>.tmp`) are ignored and, when older than a day, pruned under the lock.
+  `chief.py`, `meetings.py`, `memory_suggest.py`, `skillbook_suggest.py` and `staffing.py` call it in their delete functions; a queued or running record cannot be deleted (409 `running`). A chat's own
+  `chat-spend/` is unchanged.
+- **Tests and the real-machine walk.** `tests/frontend/p48_setup.cjs` (16a, 16b), `p48_home.cjs` (16c, 16d), `p48_notify.cjs` (16e), `p48_chat.cjs` (16g), `p48_sweep.cjs` (the small fixes);
+  `tests/test_p48_notify_static.py` and `macos/test_waiting_bridge.sh` (16e on the sources), `tests/test_p48_spend_keep.py` with `DeletingNeverLowersTheDay` in `tests/test_autonomy_guard.py` (16f),
+  `WantedToolTests` in `tests/test_p38_first_ceo.py`. `tools/qa_p48.py` reuses `tools/qa_p47.py` (imported, not copied) and walks v0.21.0 and v0.22.0 in a headless Chrome over
+  `--remote-debugging-pipe` on port 7803: the first run, the home page's seconds of white and cold frame, the title, the notification switch, the logo, and the three tasks of v0.21.0 again. Both versions' pages
+  read `GET /api/chats`, which makes the console run the AI tools' `--version`; `tools/qa_p48.py` does not read it itself, and whether to run it on a computer with real AI tools is the coordinator's decision
+  (`tests/test_qa_p48.py` tests only its pure functions and an in-memory page).
+
 ## Front end — `web/`
 
 Plain HTML, CSS and JavaScript with no framework. The only dependency is the bundled xterm.js 5.5.0 with

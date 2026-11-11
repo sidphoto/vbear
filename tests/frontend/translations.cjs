@@ -23,12 +23,13 @@ const document = { body, createElement: t => new Node(t), createTextNode: t => O
   getElementById: id => walk(body).find(n => n.id === id), get activeElement() { return active; } };
 const calls = [], confirmations = [], answers = [];
 let postResult = () => ({});
+let getFail = null;
 let view = { entries: {}, counts: {fresh:0, stale:0, none:1, orphan:1}, job:null, engine:"claude", provider:"fake" };
 const ctx = { Node, document, console, setTimeout, clearTimeout,
-  api: {get:async url => {calls.push(["GET",url]);return structuredClone(view);},
+  api: {get:async url => {calls.push(["GET",url]); if (getFail) throw getFail; return structuredClone(view);},
     post:async (url,b) => {calls.push(["POST",url,b]); return postResult(url);}, del:async url => {calls.push(["DELETE",url]);return {};}},
   badge: label => { const n = new Node("span"); n.append(document.createTextNode(label));return n; },
-  fmtTime: x => `time:${x}`, notice: (kind,text) => {const n=new Node("p");n.append(document.createTextNode(text));return n;},
+  fmtTime: x => `time:${x}`, notice: (kind,text) => {const n=new Node("p"); for (const part of [].concat(text)) n.append(typeof part === "string" ? document.createTextNode(part) : part); return n;},
   toast: text => calls.push(["toast", text]),
   confirmInPage: async (title,text,label,opts) => {confirmations.push([title,text,label,opts]);return answers.shift() ?? true;},
   store: { _v: {}, get(k, d) { return Object.prototype.hasOwnProperty.call(this._v, k) ? this._v[k] : d; }, set(k, v) { this._v[k] = v; } },
@@ -36,6 +37,7 @@ const ctx = { Node, document, console, setTimeout, clearTimeout,
 };
 vm.createContext(ctx);
 vm.runInContext(source.slice(source.indexOf("function el("), source.indexOf("const api =")), ctx);
+vm.runInContext(source.slice(source.indexOf("const LIMIT_SETTINGS_HREF"), source.indexOf("// ---------- end of plain words")), ctx);   // plainWords, plainTechFold (P48-6)
 vm.runInContext(source.slice(source.indexOf("// ---------- skill translations"), source.indexOf("// ---------- data")), ctx);
 vm.runInContext(`const D={skills:[],categories:[]};` + source.slice(source.indexOf("function norm("), source.indexOf("// ---------- components")), ctx);
 const run = s => vm.runInContext(s, ctx);
@@ -267,6 +269,24 @@ const translated = {description_zh:"<img src=x onerror=alert(1)>中文審查",su
   view.job = { id: "j-other", status: "failed", automatic: false, done: 1, total: 1, failed: 1, error: { code: "cli_failed", message: "x" } };
   await run("refreshTranslations()");
   assert(!failure(panelS), "a failed job this card did not start is not its failure");
+
+  // P48-6: when the state cannot be read because the page lost the server, the line says it in plain words and keeps the original behind 「技術細節」
+  for (const [raw, plain] of [["Failed to fetch", "連不上 VBear 的伺服器"], ["Load failed", "連不上 VBear 的伺服器"], ["翻譯狀態未知", null], ["奇怪的新錯誤 xyz", null]]) {
+    getFail = new Error(raw);
+    await run("refreshTranslations()");
+    const lost = run("translationPanel('s', original)");
+    body.append(lost);
+    const fold = walk(lost).find((n) => n.tag === "details" && n.getAttribute("data-plain") === "tech");
+    assert(lost.textContent.includes("翻譯狀態未知"), raw);
+    if (plain) {
+      assert(lost.textContent.includes(plain) && lost.textContent.includes("等一下再重新整理"), `${raw}: ${lost.textContent}`);
+      assert(fold && fold.textContent.includes(raw), `${raw}: the original is kept whole behind the fold`);
+      assert(!lost.textContent.replace(fold.textContent, "").includes(raw), `${raw}: and not said again outside it`);
+    } else assert(!fold, `${raw}: a sentence the table does not know is shown as it is`);
+    assert(lost.textContent.includes(raw === "翻譯狀態未知" ? "翻譯狀態未知：翻譯狀態未知" : "翻譯狀態未知：") || plain, raw);
+  }
+  getFail = null;
+  await run("refreshTranslations()");
 
   console.log("ok translations: states, text safety, original toggle, search, counts, costs, consent, progress, cancellation, two-step cleanup");
 })().catch(e=>{console.error(e);process.exitCode=1;});

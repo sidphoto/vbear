@@ -40,6 +40,8 @@ VBear 不讀取、不記錄、不顯示登入過程中的代碼或金鑰。
 
 選 B：Claude Code、Codex、AGY 三個並列，用的人自己挑要準備哪幾個；不把 Claude Code 定為必要。
 
+**v0.22.0 修正（ADR 0014）：** 開始設定先選一家（Anthropic Claude、OpenAI ChatGPT、Google Gemini），選了才展開；VBear 還不能用來聊天的家標「之後支援」；其他工具收進「其他 AI 工具」，仍由用的人挑，不預選、不標建議。
+
 ## 補充：只有 Codex 或 AGY 的人（Q1-5）
 
 選 C：開始設定頁與各功能頁先標示「這個功能目前需要 Claude Code」並說明如何取得；下一個功能就做 Codex 聊天，

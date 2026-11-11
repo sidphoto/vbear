@@ -72,6 +72,23 @@ Never, whatever the person ticked in 「自己動手」:
           raise it, the person's words kept in the box (P47-4, tests/frontend/p47_chat.cjs).
      P47-6's documentation test checks that the five files exist and carry the number of their rule.
 
+  16. (P48, ADR 0014) the easy start of v0.22.0 asks, shows and tells; it decides, logs in and spends nothing on its own. Seven rules, tested where the thing is:
+     16a  the chat safety check is still asked for by a press and told with its full cost first; the confirm area is the only thing that sends it, and a
+          check that passed is not carried to another version (P48-1, tests/frontend/p48_setup.cjs).
+     16b  the picker logs nobody in and decides nothing: no card is preselected, labelled 建議 or put first; the pick is written only by 「選這個」 and 「換一家」
+          writes nothing (P48-1, tests/frontend/p48_setup.cjs).
+     16c  the home page says 載入中 while data is missing and never "nothing waits" or a number before the data is there (P48-2, tests/frontend/p48_home.cjs).
+     16d  a chat with a card that waits is a row of its own; the page title is the number only and the app is handed the count and nothing else; the chat list is read at most
+          every 30 seconds (P48-2, tests/frontend/p48_home.cjs).
+     16e  the notification is local, count-only and off by default: the Mac app opens no connection and asks the system for the allowance in one place, only the person's
+          press on the switch asks, the only new browser storage key besides the pick is ``vbear-notify`` (P48-4, tests/frontend/p48_notify.cjs,
+          macos/test_waiting_bridge.sh, tests/test_p48_notify_static.py).
+     16f  deleting a meeting, a proposal or a plan (and a chat, which kept its cost before) never lowers the day's bill: the cost stays for two days in ``spend-keep/`` and a bad file makes the day unknown
+          (P48-5, this file, ``DeletingNeverLowersTheDay``, with tests/test_p48_spend_keep.py).
+     16g  an opening choice and the chief-of-staff hint only put words in the box or ask for a preview; nothing is sent and nothing is spent by them (P48-3, tests/frontend/p48_chat.cjs).
+     P48-7's documentation test (tests/test_p48_docs.py) checks that these files exist and carry the number of their rule; the first-CEO tool pick
+     (``?tool=``, tests/test_p38_first_ceo.py ``WantedToolTests``) and the small fixes (tests/frontend/p48_sweep.cjs) are not rules but are tested beside them.
+
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
 ``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py``, ``vbear/skillbook*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
 staff, of dispatch, of groups and of memory (the suggestions, P42-4) are held to it the day they are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
@@ -2334,7 +2351,7 @@ V0200_APP_API_PREFIXES = frozenset({
     "/api/actions", "/api/agent-builder/catalog", "/api/agent-builder/intent-check?", "/api/agent-profiles",
     "/api/agent-profiles/", "/api/annotations", "/api/armory", "/api/auth", "/api/chat-support/verify", "/api/chats",
     "/api/chats/", "/api/chief", "/api/chief/", "/api/chief/preview?chat_id=", "/api/config", "/api/dispatch",
-    "/api/dispatch/", "/api/first-ceo", "/api/flows", "/api/flows/", "/api/flows/storage", "/api/folders/inspect?path=",
+    "/api/dispatch/", "/api/first-ceo", "/api/first-ceo?tool=", "/api/flows", "/api/flows/", "/api/flows/storage", "/api/folders/inspect?path=",
     "/api/governance", "/api/groups", "/api/groups/", "/api/live", "/api/meetings", "/api/meetings/", "/api/meetings/ledger",
     "/api/meetings/preview", "/api/meetings/verify", "/api/memory", "/api/memory/", "/api/memory/cards", "/api/memory/clear",
     "/api/memory/export", "/api/memory/suggest", "/api/memory/suggest/", "/api/memory/suggest/preview", "/api/my-skills",
@@ -2440,6 +2457,10 @@ class NothingNewIsAsked(unittest.TestCase):
         new_path = 'api.get("/api/spending");\nconst x = `/api/chats/${id}/summary`;\n'
         self.assertEqual(app_api_prefixes(new_path) - V0200_APP_API_PREFIXES, {"/api/spending"}, "a new path is caught; a longer one under a known prefix is the same prefix")
         self.assertEqual(app_api_prefixes('api.get("/api/chats/" + id)') - V0200_APP_API_PREFIXES, set())
+        # P48-3: the one query on a known path that ADR 0014 approves is listed; any other new query, or a new path, is still caught
+        self.assertEqual(app_api_prefixes("api.get(`/api/first-ceo?tool=${pick}`)") - V0200_APP_API_PREFIXES, set())
+        self.assertEqual(app_api_prefixes("api.get(`/api/first-ceo?name=${x}`)") - V0200_APP_API_PREFIXES, {"/api/first-ceo?name="})
+        self.assertEqual(app_api_prefixes('api.get("/api/first-ceo-other")') - V0200_APP_API_PREFIXES, {"/api/first-ceo-other"})
         route = 'if path == "/api/spending":\n    return 1\nif path.startswith("/api/chats/"):\n    return 2\n'
         self.assertEqual(server_routes(route) - V0200_SERVER_ROUTES, {"/api/spending"})
         kinds = dict(CHAT_KINDS_V0200)
@@ -2451,6 +2472,125 @@ class NothingNewIsAsked(unittest.TestCase):
         fewer = {k: dict.fromkeys(v) for k, v in kinds.items()}
         fewer["reply"] = {"text": None, "turn": None, "truncated": None, "extra": None}
         self.assertNotEqual(chat_record_shape(fewer, {}, {})["kinds"], base["kinds"], "a new field of a kind is caught")
+
+
+
+class DeletingNeverLowersTheDay(unittest.TestCase):
+    """16f: deletion cannot erase the day's bill, including future spend kinds."""
+
+    def test_16f_each_deletable_kind_keeps_its_cost(self):
+        from tests import test_p48_spend_keep as fixtures
+        case = fixtures.SpendKeepTests()
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        for mod, store in fixtures.CASES:
+            with self.subTest(kind=mod.__name__):
+                case.assert_kept(mod, store)
+        from vbear.runtime import chat_store as cs
+        chat = cs.create(case.base, 'fictional', now=case.now)
+        log = cs.ChatLog(case.base, chat['id'])
+        try:
+            log.append('turn_started', {'turn': 1, 'cap_usd': '0.1'}, now=case.now)
+            log.append('turn_ended', {'turn': 1, 'cost_usd': '0.02', 'reported': True, 'total_usd': None,
+                                    'reason': 'result', 'subtype': None, 'is_error': False}, now=case.now)
+        finally:
+            log.close()
+        before = case.runner._day()
+        cs.delete(case.base, chat['id'], now=case.now)
+        self.assertGreaterEqual(case.runner._day(), before)
+
+    def test_16f_bad_evidence_and_running_records_fail_closed(self):
+        from tests import test_p48_spend_keep as fixtures
+        for method in ('test_bad_tombstone_makes_day_unknown_and_blocks_spending',
+                       'test_queued_and_running_cannot_be_deleted'):
+            case = fixtures.SpendKeepTests()
+            case.setUp()
+            try:
+                getattr(case, method)()
+            finally:
+                case.doCleanups()
+
+    def test_16f_table_covers_every_spend_kind_with_delete(self):
+        import inspect
+        import sys
+        from tests import test_p48_spend_keep as fixtures
+        from vbear.meeting_runner import MeetingRunner
+        seen = set()
+
+        def modules(fn):
+            if inspect.ismodule(fn):
+                return {fn.__name__}
+            if inspect.ismethod(fn):
+                fn = fn.__func__
+            if not inspect.isfunction(fn) or id(fn) in seen:
+                return set()
+            seen.add(id(fn))
+            result = {fn.__module__}
+            for name in fn.__code__.co_names:
+                value = fn.__globals__.get(name)
+                if inspect.ismodule(value):
+                    result |= modules(value)
+            for cell in fn.__closure__ or ():
+                result |= modules(cell.cell_contents)
+            return result
+
+        def deletable(kinds):
+            return {name for kind in kinds for fn in kind for name in modules(fn)
+                    if hasattr(sys.modules.get(name), 'delete')}
+
+        from vbear.runtime import chat_store
+        expected = {mod.__name__ for mod, _ in fixtures.CASES} | {chat_store.__name__}
+        self.assertEqual(deletable(MeetingRunner().spend_kinds()), expected)
+        # A new paid kind with a delete must extend the behavioural table too.
+        import types
+        from unittest import mock
+        fake = types.ModuleType('fictional_paid_kind')
+        exec('def ids(): return []\ndef load(rid): return {}\ndef limit(rec, turn): return 0\ndef delete(rid): pass', fake.__dict__)
+        with mock.patch.dict(sys.modules, {fake.__name__: fake}):
+            seen.clear()
+            self.assertNotEqual(deletable(MeetingRunner().spend_kinds() + [(fake.ids, fake.load, fake.limit)]), expected)
+
+    def test_16f_catches_a_delete_that_forgets_the_cost(self):
+        from tests import test_p48_spend_keep as fixtures
+        from unittest import mock
+        case = fixtures.SpendKeepTests()
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        mod, store = fixtures.CASES[0]
+        # Replace only the retention step with the old broken implementation.
+        with mock.patch('vbear.spend_keep.keep', return_value=None):
+            with self.assertRaises(AssertionError):
+                case.assert_kept(mod, store)
+
+class Guard16FilesAreThere(unittest.TestCase):
+    """16: the seven rules of v0.22.0 are kept where the description above says, and each file carries the number of its rule (16f is in this file)."""
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def read(self, *parts):
+        return self.ROOT.joinpath(*parts).read_text(encoding="utf-8")
+
+    def test_16_the_description_names_all_seven_rules_and_their_files(self):
+        text = self.read("tests", "test_autonomy_guard.py")
+        for rule in "abcdefg":
+            self.assertIn(f"     16{rule}  ", text, rule)
+        for name in ("p48_setup.cjs", "p48_home.cjs", "p48_notify.cjs", "p48_chat.cjs", "test_waiting_bridge.sh", "test_p48_notify_static.py", "test_p48_spend_keep.py"):
+            self.assertIn(name, text, name)
+
+    def test_16_each_file_exists_and_carries_the_number_of_its_rule(self):
+        for rule, parts in (("16a", ("tests", "frontend", "p48_setup.cjs")), ("16b", ("tests", "frontend", "p48_setup.cjs")),
+                            ("16c", ("tests", "frontend", "p48_home.cjs")), ("16d", ("tests", "frontend", "p48_home.cjs")),
+                            ("16e", ("tests", "frontend", "p48_notify.cjs")), ("16e", ("tests", "test_p48_notify_static.py")),
+                            ("16g", ("tests", "frontend", "p48_chat.cjs")), ("16f", ("tests", "test_p48_spend_keep.py"))):
+            self.assertIn(rule, self.read(*parts), "/".join(parts))
+        self.assertTrue((self.ROOT / "macos" / "test_waiting_bridge.sh").is_file())
+        self.assertRegex(self.read("tests", "test_autonomy_guard.py"), r"class DeletingNeverLowersTheDay")
+        self.assertRegex(self.read("tests", "test_autonomy_guard.py"), r"def test_16f_")
+
+    def test_16e_the_bridge_test_is_in_the_release_and_the_app_source_it_checks_is_there(self):
+        self.assertTrue((self.ROOT / "macos" / "VBear" / "main.swift").is_file())
+        script = self.read("macos", "test_waiting_bridge.sh")
+        self.assertIn("main.swift", script)
 
 
 if __name__ == "__main__":

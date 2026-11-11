@@ -76,7 +76,7 @@ function previewOf(body, over = {}) {
 }
 function setServer(over = {}) {
   state = { builtin: [shop, studio], mine: [], tools: TOOLS_READY, counts: { cards: 2, skills: 1, routines: 0 }, problems: [], mine_readable: true, preview: null, previewFails: null,
-    applies: [], apply: null, undoPreview: null, undo: null, profiles: [], ...over };
+    applies: [], apply: null, undoPreview: null, undo: null, profiles: [], catalog: null, ...over };
   calls = [];
   setHandler((url, opts = {}) => {
     const p = url.split("?")[0];
@@ -92,6 +92,7 @@ function setServer(over = {}) {
     if (p === "/api/agent-profiles" && method === "GET") {
       return state.profiles === null ? jsonResponse({ error: "讀不到員工", code: "bad_request" }, false, 500) : jsonResponse({ ok: true, profiles: state.profiles });
     }
+    if (p === "/api/agent-builder/catalog" && method === "GET") return state.catalog ? jsonResponse({ ok: true, ...state.catalog }) : null;
     if (p === "/api/templates" && method === "GET") {
 
       return jsonResponse({ ok: true, builtin: state.builtin, mine: state.mine, mine_readable: state.mine_readable, problem: state.mine_readable ? null : "你存的團隊範本的檔案有問題",
@@ -190,7 +191,7 @@ test("each block has three rows with a tick box for every item, and the facts of
   assert.deepStrictEqual(["cards", "skills", "routines"].map((k) => allBy(b, "data-tpl-pick", k).length), [3, 3, 2]);
   assert.deepStrictEqual(["cards", "skills", "routines"].map((k) => allBy(block(main, "studio"), "data-tpl-pick", k).length), [2, 1, 1]);
   const t = text(b);
-  for (const s of ["客服", "商品文案", "會計", "社群媒體經理", "會計師", "建議模型 sonnet", "未指定", "回覆客人詢問", "整理昨天的花費", "每天　09:00", "交給：會計", "每週五　10:00", "交給：商品文案"]) assert(t.includes(s), s);
+  for (const s of ["客服", "商品文案", "會計", "社群媒體經理", "會計師", "建議模型 sonnet", "沒有指定職位", "回覆客人詢問", "整理昨天的花費", "每天　09:00", "交給：會計", "每週五　10:00", "交給：商品文案"]) assert(t.includes(s), s);
   assert(text(by(b, "data-tpl-text", "cards")).includes("你是客服。"));
   assert(allBy(b, "data-tpl-text", "skills").map(text).some((x) => x.includes("（貼在這裡）")), "the full text of a skill is there to open");
   assert(allBy(b, "data-tpl-pick", "cards").every((x) => x.checked === false), "nothing is ticked at first");
@@ -243,6 +244,46 @@ test("the preview posts the tick as it is, with no name and no routine owner the
   assert.strictEqual(text(by(d, "data-templates", "after")), "套用後：員工 4/500、常用做法 2/100、定時工作 1/20");
   assert.deepStrictEqual(allBy(d, "data-tpl-preview", "card").length, 2);
   assert.strictEqual(by(d, "data-tpl-to", "shop/spend").value, "card:shop/accounting");
+});
+
+// P48-6: the preview dialog (names in the .input style, 沒有指定職位, the model's own label when the catalog has one) and the page's models
+const CATALOG_WITH_LABEL = { model_options: { claude: { latest: [], listed: [{ value: "sonnet", label: "索奈（測試用名稱）" }], observed: [], problem: "" }, codex: { latest: [], listed: [], observed: [], problem: "" } } };
+const CATALOG_PLAIN = { model_options: { claude: { latest: [{ value: "sonnet", label: "sonnet" }, { value: "haiku", label: "haiku" }], listed: [], observed: [], problem: "" } } };
+test("P48-6: the preview's name box has the .input style, a card without a position says 沒有指定職位, never 未指定", async () => {
+  setServer();
+  const main = await open();
+  await tick(main, "cards", "shop", "service");
+  await tick(main, "cards", "shop", "copy");
+  await click(action(main, "preview"));
+  const d = dialog();
+  const names = allBy(d, "data-tpl-name", "shop/service").concat(allBy(d, "data-tpl-name", "shop/copy"));
+  assert.strictEqual(names.length, 2);
+  for (const input of names) assert(input.hasClass("input"), "the name box is in the .input style");
+  const t = text(by(d, "data-templates", "preview-cards"));
+  assert(t.includes("沒有指定職位"), t);
+  assert(!t.includes("未指定"), t);
+  assert(!text(main).includes("未指定"), "the page itself never says 未指定 either");
+});
+
+test("P48-6: the model is said with the label the catalog gives it, as it is when there is no label or no catalog, and the labels are only read", async () => {
+  setServer({ catalog: CATALOG_WITH_LABEL });
+  let main = await open();
+  assert(text(block(main, "shop")).includes("建議模型 索奈（測試用名稱）"), "the template's own card line");
+  assert(text(block(main, "shop")).includes("建議模型 haiku"), "a model with no label stays as it is");
+  await tick(main, "cards", "shop", "copy");
+  await click(action(main, "preview"));
+  const line = text(by(dialog(), "data-templates", "preview-cards"));
+  assert(line.includes("索奈（測試用名稱）") && !line.includes("sonnet"), line);
+  assert.deepStrictEqual(posts().map((c) => c[1]), ["/api/templates/preview"]);
+  setServer({ catalog: CATALOG_PLAIN });
+  main = await open();
+  assert(text(block(main, "shop")).includes("建議模型 sonnet"));
+  setServer({ catalog: null });                        // the catalog could not be read: the names as they are, nothing guessed
+  main = await open();
+  await tick(main, "cards", "shop", "copy");
+  await click(action(main, "preview"));
+  assert(text(by(dialog(), "data-templates", "preview-cards")).includes("sonnet"));
+  assert(text(block(main, "shop")).includes("建議模型 sonnet"));
 });
 
 test("the preview's fixed words, word for word, and the tool choice with Claude Code first", async () => {
@@ -715,9 +756,9 @@ test("source: built with el(), no innerHTML, no emoji, no outside resource, only
   assert(!/\p{Extended_Pictographic}/u.test(BLOCK));
   assert(!/api\/config|api\/settings|api\/native|api\/chats/.test(BLOCK), "never writes the configuration, starts a chat or a terminal");
   const urls = Array.from(BLOCK.matchAll(/api\.(?:post|get)\(\s*[`"]([^`"]+)/g)).map((m) => m[1]);
-  assert.deepStrictEqual(urls.sort(), ["/api/agent-profiles", "/api/templates", "/api/templates/applies/${encodeURIComponent(apply.id)}/undo", "/api/templates/applies/${encodeURIComponent(apply.id)}/undo-preview",
+  assert.deepStrictEqual(urls.sort(), ["/api/agent-builder/catalog", "/api/agent-profiles", "/api/templates", "/api/templates/applies/${encodeURIComponent(apply.id)}/undo", "/api/templates/applies/${encodeURIComponent(apply.id)}/undo-preview",
     "/api/templates/apply", "/api/templates/mine", "/api/templates/mine/${encodeURIComponent(template.id)}",
-    "/api/templates/mine/${encodeURIComponent(template.id)}/delete", "/api/templates/preview"], "the routes of the page: the list, the preview, the apply, the two of 復原這次套用, the person's own team templates, and the read of the employees (for the line about the CEO)");
+    "/api/templates/mine/${encodeURIComponent(template.id)}/delete", "/api/templates/preview"], "the routes of the page: the list, the preview, the apply, the two of 復原這次套用, the person's own team templates, the read of the employees (for the line about the CEO), and the read of the catalog (P48-6: the labels of the models, read only)");
   const strings = Array.from(BLOCK.matchAll(/"([^"\n]*[一-鿿][^"\n]*)"|`([^`\n]*[一-鿿][^`\n]*)`/g)).map((m) => m[1] || m[2]).join("\n").replace(/\$\{[^}]*\}/g, "");
   const bare = strings.replace(/團隊範本|角色範本|任務範本/g, "");
   assert(!/範本/.test(bare), "no 範本 on its own on the screen");

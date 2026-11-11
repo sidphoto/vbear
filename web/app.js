@@ -1043,6 +1043,9 @@ const PLAIN_ERRORS = [
   { key: "chat_admin_policy", re: /這台 Mac 上有管理員政策或系統設定，可能蓋過 VBear 的設定，所以不啟動聊天/,
     text: "這台電腦的 AI 工具有管理員設定，VBear 不能用它聊天。", next: "可以到「AI 工具」看看有沒有別的工具能用。" },
   { key: "orphan", re: /孤兒翻譯/, label: true, swaps: [[/孤兒翻譯/g, "找不到原技能的翻譯"]] },
+  // P48-6: the browser's own words when a request never reached the server (Chrome, WebKit in the Mac app, Firefox); the server says none of them.
+  { key: "server_lost", re: /^(?:TypeError:\s*)?(?:Failed to fetch|Load failed|NetworkError when attempting to fetch resource\.?)$/i,
+    text: "連不上 VBear 的伺服器，可能剛關掉或正在重新啟動。", next: "等一下再重新整理。" },
 ];
 // x: the original (a string, or an Error or a server answer that carries it).
 // -> { text, next, detail, known, limit }. Known: `text` is the plain words and `detail` the original, whole. Not known: `text` is the
@@ -1502,6 +1505,11 @@ async function startTranslation(id, which) {
     await refreshTranslations();
   } catch (e) { toast("無法翻譯：" + e.message); }
 }
+// The line over a card when the state of the translations could not be read: the person's words if the table knows the sentence, the original kept behind 「技術細節」.
+function translationStateNotice() {
+  const w = plainWords(T.error);
+  return w.known ? notice("warn", [`翻譯狀態未知：${w.text}${w.next}`, w.detail ? plainTechFold(w.detail) : null]) : notice("warn", "翻譯狀態未知：" + T.error);
+}
 function translationPanel(id, original) {
   const box = el("section", { class: "translation-panel", "aria-label": "技能中文化" });
   let showOriginal = false;
@@ -1520,7 +1528,7 @@ function translationPanel(id, original) {
     const originalView = el("div", { class: "translation-original" }, original);
     originalView.hidden = !!e && !showOriginal;
     setKids(box,
-      T.error ? notice("warn", "翻譯狀態未知：" + T.error) : null,
+      T.error ? translationStateNotice() : null,
       failure ? el("div", { class: "translation-failure notice warn", "data-translation": "failure" },
         el("span", null, "暫時無法翻譯，原文已保留"), " · ",
         el("button", { class: "btn small", type: "button", "data-translation-action": "retry", on: { click: () => { if (!T.error) startTranslation(id); } } }, "重試"), " · ",
@@ -2301,57 +2309,203 @@ function sectionHead(title, sub, action) {
 // routines page's own requests). The parts of the old lobby (the board, task cards, skill search, recent projects) are under 「進階」 and only in
 // the advanced mode, which decides nothing but what is shown.
 let homeTick = null;     // the refresh of the home page every 5 seconds (route() runs it); null on any other page
+// The words the progress line uses for the blocks that are still being read (the page names nothing else: it does not know more than which block waits).
+const HOME_LOADING_TEXT = "載入中…";
+const HOME_BLOCK_WORDS = { waiting: "等你決定的事", team: "你的員工", today: "今天的定時工作", first: "你的 AI 工具", advanced: "進階的區塊" };
+const HOME_SLOW_MS = 3000;          // a block still being read after this long: the progress line says which ones
+const HOME_GIVE_UP_MS = 60000;      // a block still not read after this long says it could not read it (the answer is drawn if it comes later)
+const HOME_SLOW_NOTE = "第一次打開 VBear 要先叫醒背景程式，通常不到半分鐘。";
+// A timer that looks at the clock: one that fires early (a stubbed timer) does nothing, and one that fires late (a background tab) still counts.
+function homeLater(ms, fn) {
+  const t0 = Date.now();
+  setTimeout(() => { if (Date.now() - t0 >= ms) fn(); }, ms);
+}
+function homeLoadingLine(key, words) { return el("p", { class: "small muted home-loading", "data-home-loading": key }, words || HOME_LOADING_TEXT); }
+// The frame of a block whose data is not in yet: its title (so the page does not jump) and one line, never a result.
+function homeBlockLoading(key, title) {
+  return el("section", { class: "section home-block", "data-home": key }, sectionHead(title, null), homeLoadingLine(key));
+}
+
+// The page draws its frame as soon as the config is in (it decides whether the person is sent to the start-up page), then asks for everything at
+// once; each block draws itself when its own requests are back. Nothing is drawn as a result before its data is in: a block that is still being read
+// says 載入中, never "nothing waits" or a zero; after 3 seconds a line names the blocks still being read; a block whose request is not back after
+// 60 seconds says it could not read (and is drawn again if the answer comes later). The promise settles when every block is drawn.
 async function viewHome() {
   const token = seq;
-  // /api/flows reads live state from the cache /api/live fills, so live goes first.
-  const [, , tasksRes, profilesRes, catalogRes, configRes, chatsRes, routinesRes, waitingRes, ledgerRes] = await Promise.all([loadStatic(), loadLive().then(() => loadFlows()),
-    api.get("/api/tasks").catch(() => null), api.get("/api/agent-profiles").catch(() => null),
-    api.get("/api/agent-builder/catalog").catch(() => null), api.get("/api/config").catch(() => null),
-    api.get("/api/chats").catch(() => null), api.get("/api/routines").catch(() => null), api.get("/api/waiting").catch(() => null),
-    api.get("/api/meetings/ledger").catch(() => null), loadMeetings(), loadStaffingList(), loadDispatchList(), loadGroupList()]);
-  const setup = setupGateWanted(configRes) ? await setupGate(configRes) : setupGateQuiet(configRes);
-  if (token !== seq) return;
-  if (setup.redirect) { location.hash = welcomeWanted(configRes) ? "#/welcome" : "#/setup"; return; }
+  const configRes = await api.get("/api/config").catch(() => null);
+  if (token !== seq || authLostShown) return;           // the page that says to open VBear from its own window is up: nothing is drawn over it
   const conf = configRes && configRes.config && typeof configRes.config === "object" ? configRes.config : null;
   const advanced = conf && typeof conf.advanced_mode === "boolean" ? conf.advanced_mode : navAdvanced;   // a display only: which blocks are drawn
-  const profiles = profilesRes && Array.isArray(profilesRes.profiles) ? profilesRes.profiles.filter((p) => p && typeof p === "object" && typeof p.id === "string") : null;
-  const toolsRes = profiles && !profiles.length ? await api.get("/api/setup/tools").catch(() => null) : null;
-  if (token !== seq) return;
-  noteTasks(tasksRes && tasksRes.tasks);
   const state = {
-    token, profiles, conf, catalog: catalogRes && catalogRes.ok ? catalogRes : null, chats: chatsRes, routines: routinesRes,
-    lamp: ledgerRes && typeof ledgerRes.lamp === "string" ? ledgerRes.lamp : "", waitingList: waitingRes && Array.isArray(waitingRes.waiting) ? waitingRes.waiting : null,
-    shown: "", now: () => new Date(),
+    token, profiles: null, conf, catalog: null, chats: null, routines: null, tools: null,
+    lamp: "", waitingList: null, shown: "", now: () => new Date(),
   };
-  const board = boardGroups(D.live, D.flows, D.meetings, D.staffing, D.dispatch, D.groups);
-  boardShownKey = boardKey(board, boardKeyContext());
-  const waiting = homeWaiting(state, board);
-  const advancedPart = advanced ? homeAdvanced({ tasksRes, profilesRes, catalogRes, configRes, board }) : null;
+  const back = new Set();            // the requests that are back (a failed one is back, with nothing)
+  const gaveUp = new Set();          // the blocks that waited 60 seconds
+  const painted = {};                // what each place shows now: it is drawn again only when this changes
+  let slow = false;                  // 3 seconds have passed
+  let setup = { redirect: false, notice: false };
+  let advancedPart = null;
+  let staticError = null;            // the index of skills could not be read (a failed read says so; it does not blank the page)
+  let bodyKind = "";
+  let finish;
+  const finished = new Promise((r) => { finish = r; });
+
+  // ---- the frame ----
+  const noticesHost = el("div", { "data-home": "notices" });
+  const noteHost = el("div", { "data-home": "note-host" });
+  const bodyHost = el("div", { "data-home": "body" });
+  const teamHost = el("div"), todayHost = el("div"), askHost = el("div"), firstHost = el("div"), advancedHost = el("div");
+  const waiting = homeWaiting(state);
   const main = claim(token);
-  let body;
-  if (profiles === null) {
-    body = [el("section", { class: "section", "data-home": "team" }, sectionHead(WORDS.employeeList.use, null),
-      notice("warn", "讀不到員工的資料，所以先不顯示。重新整理看看；還是不行，請到「設定」看一下 VBear 的狀態。")), homeToday(state)];
-  } else if (!profiles.length) body = [homeFirstSteps(toolsRes, chatsRes)];
-  else body = [homeTeam(state), homeToday(state), homeAsk(state)];
-  setKids(main,
-    el("h1", null, WORDS.home.use),
-    el("p", { class: "lede" }, "這裡看有什麼等你決定、你的員工，和今天要做的事。"),
-    corruptNotice(),
-    staleNotice(),
-    herdrMigrationNotice(),
-    setup.notice ? setupUpgradeNotice() : null,
-    runtimeNotice(),
-    waiting.node,
-    body,
-    advancedPart ? advancedPart.node : null);
-  homeTick = async () => {
+  const head = [el("h1", null, WORDS.home.use), el("p", { class: "lede" }, "這裡看有什麼等你決定、你的員工，和今天要做的事。")];
+  const drawFrame = () => setKids(main, ...head, noticesHost, waiting.node, bodyHost, noteHost, advancedHost);
+  // A person who has not finished the start-up may be sent there: until the server has settled that, only the title and the line saying what is being waited for are
+  // drawn (the blocks of the home page are not shown to someone who is about to be sent away).
+  const gating = setupGateWanted(configRes);
+  if (gating) setKids(main, head[0], homeLoadingLine("setup", "正在確認開始設定…")); else drawFrame();
+
+  // what each block needs before it can say anything; a block that waited 60 seconds is read with what there is
+  const NEED = {
+    notices: ["static", "live"],
+    waiting: ["live", "meetings", "staffing", "dispatch", "groups", "waiting", "ledger", "chats"],
+    team: ["profiles"],
+    today: ["routines", "chats", "profiles"],
+    ask: ["profiles", "chats"],
+    first: ["profiles", "tools", "chats"],
+    advanced: ["static", "tasks", "profiles", "catalog", "live", "meetings", "staffing", "dispatch", "groups"],
+  };
+  const ready = (name) => gaveUp.has(name) || NEED[name].every((k) => back.has(k));
+  const paint = (name, key, draw) => { if (painted[name] === key) return; painted[name] = key; draw(); };
+
+  const drawNotices = () => {
+    const o = D.overview, h = D.live && D.live.runtime;
+    paint("notices", JSON.stringify([o ? [o.stale, o.generated_at, o.config_corrupt, o.herdr_migration_notice] : null, h ? [h.available, h.problems] : null, setup.notice, staticError && staticError.message]), () => {
+      setKids(noticesHost, staticError ? notice("bad", "載入失敗：" + staticError.message) : null, corruptNotice(), staleNotice(), herdrMigrationNotice(),
+        setup.notice ? setupUpgradeNotice() : null, runtimeNotice());
+    });
+  };
+  const drawWaiting = () => {
+    if (!ready("waiting")) return;
+    const m = waitingFold({ g: boardGroups(D.live, D.flows, D.meetings, D.staffing, D.dispatch, D.groups), list: state.waitingList, lamp: state.lamp, chats: state.chats });
+    if (waiting.paint(m)) waitingPublish(m);         // drawn again only when it changed, and then the number is worked out again
+  };
+  const drawBody = () => {
+    const known = ready("team");
+    const kind = !known ? "loading" : state.profiles === null ? "unread" : state.profiles.length ? "team" : "first";
+    if (kind !== bodyKind) {
+      bodyKind = kind;
+      for (const k of ["team", "today", "ask", "first"]) delete painted[k];
+      setKids(bodyHost, kind === "first" ? [firstHost] : kind === "team" ? [teamHost, todayHost, askHost] : [teamHost, todayHost]);
+      if (kind === "first" && !back.has("tools")) {        // the three steps need the tools: asked only now, when there is nobody yet
+        api.get("/api/setup/tools").catch(() => null).then((r) => land("tools", () => { state.tools = r; }));
+      }
+    }
+    if (kind === "first") {
+      const loading = !ready("first");
+      paint("first", String(loading) + String(back.has("tools")) + String(back.has("chats")), () => setKids(firstHost, homeFirstSteps(state.tools, state.chats, loading)));
+      return;
+    }
+    if (kind === "loading") {
+      paint("team", "loading", () => setKids(teamHost, homeBlockLoading("team", WORDS.employeeList.use)));
+    } else if (kind === "unread") {
+      paint("team", "unread", () => setKids(teamHost, el("section", { class: "section", "data-home": "team" }, sectionHead(WORDS.employeeList.use, null),
+        notice("warn", "讀不到員工的資料，所以先不顯示。重新整理看看；還是不行，請到「設定」看一下 VBear 的狀態。"))));
+    } else {
+      paint("team", "team" + back.has("chats"), () => setKids(teamHost, homeTeam(state)));
+    }
+    paint("today", ready("today") ? "in" : "loading", () => setKids(todayHost, ready("today") ? homeToday(state) : homeBlockLoading("today", "今天")));
+    if (kind === "team") paint("ask", ready("ask") ? "in" : "loading", () => setKids(askHost, ready("ask") ? homeAsk(state) : homeBlockLoading("ask", "想做什麼？跟 CEO 說")));
+  };
+  const drawAdvanced = () => {
+    if (!advanced) return;
+    if (!ready("advanced")) { paint("advanced", "loading", () => setKids(advancedHost, el("section", { class: "section home-advanced", "data-home": "advanced" }, el("h2", null, "進階"), homeLoadingLine("advanced")))); return; }
+    paint("advanced", "in" + NEED.advanced.filter((k) => back.has(k)).join(), () => {
+      const board = boardGroups(D.live, D.flows, D.meetings, D.staffing, D.dispatch, D.groups);
+      boardShownKey = boardKey(board, boardKeyContext());
+      advancedPart = homeAdvanced({ tasksRes: state.tasksRes, profilesRes: state.profilesRes, catalogRes: state.catalogRes, configRes, board });
+      setKids(advancedHost, advancedPart.node);
+    });
+  };
+  // the blocks that are still being read, by their words
+  const pendingBlocks = () => {
+    const out = [];
+    if (!ready("waiting")) out.push("waiting");
+    if (bodyKind === "loading") out.push("team", "today");
+    else if (bodyKind === "first") { if (!ready("first")) out.push("first"); }
+    else if (!ready("today")) out.push("today");
+    if (advanced && !ready("advanced")) out.push("advanced");
+    return out;
+  };
+  const drawNote = () => {
+    const names = slow ? pendingBlocks().map((k) => HOME_BLOCK_WORDS[k]) : [];
+    paint("note", names.join(), () => setKids(noteHost, names.length ? el("p", { class: "small muted", "data-home": "loading-note" }, `還在讀：${names.join("、")}。${HOME_SLOW_NOTE}`) : null));
+  };
+  const update = () => {
+    if (token !== seq || authLostShown) return;
+    drawNotices(); drawWaiting(); drawBody(); drawAdvanced(); drawNote();
+    if (ready("notices") && ready("waiting") && ready("team") && (bodyKind === "first" ? ready("first") : ready("today") && ready("ask")) && (!advanced || ready("advanced"))) finish();
+  };
+  function land(key, assign) {
+    if (token !== seq || authLostShown) { finish(); return; }
+    assign();
+    back.add(key);
+    update();
+  }
+  const fetchInto = (key, path, assign) => api.get(path).catch(() => null).then((r) => land(key, () => assign(r)));
+
+  // ---- the start-up gate: only a person who has not finished the start-up is asked (the server settles it) ----
+  homeLater(HOME_SLOW_MS, () => { if (token === seq) { slow = true; update(); } });
+  setup = gating ? await setupGate(configRes) : setupGateQuiet(configRes);
+  if (token !== seq) return;
+  if (setup.redirect) { location.hash = welcomeWanted(configRes) ? "#/welcome" : "#/setup"; return; }
+  if (gating) drawFrame();
+  update();
+  homeLater(HOME_GIVE_UP_MS, () => {
     if (token !== seq) return;
-    await state.refreshWaiting();
-    if (advancedPart) await advancedPart.refresh();
+    for (const k of Object.keys(NEED)) if (!ready(k)) gaveUp.add(k);
+    update();
+  });
+
+  state.refreshWaiting = async (force) => {       // `force`: the person's own press (a row's button) asks for the chats again at once
+    if (state.token !== seq) return;
+    const m = await waitingModel({ store: true, force: !!force });
+    if (state.token !== seq) return;
+    state.waitingList = m.list; state.lamp = m.lamp; state.chats = m.chats || state.chats;
+    waiting.paint(m);
+  };
+
+  // ---- everything at once; each block draws itself when its own requests are back ----
+  loadStatic().catch((e) => { staticError = e; }).then(() => land("static", () => {}));
+  // /api/flows reads live state from the cache /api/live fills, so live goes first.
+  loadLive().then(() => loadFlows()).then(() => land("live", () => {}));
+  loadMeetings().then(() => land("meetings", () => {}));
+  loadStaffingList().then(() => land("staffing", () => {}));
+  loadDispatchList().then(() => land("dispatch", () => {}));
+  loadGroupList().then(() => land("groups", () => {}));
+  fetchInto("tasks", "/api/tasks", (r) => { state.tasksRes = r; noteTasks(r && r.tasks); });
+  fetchInto("profiles", "/api/agent-profiles", (r) => {
+    state.profilesRes = r;
+    state.profiles = r && Array.isArray(r.profiles) ? r.profiles.filter((p) => p && typeof p === "object" && typeof p.id === "string") : null;
+  });
+  fetchInto("catalog", "/api/agent-builder/catalog", (r) => { state.catalogRes = r; state.catalog = r && r.ok ? r : null; });
+  fetchInto("chats", "/api/chats", (r) => { state.chats = r; waitingChatsNote(r); });
+  fetchInto("routines", "/api/routines", (r) => { state.routines = r; });
+  fetchInto("waiting", "/api/waiting", (r) => { state.waitingList = r && Array.isArray(r.waiting) ? r.waiting : null; });
+  fetchInto("ledger", "/api/meetings/ledger", (r) => { state.lamp = r && typeof r.lamp === "string" ? r.lamp : ""; });
+
+  let ticking = false;
+  homeTick = async () => {
+    if (token !== seq || ticking || !ready("waiting")) return;     // the first read is still on: it is the one that draws
+    ticking = true;
+    try {
+      await state.refreshWaiting();
+      if (advancedPart) await advancedPart.refresh();
+    } finally { ticking = false; }
   };
   activeViewCleanup = () => { homeTick = null; };
   // no auto-focus on the boxes: it would scroll the page past what waits for the person
+  await finished;
 }
 
 // The old lobby, kept whole for the advanced mode: the first game, the board of flows, task cards, the skill search, recent projects, skills with problems.
@@ -2531,7 +2685,7 @@ async function openChatWith(profileId, opts = {}) {
 // The rows of what waits for the person, from what the old lobby's 「輪到你」 and the line over every page listed (the same in the normal and
 // in the advanced mode). `g`: boardGroups(...); `list`: GET /api/waiting's rows (null = not read); `lamp`: today's lamp ("red" = at the limit).
 // -> { rows: [{ kind, key, text, href?, act? }], notes: [what could not be read], complete }. A paused dispatch or group that has its countdown row is not said twice.
-function homeWaitingRows(g, list, lamp) {
+function homeWaitingRows(g, list, lamp, chats) {
   const rows = [];
   const notes = [];
   const resumeDispatch = new Set();
@@ -2574,8 +2728,22 @@ function homeWaitingRows(g, list, lamp) {
     if (r.waiting === true) rows.push({ kind: "group_waiting", key: "gw:" + r.id, text: `群組「${r.name || "（沒有名稱）"}」有員工想動手，等你按「允許這一次」或「拒絕」`, href: `#/chat/group/${encodeURIComponent(r.id)}` });
     else if (!resumeGroup.has(r.id)) rows.push({ kind: "group_paused", key: "gq:" + r.id, text: `群組「${r.name || "（沒有名稱）"}」暫停了，等你按「繼續」或「不用了」`, href: `#/chat/group/${encodeURIComponent(r.id)}` });
   }
+  // P48-2: the cards of every chat (a chat with one employee, also one a routine opened): `chats` is GET /api/chats' body, null = not read, undefined = not asked
+  if (chats === null) notes.push("讀不到聊天裡有沒有在等你的卡片");
+  else if (chats && typeof chats === "object") {
+    const cards = Array.isArray(chats.cards) ? chats.cards : [];
+    for (const c of Array.isArray(chats.chats) ? chats.chats : []) {
+      if (!c || typeof c !== "object" || c.waiting !== true || typeof c.id !== "string" || !c.id) continue;
+      const card = cards.find((x) => x && x.id === c.profile_id);
+      const who = card && typeof card.name === "string" && card.name ? card.name : "有員工";
+      rows.push({ kind: "chat_card", key: "cc:" + c.id, text: `${who}想動手，等你按「允許這一次」或「拒絕」`, href: `#/chat/${encodeURIComponent(c.id)}` });
+    }
+  }
   if (lamp === "red") rows.push({ kind: "limit", key: "limit", text: "今天的用量到上限了，員工明天 0 點前不會再回話。", href: LIMIT_SETTINGS_HREF, link: "到設定看" });
-  return { rows, notes, complete: !notes.length && g.runtimeAvailable === true };
+  const complete = !notes.length && g.runtimeAvailable === true;
+  // only the oldest chats are out of sight when the list is cut: said, but the number stays (a chat with a card that waits is a recent one)
+  if (chats && typeof chats === "object" && Number(chats.more) > 0) notes.push("對話很多，只看了最近的；比較舊的對話裡有沒有在等你的卡片，這裡看不到。");
+  return { rows, notes, complete };
 }
 
 const HOME_ROW_BUTTONS = {
@@ -2592,9 +2760,10 @@ function homeRowNode(row, act) {
   if (row.kind === "limit") node.setAttribute("data-home", "limit-reached");
   return node;
 }
-// The block. `state.refreshWaiting()` reads again (the same GETs as the page) and repaints the list only when it changed.
-function homeWaiting(state, board) {
-  const list = el("div", { class: "home-rows", "data-home": "waiting-list" });
+// The block: it starts as a frame that says 載入中 and is drawn by `paint(model)` (the model of waitingFold) once its data is in. `paint` returns
+// whether something changed. `state.refreshWaiting()` (set by the page) reads again, with the same GETs as the page.
+function homeWaiting(state) {
+  const list = el("div", { class: "home-rows", "data-home": "waiting-list" }, homeLoadingLine("waiting"));
   const note = (m) => notice("warn", m);
   const requests = {
     "wait-start": (id) => api.post(`/api/routines/waiting/${encodeURIComponent(id)}`, { action: "start" }),
@@ -2605,30 +2774,20 @@ function homeWaiting(state, board) {
   const done = { "wait-start": "已開始", "wait-skip": "這次跳過了", "missed-run": "已開始補做", "missed-dismiss": "不補做了" };
   const act = async (key, id) => {
     try { await requests[key](id); toast(done[key]); } catch (e) { toast(e.message); }
-    await state.refreshWaiting();
+    await state.refreshWaiting(true);
     refreshWaitingBar();
   };
-  const paint = (g) => {
-    const m = homeWaitingRows(g, state.waitingList, state.lamp);
+  const paint = (m) => {
     const key = JSON.stringify([m.rows, m.notes, m.complete]);
-    if (key === state.shown) return;
+    if (key === state.shown) return false;
     state.shown = key;
     setKids(list,
       m.notes.map(note),
       m.rows.length ? el("div", { class: "home-row-list" }, m.rows.map((r) => homeRowNode(r, act)))
         : el("p", { class: "small muted", "data-home": "waiting-none" }, m.complete ? "現在沒有要你決定的事。" : "目前讀得到的資料裡，沒有要你決定的事。"));
+    return true;
   };
-  paint(board);
-  state.refreshWaiting = async () => {
-    if (state.token !== seq) return;
-    await Promise.all([loadLive().then(() => loadFlows()), loadMeetings(), loadStaffingList(), loadDispatchList(), loadGroupList()]);
-    const [w, l] = await Promise.all([api.get("/api/waiting").catch(() => null), api.get("/api/meetings/ledger").catch(() => null)]);
-    if (state.token !== seq) return;
-    state.waitingList = w && Array.isArray(w.waiting) ? w.waiting : null;
-    state.lamp = l && typeof l.lamp === "string" ? l.lamp : "";
-    paint(boardGroups(D.live, D.flows, D.meetings, D.staffing, D.dispatch, D.groups));
-  };
-  return { node: el("section", { class: "section home-block", "data-home": "waiting" }, sectionHead(WORDS.waiting.use, null), list) };
+  return { node: el("section", { class: "section home-block", "data-home": "waiting" }, sectionHead(WORDS.waiting.use, null), list), paint };
 }
 
 // ---- 我的員工 ----
@@ -2775,13 +2934,15 @@ function homeToolStep(toolReady, rows, glance) {
   if (glance.some((g) => g.state === "unverified")) return { done: false, line: "AI 工具已就緒，第一次聊天前要先做一次安全檢查（建立 CEO 後會帶你做）。" };
   return { done: false, line: toolReady ? "AI 工具已就緒，但聊天現在還不能用，到「看 AI 工具」看原因。" : unread };
 }
-function homeFirstSteps(toolsRes, chatsRes) {
+function homeFirstSteps(toolsRes, chatsRes, loading) {
   const rows = toolsRes && typeof toolsRes === "object" && Array.isArray(toolsRes.tools) ? toolsRes.tools : null;
   const ready = !!rows && rows.some((t) => t && ["claude", "codex", "agy"].includes(t.id) && t.ready === true);
-  const toolStep = homeToolStep(ready, rows, chatSupportGlance(chatsRes));
+  // while the tools and the chat support are still being read, step 1 says so: it draws no conclusion before the answer
+  const toolStep = loading ? { done: false, line: null } : homeToolStep(ready, rows, chatSupportGlance(chatsRes));
   const step = (n, cls, title, line, action) => el("li", { class: `home-step ${cls}`, "data-home-step": String(n) },
     el("span", { class: "home-step-mark", "aria-hidden": "true" }, cls.includes("done") ? "✓" : String(n)),
-    el("div", { class: "home-step-body" }, el("strong", null, title), el("span", { class: "small muted" }, line)), action || null);
+    el("div", { class: "home-step-body" }, el("strong", null, title),
+      line === null ? el("span", { class: "small muted", "data-home-loading": "first-steps" }, "正在看你的 AI 工具…") : el("span", { class: "small muted" }, line)), action || null);
   return el("section", { class: "section home-block", "data-home": "first-steps" },
     el("h2", null, "歡迎！三步就能開始。"),
     el("ol", { class: "home-steps" },
@@ -2873,6 +3034,84 @@ async function viewWork() {
       el("li", { class: "work-link" }, el("a", { href: `#/${route}`, class: "work-link-name", "data-work": route }, name), el("span", { class: "small muted" }, line)))));
 }
 // ---------- end of plain pages ----------------------------------------------------------------------------------------------
+
+// ---------- waiting model (v0.22, P48-2) ----------------------------------------------------------------------------------------
+// What waits for the person, worked out once for every place that shows it: the home page's list, the line over the other pages, the title of the
+// page (and of the app's window and Dock). It is made only from GETs. The title is a number and nothing else: `VBear`, or `(N) VBear` when N things wait
+// and everything was read; no name, no words of a chat. The app is handed the same number (and a `notify` flag, see waitingNotifyWanted).
+
+// A listener is called with { count, complete } each time the number is worked out: `count` is the number of rows, `complete` says every read worked
+// (the title and the Dock show no number when it is false). P48-4 registers its own through onWaitingCount.
+let waitingListeners = [];
+function onWaitingCount(fn) { if (typeof fn === "function") waitingListeners.push(fn); }
+// Whether the app may show a Mac notification: the person's own switch decides it (P48-4); until then it is false, so the app only gets the number.
+function waitingNotifyWanted() { return notifyIsOn() && !!waitingLast && waitingLast.m.complete === true; }   // P48-4: the person's switch, and a read that was whole
+
+function waitingTitleText(count) { return count > 0 ? `(${Math.min(count, 999)}) VBear` : "VBear"; }
+
+let waitingSentToApp = null;       // "count:notify" of the last message: the same pair is not sent twice
+function waitingToApp(count) {
+  const bridge = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.vbearWaiting;
+  if (!bridge || typeof bridge.postMessage !== "function") return;
+  const notify = waitingNotifyWanted();
+  if (`${count}:${notify}` === waitingSentToApp) return;
+  waitingSentToApp = `${count}:${notify}`;
+  try { window.webkit.messageHandlers.vbearWaiting.postMessage({ count: count, notify: notify }); } catch (_) { /* the app is not listening: the title still has the number */ }
+}
+// The number goes to the title and the app, and to the listeners. A read that was not whole shows no number: it is not guessed.
+let waitingLast = null;            // { m, at }: the last model that was worked out
+const WAITING_REUSE_MS = 30000;
+// GET /api/chats makes the server run the AI tools' --version (about 2 seconds, no cache of its own), so it is read at most every 30 seconds by the
+// waiting model (the page's other reads stay at their own pace); a read the person's own press asks for (`force`) and the home page's first read go at once.
+let waitingChatsRead = null;       // { at, body }: the last whole answer
+function waitingChatsNote(body) { if (body && typeof body === "object") waitingChatsRead = { at: Date.now(), body }; }
+function waitingPublish(m) {
+  waitingLast = { m, at: Date.now() };
+  const count = m.complete ? Math.min(m.rows.length, 999) : 0;
+  document.title = waitingTitleText(count);
+  waitingToApp(count);
+  for (const fn of waitingListeners.slice()) {
+    try { fn({ count: m.rows.length, complete: m.complete }); } catch (_) { /* one listener does not stop the others */ }
+  }
+}
+
+// -> { rows, notes, complete, count, list, lamp, chats }. `inputs`: g = boardGroups(...), list = GET /api/waiting's rows (null = not read), lamp, chats = GET /api/chats' body (null = not read).
+function waitingFold(inputs) {
+  const m = homeWaitingRows(inputs.g, inputs.list, inputs.lamp, inputs.chats);
+  return { rows: m.rows, notes: m.notes, complete: m.complete, count: m.rows.length, list: inputs.list, lamp: inputs.lamp, chats: inputs.chats };
+}
+// The reads. `store`: the home page keeps what it reads in D (its board reads it again), any other page reads without touching D (other pages compare D before and after).
+function waitingSources(store) {
+  const keep = (key, v) => { if (store) D[key] = v; return v; };
+  const own = (key, path, failed) => () => api.get(path).catch((e) => failed(e.message)).then((v) => keep(key, v));
+  return {
+    live: store ? loadLive : own("live", "/api/live", (m) => ({ error: m, sessions: [], projects: [], attention: [], usage: { sessions: [] }, runtime: { available: false, problems: [m] } })),
+    flows: store ? loadFlows : own("flows", "/api/flows", (m) => ({ error: m, flows: [] })),
+    meetings: store ? loadMeetings : own("meetings", "/api/meetings", (m) => ({ error: m, meetings: [] })),
+    staffing: store ? loadStaffingList : own("staffing", "/api/staffing", (m) => ({ error: m, staffing: [] })),
+    dispatch: store ? loadDispatchList : own("dispatch", "/api/dispatch", (m) => ({ error: m, dispatch: [] })),
+    groups: store ? loadGroupList : own("groups", "/api/groups", (m) => ({ error: m, groups: [] })),
+    list: () => api.get("/api/waiting").then((w) => (w && Array.isArray(w.waiting) ? w.waiting : null)).catch(() => null),
+    ledger: () => api.get("/api/meetings/ledger").catch(() => null),
+    chats: (force) => {
+      if (!force && waitingChatsRead && Date.now() - waitingChatsRead.at < WAITING_REUSE_MS) return Promise.resolve(waitingChatsRead.body);
+      return api.get("/api/chats").catch(() => null).then((b) => { waitingChatsNote(b); return b; });
+    },
+  };
+}
+// Reads everything that can wait (GETs only), works the rows out, publishes the number. -> the model of waitingFold. `opts.force`: read /api/chats now.
+async function waitingModel(opts = {}) {
+  const src = waitingSources(!!opts.store);
+  // /api/flows reads live state from the cache /api/live fills, so live goes first
+  const liveAndFlows = src.live().then(async (live) => [live, await src.flows()]);
+  const [[live, flows], meetings, staffing, dispatch, groups, list, ledger, chats] =
+    await Promise.all([liveAndFlows, src.meetings(), src.staffing(), src.dispatch(), src.groups(), src.list(), src.ledger(), src.chats(!!opts.force)]);
+  const lamp = ledger && typeof ledger.lamp === "string" ? ledger.lamp : "";
+  const m = waitingFold({ g: boardGroups(live, flows, meetings, staffing, dispatch, groups), list, lamp, chats });
+  waitingPublish(m);
+  return m;
+}
+// ---------- end of waiting model --------------------------------------------------------------------------------------------------
 
 // ---------- the quest board (design lobby v1.2) ------------------------------------------------------------
 // The home page's first block. Every card is data VBear already has; nothing here invents progress. The grouping
@@ -7458,6 +7697,131 @@ function dailyLimitEditor({ current, onSaved }) {
     el("p", { class: "small muted" }, "方案用量上限是 AI 工具自己的限制；調高這裡的花費上限，不會改變方案的用量限制。"));
 }
 
+// ---------- notifications (v0.22, P48-4) ----------------------------------------------------------------------------------------
+// A Mac notification when more things wait for the person: off unless the person turns the switch on (the key `vbear-notify` is "on"). The system is asked
+// for the allowance only at the press on that switch, never when a page loads. The words are fixed: the title VBear and "有 N 件事等你決定", only the
+// number; no name, no words of a chat. In the app, Swift makes the notification from the number (the page only says count and notify); in a browser the
+// page makes it with the browser's own Notification. Nothing goes over the network and nothing is written to the server.
+const NOTIFY_KEY = "vbear-notify";
+function notifyIsOn() { try { return localStorage.getItem(NOTIFY_KEY) === "on"; } catch (_) { return false; } }
+function notifyWrite(on) { try { if (on) localStorage.setItem(NOTIFY_KEY, "on"); else localStorage.removeItem(NOTIFY_KEY); } catch (_) { /* the switch then just stays as it was */ } }
+function notifyBridge() {
+  const b = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.vbearWaiting;
+  return b && typeof b.postMessage === "function" ? b : null;
+}
+
+// The app's answer to {ask: true}: one of three fixed words, taken only while a question is open.
+let notifyPending = null;
+window.vbearNotifyAnswer = function (word) {
+  const pending = notifyPending;
+  if (!pending || (word !== "granted" && word !== "denied" && word !== "unavailable")) return;
+  notifyPending = null;
+  pending(word);
+};
+
+// Only the switch's handler calls this. -> "granted" | "denied" | "unavailable"
+function notifyAsk() {
+  const bridge = notifyBridge();
+  if (bridge) {
+    return new Promise((resolve) => {
+      const mine = (word) => { clearTimeout(timer); resolve(word); };
+      const timer = setTimeout(() => { if (notifyPending === mine) { notifyPending = null; resolve("unavailable"); } }, 120000);   // no answer is not an allowance
+      notifyPending = mine;
+      try { bridge.postMessage({ ask: true }); } catch (_) { notifyPending = null; mine("unavailable"); }
+    });
+  }
+  if (typeof Notification !== "function") return Promise.resolve("unavailable");
+  if (Notification.permission === "granted") return Promise.resolve("granted");
+  if (Notification.permission === "denied") return Promise.resolve("denied");
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (word) => { if (!done) { done = true; resolve(word === "granted" ? "granted" : "denied"); } };
+    try {
+      const r = Notification.requestPermission(finish);
+      if (r && typeof r.then === "function") r.then(finish, () => finish("denied"));
+    } catch (_) { done = true; resolve("unavailable"); }
+  });
+}
+
+// What the page last counted (a whole read), for "more than before". The first number is only remembered; fewer only moves it.
+let notifyLastCount = null;
+function notifyPageAway() { return !!document.hidden || (typeof document.hasFocus === "function" && !document.hasFocus()); }
+function notifyShow(count) {
+  if (typeof Notification !== "function" || Notification.permission !== "granted") return;
+  try {
+    const note = new Notification("VBear", { body: `有 ${Math.min(count, 999)} 件事等你決定`, tag: "vbear-waiting" });
+    note.onclick = () => {
+      try { if (typeof window.focus === "function") window.focus(); } catch (_) { /* optional */ }
+      location.hash = "#/";
+      try { note.close(); } catch (_) { /* optional */ }
+    };
+  } catch (_) { /* no notification: the title and the list still have the number */ }
+}
+function notifyOnCount(info) {
+  if (!info || info.complete !== true) return;           // a read that was not whole may be short: it neither tells nor moves the record
+  const before = notifyLastCount;
+  notifyLastCount = info.count;
+  if (before === null || info.count <= before) return;
+  if (!notifyIsOn() || notifyBridge() || !notifyPageAway()) return;   // in the app, Swift tells
+  notifyShow(info.count);
+}
+onWaitingCount(notifyOnCount);
+
+// The 30-second timer goes on while the page is hidden when the switch is on (the other pages read through refreshWaitingBar; the home page's own
+// 5-second timer stops when it is hidden, so it is read here). Same GETs as always, nothing new.
+function notifyReadHome() {
+  if (document.hidden && notifyIsOn() && navTop === "home") waitingModel({ force: true }).catch(() => {});
+}
+// The app is told the number again with the new switch, so its own record follows the switch.
+function notifyTell() {
+  waitingSentToApp = null;
+  waitingToApp(waitingLast && waitingLast.m.complete ? Math.min(waitingLast.m.rows.length, 999) : 0);
+}
+
+const NOTIFY_WORDS = {
+  askingApp: "等 Mac 回答…",
+  askingBrowser: "等瀏覽器回答…",
+  onApp: "已打開。有事等你決定、而且 VBear 不在最前面時，Mac 會跳出通知。",
+  onBrowser: "已打開。有事等你決定、而且這個頁面不在最前面時，瀏覽器會跳出通知。",
+  off: "已關閉。",
+  deniedApp: "Mac 沒有允許 VBear 發通知，可以到「系統設定 → 通知」打開。開關保持關閉。",
+  unavailableApp: "Mac 沒有允許 VBear 發通知（拿不到通知的權限；這個 VBear 沒有 Apple 的簽章，Mac 可能不讓它發）。開關保持關閉。",
+  deniedBrowser: "瀏覽器沒有允許通知，可以在瀏覽器的網站設定打開。開關保持關閉。",
+  unavailableBrowser: "這個瀏覽器不能發通知。開關保持關閉。",
+  revokedBrowser: "瀏覽器現在沒有允許這個網站發通知，所以不會跳出；可以在瀏覽器的網站設定打開。",
+};
+function notifySettings() {
+  const app = !!notifyBridge();
+  const result = el("p", { class: "small", "data-settings": "notify-result", "aria-live": "polite" });
+  const say = (words) => { result.textContent = words; };
+  const input = el("input", { type: "checkbox", checked: notifyIsOn(), "data-setting": "notify" });
+  if (notifyIsOn() && !app && typeof Notification === "function" && Notification.permission === "denied") say(NOTIFY_WORDS.revokedBrowser);
+  input.addEventListener("change", async () => {
+    if (!input.checked) { notifyWrite(false); say(NOTIFY_WORDS.off); notifyTell(); return; }
+    input.disabled = true;
+    say(app ? NOTIFY_WORDS.askingApp : NOTIFY_WORDS.askingBrowser);
+    const word = await notifyAsk();
+    input.disabled = false;
+    if (word === "granted") {
+      notifyWrite(true);
+      input.checked = true;
+      say(app ? NOTIFY_WORDS.onApp : NOTIFY_WORDS.onBrowser);
+      notifyTell();
+      return;
+    }
+    input.checked = false;                              // not allowed: the switch is off again and says so; it does not ask again by itself
+    say(word === "denied" ? (app ? NOTIFY_WORDS.deniedApp : NOTIFY_WORDS.deniedBrowser) : (app ? NOTIFY_WORDS.unavailableApp : NOTIFY_WORDS.unavailableBrowser));
+  });
+  return el("div", { class: "panel pad", "data-settings": "notify" },
+    el("h2", { style: "margin-bottom:6px" }, "通知"),
+    el("label", { class: "switch" }, input,
+      el("div", null, el("div", { class: "t" }, "有事等你決定時，用 Mac 的通知提醒我"),
+        el("div", { class: "small muted" }, "通知只在這台 Mac 上顯示，內容只有「有幾件事等你決定」，不會有員工說的話或你的對話。"))),
+    result,
+    el("p", { class: "small muted" }, "分頁標題（App 是視窗標題和 Dock 圖示）上的數字不是通知，一直開著，不受這個開關影響。"));
+}
+// ---------- end of notifications --------------------------------------------------------------------------------------------------
+
 async function viewSettings(params) {   // params: the address's ?key=value (P47-3 reads ?open=limits)
   const token = seq;
   await loadStatic();
@@ -7487,17 +7851,21 @@ async function viewSettings(params) {   // params: the address's ?key=value (P47
   const day = daily && typeof daily.daily_usd === "number" ? daily.daily_usd : null;
   let dayNow = day;
   const spent = ledger && (typeof ledger.spent_usd === "number" || typeof ledger.spent_usd === "string" && /^\d+(?:\.\d+)?$/.test(ledger.spent_usd)) && isFinite(Number(ledger.spent_usd)) ? Number(ledger.spent_usd) : null;
+  let lamp = ledger && typeof ledger.lamp === "string" ? ledger.lamp : "";
   const summary = el("summary");
   const summaryText = () => {
-    const state = spent === null ? "今天的用量：未知"
-      : dayNow === null ? "狀態：未知" : spent >= dayNow ? "今天已到上限" : "今天還可以用";
-    summary.textContent = `用量與上限：每天最多 ${dayNow === null ? "未知" : setupUsd(dayNow)}（${state}）`;
+    // the state is the server's own lamp (the one that stops a send), not a sum the page makes: a lamp it did not read is not guessed
+    const state = lamp === "red" ? "今天已到上限" : lamp === "green" || lamp === "yellow" ? "今天還可以用" : "";
+    summary.textContent = `用量與上限：每天最多 ${dayNow === null ? "未知" : setupUsd(dayNow)}${state ? `（${state}）` : ""}`;
   };
   summaryText();
   const limits = el("details", { class: "panel pad", "data-settings": "limits", open: !!params && params.open === "limits" }, summary,
     spent !== null ? el("p", { class: "small" }, `今天已花 ${usdText(spent)}。聊天、會議、分配工作、定時工作都算；Codex 和 AGY 是 VBear 的估計，不是帳單；用的是你的方案。`)
       : el("p", { class: "small muted" }, "讀不到今天的用量"),
-    dailyLimitEditor({ current: day, onSaved: (res) => { dayNow = res.daily_usd; summaryText(); } }));
+    dailyLimitEditor({ current: day, onSaved: (res) => {
+      dayNow = res.daily_usd; lamp = ""; summaryText();                      // the lamp was for the old limit: said again only when read again
+      api.get("/api/meetings/ledger").then((l) => { lamp = l && typeof l.lamp === "string" ? l.lamp : ""; summaryText(); }).catch(() => {});
+    } }));
   setKids(main,
     el("h1", null, "設定"),
     c.corrupt ? corruptNotice() || notice("bad", "設定檔（config.json）無法讀取，設定暫時無法儲存。") : null,
@@ -7517,6 +7885,7 @@ async function viewSettings(params) {   // params: the address's ?key=value (P47
             el("div", null, el("div", { class: "t" }, "外觀"),
               el("select", { on: { change: (e) => setTheme(e.target.value) } },
                 [["auto", "跟隨系統"], ["light", "淺色"], ["dark", "深色"]].map(([v, t]) => el("option", { value: v, selected: store.get("theme", "auto") === v }, t)))))),
+        notifySettings(),
         el("div", { class: "panel pad" },
           el("h2", { style: "margin-bottom:6px" }, "使用紀錄"),
           el("label", { class: "switch" },
@@ -7528,14 +7897,15 @@ async function viewSettings(params) {   // params: the address's ?key=value (P47
             el("div", null, el("div", { class: "t" }, "紀錄範圍"),
               el("select", { on: { change: (e) => saveConf({ usage_days: Number(e.target.value) }).then(() => loadLive(true)) } },
                 [7, 14, 30, 60, 90].map((n) => el("option", { value: n, selected: Number(conf.usage_days || 30) === n }, `最近 ${n} 天`)))))),
-        el("div", { class: "panel pad" },
+        el("div", { class: "panel pad", "data-settings": "dataflow" },
           el("h2", { style: "margin-bottom:8px" }, "資料流向"),
           el("ul", { class: "small", style: "margin:0;padding-left:18px;color:var(--ink-2)" },
-            el("li", null, "所有掃描都在這台電腦上完成；技能翻譯若啟用，會經你電腦上已登入的工具，將作者說明送到模型服務。"),
-            el("li", null, "網頁伺服器只接受本機（127.0.0.1）連線。"),
-            el("li", null, "技能內的腳本不會被執行；原始內容以純文字顯示。"),
-            el("li", null, "VBear 只寫入自己的狀態目錄", advanced ? [": ", el("span", { class: "mono" }, home(c.state_dir))] : "", "。"),
-            el("li", null, "員工由 VBear 的背景程式啟動與管理；開啟指令視窗預設只觀看，接管後才會送出輸入。"))),
+            el("li", null, "你的資料都在這台電腦上整理；只有你打開「技能中文化」時，技能的說明會經你自己登入的 AI 工具送到那家公司翻譯。"),
+            el("li", null, "VBear 只接受這台電腦自己的連線（127.0.0.1）。"),
+            el("li", null, "技能裡的程式不會被執行，只當文字顯示。"),
+            el("li", null, "VBear 只寫自己的資料夾", advanced ? ["：", el("span", { class: "mono" }, home(c.state_dir))] : "", "。"),
+            el("li", null, "員工由 VBear 在背後啟動；指令視窗預設只看不打字，你按「接手」才會送出你打的字。"),
+            el("li", null, "通知只在這台 Mac 上顯示，內容只有件數（要在「通知」打開）。"))),
     limits,
     advanced ? el("section", { "data-settings-advanced": "" },
       translationSettings(conf, saveConf), onboardingSettings(conf, saveConf),
@@ -13026,20 +13396,37 @@ function waitingBarText(rows) {
   const time = typeof first.slot === "string" ? first.slot.slice(11, 16) : "";
   return `等你決定：定時工作「${first.name}」${time}到時間了` + (list.length > 1 ? `，另外還有 ${list.length - 1} 件` : "") + (lost ? `；${lost}` : "");
 }
-async function refreshWaitingBar() {
+async function refreshWaitingBar(reuse) {
   const bar = document.getElementById("waiting-bar");
   if (!bar) return;
   if (navTop === "home") { bar.hidden = true; setKids(bar); return; }   // P47-2: the home page lists the same things itself, under 等你決定
+  // P48-2: the same reads as the home page's list (waitingModel: GETs only, nothing written into D), so the cards of the chats count here too
+  // and the title of the page has the number on every page
+  // `reuse` (a move to another page): the line's own rows (/api/waiting, one cheap read) are read fresh as before, but the cards of the chats come from what
+  // was read in the last 30 seconds instead of asking the server for everything at every click (the 30-second timer always reads all of it)
+  let m = null;
   let rows = [];
-  try { const r = await api.get("/api/waiting"); rows = r && Array.isArray(r.waiting) ? r.waiting : []; } catch (_) { rows = []; }
+  let cards = [];
+  if (reuse && waitingLast && Date.now() - waitingLast.at < WAITING_REUSE_MS) {
+    try { const r = await api.get("/api/waiting"); rows = r && Array.isArray(r.waiting) ? r.waiting : []; } catch (_) { rows = []; }
+    cards = waitingLast.m.rows.filter((r) => r.kind === "chat_card");
+  } else {
+    try { m = await waitingModel({ force: true }); } catch (_) { m = null; }       // the timer is the 30-second pace itself; a press asks at once
+    rows = m && Array.isArray(m.list) ? m.list : [];
+    cards = m ? m.rows.filter((r) => r.kind === "chat_card") : [];
+  }
+  if (navTop === "home") { bar.hidden = true; setKids(bar); return; }   // the person went home while it was read
   const text = waitingBarText(rows);
   const resume = resumeBarRows(rows);
-  if (!text && !resume.length) { bar.hidden = true; setKids(bar); return; }
+  if (!text && !resume.length && !cards.length) { bar.hidden = true; setKids(bar); return; }
   bar.hidden = false;
+  const lead = text || resume.length ? "　" : "等你決定：";
   setKids(bar, text ? el("span", { "data-waiting": "text" }, text) : null, text ? " " : null,
     text ? el("a", { href: "#/routines", "data-waiting": "link" }, "去處理") : null, text && resume.length ? "　" : null,
     resume.length ? el("span", { "data-waiting": "resume" }, (text ? "" : "等你決定：") + resume[0].text + (resume.length > 1 ? `，另外還有 ${resume.length - 1} 件` : "")) : null,
-    resume.length ? " " : null, resume.length ? el("a", { href: resume[0].href, "data-waiting": "resume-link" }, "去看看") : null);
+    resume.length ? " " : null, resume.length ? el("a", { href: resume[0].href, "data-waiting": "resume-link" }, "去看看") : null,
+    cards.length ? el("span", { "data-waiting": "chat" }, lead + cards[0].text + (cards.length > 1 ? `，另外還有 ${cards.length - 1} 件` : "")) : null,
+    cards.length ? " " : null, cards.length ? el("a", { href: cards[0].href, "data-waiting": "chat-link" }, "去看看") : null);
 }
 
 async function viewRoutines() {
@@ -13308,6 +13695,22 @@ function loadAdvancedNav() {
   }
   return advancedNavLoading.then(() => navAdvanced);
 }
+// The mark in the corner is a picture that may fail to load the very first time (P48-2): it is asked for once more (the file is the same, the address
+// has ?r=1 so nothing cached is reused), and when that fails too the letters VB stand in for it: never a broken picture.
+function brandMarkGuard() {
+  let img = null;
+  try { img = document.querySelector(".brand-mark img"); } catch (_) { img = null; }
+  if (!img || typeof img.addEventListener !== "function") return;
+  let tries = 0;
+  const retry = () => {
+    tries += 1;
+    if (tries === 1) { img.setAttribute("src", "/logo.svg?r=1"); return; }
+    const mark = img.parentNode;
+    if (mark) { mark.setAttribute("data-brand", "text"); setKids(mark, "VB"); }
+  };
+  img.addEventListener("error", retry);
+  if (img.complete === true && !img.naturalWidth) retry();      // it failed before this script ran (a picture with no width of its own is asked for once more, harmlessly)
+}
 function wireNavMenu() {
   const btn = document.getElementById("nav-toggle");
   if (!btn || !btn.addEventListener) return;
@@ -13381,7 +13784,7 @@ async function route() {
     setKids($main(), e.status === 401 ? authRequiredView() : notice("bad", "載入失敗：" + e.message));
   }
   if (authLostShown) return;   // the login page is up: nothing here should keep asking the server every few seconds
-  refreshWaitingBar();
+  refreshWaitingBar(true);
   // Live pages refresh their data quietly; they re-render only when nothing
   // is focused inside main, so typing and scrolling are never interrupted.
   // Home refreshes only its attention block, so the search box keeps focus.
@@ -13557,12 +13960,12 @@ const SETUP_STATE = {
   not_logged_in: ["還沒登入", "b-warn"],
   ready: ["就緒", "b-ok"],
 };
-const SETUP_LEDE = "VBear 借用裝在你電腦上的 AI 工具，用你自己的帳號與方案。挑你有方案的準備就好，只要有一個就緒，就能開始用。";
-const SETUP_NONE_READY = "目前還沒有就緒的 AI 工具。先從下面挑一個你有方案的，按「安裝」，裝好再按「登入」。";
+const SETUP_LEDE = "先選一家你要用的 AI。選了才會展開那一家的準備步驟；其他的之後隨時可以加。VBear 借用裝在你電腦上的 AI 工具，用你自己的帳號與方案。";
+const SETUP_NONE_READY = "目前還沒有就緒的 AI 工具。先選一家你有方案的，再照那一家的步驟安裝、登入。";
 const SETUP_REOPEN_HINT = "安裝好之後如果這裡還是顯示「還沒安裝」，可能要重新打開 VBear，它才找得到剛裝好的程式。";
 const SETUP_ACTION_WORD = { install: "安裝", login: "登入", chat_login: "聊天登入" };
-const SETUP_LEAVE_LABEL = "開始使用";
-const SETUP_LEAVE_BLOCKED = "要先有一個 AI 工具就緒，才能開始使用。";
+const SETUP_LEAVE_LABEL = "下一步：建立 CEO";
+const SETUP_LEAVE_BLOCKED = "要先有一個 AI 工具就緒，才能建立 CEO。";
 const SETUP_UPGRADE_NOTICE = "VBear 多了「開始設定」頁：可以在那裡看每個 AI 工具的狀態，也能補裝其他的。你已經有就緒的 AI 工具，不用重新設定。";
 // The choice of the daily limit (US$): the amounts, and one plain sentence each in terms of the default limits (a chat turn
 // costs at most US$0.5, a meeting at most US$1.5). The default is the server's, US$3.
@@ -13745,31 +14148,281 @@ async function openSetupTerminal(toolId, action, region) {
   location.hash = `#/term/${encodeURIComponent(r.session.session_id)}`;
 }
 
+// ---------- setup picker (v0.22, P48-1) ---------------------------------------------------------------------------------
+// The start-up page first asks one thing: which AI the person wants to use. Three cards, always in this order (the order of the AI tool table,
+// never the order of how ready they are), each with a sentence about the account it needs and what this Mac says about it. Choosing a card
+// only writes that choice to this browser (one key) and opens that one tool; nothing is sent, no terminal is opened, nothing is logged in.
+// The tools the person did not choose are folded into 「其他 AI 工具」. xAI Grok cannot chat with VBear yet: it is one grey line, not a button.
+// The state comes from GET /api/setup/tools (installed, logged in, the chat login of Codex) and from the `support` of GET /api/chats (may this
+// tool chat, has this version passed the chat safety check, is a check running). An answer that did not come is 「讀不到」, never a guess.
+// One button does both checks (「試一下」 and the chat safety check). Its first press only opens the confirmation, with the whole sentence of
+// what the safety check costs; only 「確認，開始」 sends: the try first, and the safety check only when the try passed and the server says this
+// version has not passed yet. The result is listed item by item. Nothing about a check is kept in the browser.
+const SETUP_PICK_KEY = "vbear-setup-pick";
+const SETUP_VENDORS = [
+  { id: "claude", maker: "Anthropic Claude", tool: "Claude Code", use: "用 Claude Code", account: "要有 Claude 的付費方案" },
+  { id: "codex", maker: "OpenAI ChatGPT", tool: "Codex", use: "用 Codex", account: "用你的 ChatGPT 帳號登入" },
+  { id: "agy", maker: "Google Gemini", tool: "AGY", use: "用 AGY（Antigravity）", account: "用你的 Google 帳號登入" },
+];
+const SETUP_LATER_TEXT = "xAI Grok：之後支援（現在還不能用來聊天）";
+const SETUP_LOOKING = "正在看這台 Mac…";
+const SETUP_OTHERS_TITLE = "其他 AI 工具（之後隨時可以加）";
+const SETUP_CHECK_GO = "試一下，並做聊天安全檢查";
+const SETUP_RESULT_WORD = { pass: ["通過", "b-ok"], fail: ["沒過", "b-bad"], todo: ["還沒做", "b-mute"], running: ["進行中", "b-warn"], unknown: ["讀不到", "b-warn"] };
+const SETUP_CHAT_BACKGROUND = "安全檢查在背景做，你可以先按「" + SETUP_LEAVE_LABEL + "」；做完會自己更新。";
+const SETUP_CHECK_RUNNING_TEXT = "在背景做，通常要幾分鐘。可以先去建立 CEO。";
+const SETUP_CHAT_UNREAD = "讀不到聊天的狀態。按「重新檢查」再讀一次。";
+const SETUP_CHANGE_HINT = "可以按上面的「換一家」選別家。";
+const SETUP_TRY_CHAT_STATES_BLOCKED = new Set(["policy", "unsupported", "hooks", "folder", "version_unreadable", "unknown"]);
+
+function setupVendorOf(id) { return SETUP_VENDORS.find((v) => v.id === id) || null; }
+function setupPickRead() {
+  try { const v = localStorage.getItem(SETUP_PICK_KEY); return setupVendorOf(v) ? v : ""; } catch (_) { return ""; }
+}
+function setupPickWrite(id) {
+  if (!setupVendorOf(id)) return;
+  try { localStorage.setItem(SETUP_PICK_KEY, id); } catch (_) { /* the choice is only a convenience */ }
+}
+function setupVerifyCost(id) {
+  return id === "codex" ? CHAT_VERIFY_COST_CODEX : id === "agy" ? CHAT_AGY_VERIFY_COST : CHAT_VERIFY_COST_CLAUDE;
+}
+function setupRowOf(toolsRes, id) {
+  const rows = toolsRes && typeof toolsRes === "object" && Array.isArray(toolsRes.tools) ? toolsRes.tools : [];
+  return rows.find((r) => r && typeof r === "object" && r.id === id) || null;
+}
+
+// What GET /api/chats says about the chat of one of the three tools (the Claude Code part is the top of `support`, the others sit under
+// `codex` and `agy`). -> null when the answer has none | { state, version, why, running, result, resultMessage, resultVersion, passed }.
+function setupSupportOf(id, chats) {
+  const sup = chats && typeof chats === "object" && chats.support && typeof chats.support === "object" ? chats.support : null;
+  if (!sup) return null;
+  const part = id === "codex" ? sup.codex : id === "agy" ? sup.agy : id === "claude" ? sup : null;
+  if (!part || typeof part !== "object" || typeof part.state !== "string") return null;
+  const claude = id === "claude";
+  const verify = part.verify && typeof part.verify === "object" ? part.verify : null;
+  const version = claude ? part.detected : part.version;
+  const why = claude ? part.message : part.why;
+  return {
+    state: part.state, version: typeof version === "string" ? version : "", why: typeof why === "string" ? why : "",
+    running: !!verify && verify.running === true,
+    result: verify && typeof verify.result === "string" ? verify.result : "",
+    resultMessage: verify && typeof verify.message === "string" ? verify.message : "",
+    resultVersion: verify && typeof verify.version === "string" ? verify.version : "",
+    passed: part.state === (claude ? "verified" : "ready"),
+  };
+}
+
+// The one line a card of the picker says about this Mac. toolsRes: the answer of /api/setup/tools (null: not read); chats: of /api/chats (null: not read).
+// -> { kind, text }
+function setupVendorStatus(vendor, toolsRes, chats) {
+  const v = vendor || {};
+  if (!toolsRes || typeof toolsRes !== "object") return { kind: "unread", text: "讀不到這台 Mac 的狀況" };
+  const row = setupRowOf(toolsRes, v.id);
+  if (!row) return { kind: "unread", text: "讀不到這台 Mac 的狀況" };
+  if (row.installed !== true) {
+    return { kind: "not_installed", text: row.install_problem === "version_unreadable" ? "讀不出版本，先當作還沒安裝" : "還沒安裝" };
+  }
+  if (row.state !== "ready") {
+    return { kind: "not_logged_in", text: row.login === "unknown" ? "裝好了，查不出有沒有登入" : "裝好了，還沒登入" };
+  }
+  if (v.id === "codex") {
+    const cl = row.chat_login && typeof row.chat_login === "object" ? row.chat_login : null;
+    if (!cl || cl.state === "unknown") return { kind: "chat_login", text: "已登入；查不出聊天用的 Codex 有沒有登入" };
+    if (cl.state === "folder_problem") return { kind: "chat_login", text: "已登入；聊天用的 Codex 暫時不能用" };
+    if (cl.state !== "logged_in") return { kind: "chat_login", text: "已登入，還要登入聊天用的 Codex" };
+  }
+  const sup = setupSupportOf(v.id, chats);
+  if (!sup) return { kind: "unread", text: "已登入；聊天的狀態讀不到" };
+  if (sup.passed) return { kind: "ready", text: "可以聊天了" };
+  if (sup.state === "unverified") return sup.running
+    ? { kind: "running", text: "已登入，聊天安全檢查還在做" }
+    : { kind: "unverified", text: "已登入，第一次聊天前要做一次安全檢查" };
+  if (sup.state === "policy") return { kind: "policy", text: "這台 Mac 有管理員設定，不能用它聊天" };
+  if (sup.state === "not_installed") return { kind: "not_installed", text: "還沒安裝" };
+  if (sup.state === "not_logged_in") return { kind: "chat_login", text: "已登入，還要登入聊天用的 Codex" };
+  if (sup.state === "unknown" || sup.state === "version_unreadable") return { kind: "unread", text: "已登入；讀不到版本，聊天的狀態不明" };
+  return { kind: "blocked", text: "已登入，但現在不能聊天" };
+}
+
+// The server's sentence as a plain line and, when the table knows it, the original kept for 「技術細節」.
+function setupPlainLine(raw) {
+  const w = plainWords(raw);
+  return { text: w.text + w.next, raw: w.known ? w.detail : "" };
+}
+
+// The list of the checks of one tool and the one button. row: the tool's row of /api/setup/tools; chats: /api/chats (null: not read); st: what this page
+// did with it ({ phase: "confirm" | "trying" | "verifying" | "done", try, verifyError, version }).
+// -> { items: [{ key, label, result, text, next, raw }], canGo, needsVerify, goLabel }
+function setupCheckView(id, row, chats, st) {
+  const r = row && typeof row === "object" ? row : {};
+  const s = st && typeof st === "object" ? st : {};
+  const tool = (setupVendorOf(id) || {}).tool || "這個 AI 工具";
+  const sup = setupSupportOf(id, chats);
+  const items = [];
+  const add = (key, label, result, text, extra) => items.push({ key, label, result, text: text || "", next: (extra && extra.next) || "", raw: (extra && extra.raw) || "" });
+  const installedOk = r.installed === true;
+  add("installed", "裝好了", installedOk ? "pass" : (r.install_problem === "version_unreadable" ? "unknown" : "todo"),
+    installedOk ? (r.version ? `版本 ${r.version}` : "") : (r.install_problem === "version_unreadable" ? "找得到程式，但讀不出它的版本" : "還沒裝好"));
+  const loggedIn = installedOk && r.state === "ready";
+  add("login", "登入了", loggedIn ? "pass" : (installedOk && r.login === "unknown" ? "unknown" : "todo"),
+    loggedIn ? "" : (!installedOk ? "要先裝好" : r.login === "unknown" ? "查不出有沒有登入，按「重新檢查」再讀一次" : "還沒登入"));
+  let chatLoginOk = true;
+  if (id === "codex") {
+    const cl = r.chat_login && typeof r.chat_login === "object" ? r.chat_login : null;
+    chatLoginOk = !!cl && cl.state === "logged_in";
+    const state = chatLoginOk ? "pass" : !cl || cl.state === "unknown" ? "unknown" : cl.state === "folder_problem" ? "fail" : "todo";
+    add("chat-login", "聊天用的 Codex 登入了", state,
+      chatLoginOk ? "" : state === "unknown" ? "查不出聊天用的 Codex 有沒有登入" : state === "fail" ? String((cl && cl.problem) || "聊天用的 Codex 資料夾有問題") : "要按上面的「讓聊天用的 Codex 登入」");
+  }
+  // 「試一下」
+  if (s.phase === "trying") add("try", "會回話（試一下）", "running", `正在試 ${tool}……最多等一分鐘，請不要關掉這一頁。`);
+  else if (s.try && s.try.success === true) add("try", "會回話（試一下）", "pass", String(s.try.message || ""));
+  else if (s.try) {
+    const line = setupPlainLine(s.try.message);
+    add("try", "會回話（試一下）", "fail", line.text, { raw: line.raw });
+  } else add("try", "會回話（試一下）", "todo", "");
+  // the chat safety check
+  let chatLabel = "聊天安全檢查";
+  let chat;
+  if (!sup) chat = ["unknown", SETUP_CHAT_UNREAD, {}];
+  else if (sup.passed) chat = ["pass", sup.version ? `這個版本（${sup.version}）已經通過` : "這個版本已經通過", {}];
+  else if (sup.running) chat = ["running", SETUP_CHECK_RUNNING_TEXT, {}];
+  else if (s.phase === "verifying") chat = ["running", "正在開始聊天安全檢查……", {}];
+  else if (s.verifyError) { const line = setupPlainLine(s.verifyError); chat = ["fail", line.text, { raw: line.raw }]; }
+  else if (sup.state === "policy") {
+    chatLabel = "可以聊天";
+    chat = ["fail", `這台 Mac 的 ${tool} 有管理員設定，VBear 不能用它聊天。`, { next: SETUP_CHANGE_HINT }];
+  } else if (sup.state === "unverified") {
+    const sameVersion = !sup.resultVersion || sup.resultVersion === sup.version;
+    if ((sup.result === "failed" || sup.result === "error") && sup.resultMessage && sameVersion) {
+      const line = setupPlainLine(sup.resultMessage);
+      chat = ["fail", line.text, { raw: line.raw }];
+    } else chat = ["todo", "每個新版本第一次聊天前都要做一次。", {}];
+  } else if (sup.state === "not_installed" || sup.state === "not_logged_in") chat = ["todo", "", {}];
+  else if (sup.state === "unknown" || sup.state === "version_unreadable") chat = ["unknown", "讀不到版本，所以不知道這個版本通過了沒有。", {}];
+  else { const line = setupPlainLine(sup.why || `${tool} 現在不能聊天。`); chat = ["fail", line.text, { raw: line.raw, next: SETUP_CHANGE_HINT }]; }
+  add("chat", chatLabel, chat[0], chat[1], chat[2]);
+  const working = s.phase === "trying" || s.phase === "verifying";
+  const ready = loggedIn && chatLoginOk;
+  const needsVerify = !!sup && sup.state === "unverified" && !sup.running;
+  const canGo = ready && !working && !!sup && (sup.passed || needsVerify) && !SETUP_TRY_CHAT_STATES_BLOCKED.has(sup.state);
+  return { items, canGo, needsVerify, goLabel: s.try || s.verifyError ? "再試一次" : SETUP_CHECK_GO };
+}
+
+// The sentences of the confirmation: nothing is sent before 「確認，開始」, so this says what that press does and what it costs.
+function setupCheckConfirmLines(id, needsVerify) {
+  const tool = (setupVendorOf(id) || {}).tool || "這個 AI 工具";
+  const tryLine = `試一下：送一句很短的話給 ${tool}，確認它真的會回應。${SETUP_TRY_ESTIMATE}，並計入花費上限。`;
+  return needsVerify
+    ? { head: "按「確認，開始」會做兩件事：", tryLine: "1. " + tryLine, chatLine: "2. 聊天安全檢查：" + setupVerifyCost(id), background: SETUP_CHAT_BACKGROUND }
+    : { head: "按「確認，開始」會做這件事：", tryLine: tryLine, chatLine: "聊天安全檢查：這個版本已經通過，這次不會再做。", background: "" };
+}
+
+function setupResultBadge(result) {
+  const w = SETUP_RESULT_WORD[result] || SETUP_RESULT_WORD.unknown;
+  return badge(w[0], w[1]);
+}
+
+// The three cards. `status(vendor)` -> { kind, text } | null (null: still looking); `onPick(id)` is called by the press of 「選這個」 (no button while still looking).
+function setupPickerNode(status, onPick) {
+  const cards = SETUP_VENDORS.map((v) => {
+    const st = status(v);
+    const body = [
+      el("h2", null, v.maker),
+      el("p", { class: "setup-text" }, v.use),
+      el("p", { class: "small muted setup-text" }, v.account),
+      st ? el("p", { class: "setup-text setup-pick-state", "data-setup-status": st.kind }, "這台 Mac：" + st.text)
+        : el("p", { class: "setup-text setup-pick-state", "data-setup": "loading" }, "這台 Mac：" + SETUP_LOOKING),
+    ];
+    if (st) body.push(el("button", { class: "btn small primary", type: "button", "data-setup-pick-go": v.id, on: { click: () => onPick(v.id) } }, "選這個"));
+    return el("div", { class: "setup-pick", "data-setup-pick": v.id }, body);
+  });
+  return el("div", null,
+    el("div", { class: "setup-picker", "data-setup": "picker" }, cards),
+    el("p", { class: "small muted setup-text", "data-setup-later": "xai" }, SETUP_LATER_TEXT));
+}
+
+// The list of checks and the button of the chosen tool. on: { ask, cancel, confirm } (the page's own functions).
+function setupCheckNode(id, row, chats, st, on) {
+  const v = setupCheckView(id, row, chats, st);
+  const list = el("ul", { class: "setup-check-list", "data-setup": "check-list" }, v.items.map((it) =>
+    el("li", { class: "setup-check-item", "data-setup-check-item": it.key, "data-result": it.result },
+      el("div", { class: "setup-check-head" }, setupResultBadge(it.result), el("span", { class: "setup-check-label" }, it.label)),
+      it.text ? el("p", { class: "small setup-text setup-check-text" }, it.text) : null,
+      it.next ? el("p", { class: "small muted setup-text", "data-setup": "check-next" }, "提示：" + it.next) : null,
+      it.raw ? plainTechFold(it.raw) : null)));
+  const confirming = st && st.phase === "confirm" && v.canGo;
+  const parts = [el("h3", { class: "setup-check-title" }, "檢查能不能用"), list];
+  if (confirming) {
+    const c = setupCheckConfirmLines(id, v.needsVerify);
+    parts.push(el("div", { class: "setup-check-confirm", "data-setup": "check-confirm" },
+      el("p", { class: "setup-text" }, c.head),
+      el("p", { class: "small muted setup-text" }, c.tryLine),
+      el("p", { class: "small muted setup-text" }, c.chatLine),
+      c.background ? el("p", { class: "small setup-text" }, c.background) : null));
+    parts.push(el("div", { class: "setup-actions" },
+      el("button", { class: "btn small primary", type: "button", "data-setup-check": "confirm", on: { click: () => on.confirm(id) } }, "確認，開始"),
+      el("button", { class: "btn small", type: "button", "data-setup-check": "cancel", on: { click: () => on.cancel(id) } }, "取消")));
+  } else if (v.canGo) {
+    parts.push(el("div", { class: "setup-actions" },
+      el("button", { class: "btn small primary", type: "button", "data-setup-check": "go", on: { click: () => on.ask(id) } }, v.goLabel)));
+  }
+  return el("div", { class: "setup-check", "data-setup": "check" }, parts);
+}
+
+// What one check of the page remembers while the page is open: nothing of it is kept in the browser.
+const setupCheck = new Map();          // tool id -> { phase, try, verifyError, version }
+// ---------- end of the setup picker -------------------------------------------------------------------------------------
+
 async function viewSetup() {
   const token = seq;
-  let data;
   setupTry.clear();
-  try { data = await api.get("/api/setup/tools?force=1"); }      // coming in is a fresh look; the refresh below may be a kept one
-  catch (e) {
-    const main = claim(token);
-    if (token === seq) setKids(main, el("h1", null, SETUP_TITLE), notice("bad", "讀不到 AI 工具的狀態：" + e.message));
-    return;
-  }
-  let dailyNow = null;             // the daily limit in force (a number), or null when it could not be read
-  try { const d = await api.get("/api/setup/daily-limit"); dailyNow = typeof d.daily_usd === "number" ? d.daily_usd : null; }
-  catch (e) { dailyNow = null; }
+  setupCheck.clear();
+  let picked = setupPickRead();
+  const first = claim(token);
+  if (token !== seq) return;
+  // The frame first: the title, the sentence and the cards (or the chosen tool) are drawn before any answer is back; what is still being read says so.
+  const frame = () => {
+    const vendor = setupVendorOf(picked);
+    return vendor
+      ? el("div", { "data-setup": "page" }, el("p", { class: "setup-text", "data-setup": "picked" }, `你選了：${vendor.maker}（${vendor.tool}）`),
+        el("p", { class: "small muted", "data-setup": "loading" }, SETUP_LOOKING))
+      : el("div", { "data-setup": "page" }, setupPickerNode(() => null, () => {}));
+  };
+  setKids(first, el("h1", null, SETUP_TITLE), el("p", { class: "lede" }, SETUP_LEDE), frame());
+  const got = (p) => p.then((value) => ({ value }), (error) => ({ error }));
+  const [toolsGot, chatsGot, dailyGot] = await Promise.all([got(api.get("/api/setup/tools?force=1")), got(api.get("/api/chats")), got(api.get("/api/setup/daily-limit"))]);
   const main = claim(token);
   if (token !== seq) return;
-  let shown = data;
+  if (toolsGot.error) {          // coming in is a fresh look; a tool list that cannot be read is said so
+    setKids(main, el("h1", null, SETUP_TITLE), notice("bad", "讀不到 AI 工具的狀態：" + toolsGot.error.message));
+    return;
+  }
+  let shown = toolsGot.value;
+  let chats = chatsGot.error ? null : chatsGot.value;          // null: the chat state could not be read
+  let dailyNow = !dailyGot.error && typeof dailyGot.value.daily_usd === "number" ? dailyGot.value.daily_usd : null;      // the daily limit in force, or null when it could not be read
   let busy = false;
   const host = el("div", { "data-setup": "page" });
+  const chatsKey = (c) => JSON.stringify(SETUP_VENDORS.map((v) => { const s = setupSupportOf(v.id, c); return s ? [s.state, s.version, s.running, s.result, s.resultMessage, s.resultVersion] : null; }));
+  const checkRunning = () => { const s = picked ? setupSupportOf(picked, chats) : null; return !!s && s.running; };
+  const readChats = async () => {
+    let next = null;
+    try { next = await api.get("/api/chats"); } catch (e) { next = null; }
+    if (token !== seq) return false;
+    const changed = chatsKey(next) !== chatsKey(chats);
+    chats = next;
+    return changed;
+  };
   const refresh = async (quiet, force) => {
     try {
       const next = await api.get(force ? "/api/setup/tools?force=1" : "/api/setup/tools");
       if (token !== seq) return;
-      const changed = setupToolKey(next.tools) !== setupToolKey(shown.tools) || next.setup_done !== shown.setup_done;
+      const toolsChanged = setupToolKey(next.tools) !== setupToolKey(shown.tools) || next.setup_done !== shown.setup_done;
       shown = next;
-      if (changed || !quiet) draw();
+      // the chat state is read again when the person asked, when a tool changed, and while a safety check runs (reads only)
+      const chatsChanged = (!quiet || force || toolsChanged || checkRunning()) ? await readChats() : false;
+      if (token !== seq) return;
+      if (toolsChanged || chatsChanged || !quiet) draw();
       if (!quiet) toast("已重新檢查");
     } catch (e) { if (!quiet) toast("重新檢查失敗：" + e.message); }
   };
@@ -13780,7 +14433,7 @@ async function viewSetup() {
     catch (e) { toast(e.message); }
     finally { busy = false; btn.disabled = false; }
   };
-  const toolCard = (row) => {
+  const toolCard = (row, isPicked) => {
     const v = setupToolView(row);
     const buttons = v.buttons.map((b) => {
       const btn = el("button", { class: `btn small${b.kind === "install" || b.kind === "login" || b.kind === "chat_login" ? " primary" : ""}`, type: "button",
@@ -13803,7 +14456,7 @@ async function viewSetup() {
       el("p", { class: "setup-text", "data-setup": "blurb" }, row.blurb || ""),
       v.note ? el("p", { class: "small muted setup-text", "data-setup": "note" }, v.note) : null,
       buttons.length ? el("div", { class: "setup-actions" }, buttons) : null,
-      el("div", { "data-setup-slot": "try" }, tryBox(row)));
+      el("div", { "data-setup-slot": "try" }, isPicked ? setupCheckNode(row.id, row, chats, setupCheck.get(row.id), checkOn) : tryBox(row)));
   };
   const tryBox = (row) => {
     const v = setupTryView(row, setupTry.get(row.id));
@@ -13835,6 +14488,39 @@ async function viewSetup() {
     await refresh(true, true);
     draw();
   };
+  // The one button of the chosen tool. The first press only opens the confirmation; 「確認，開始」 is the only press that sends. The try goes first; the safety
+  // check is asked for only when the try passed and the server (read again just now) still says this version has not passed; its `version` is the one on screen.
+  const checkOn = {
+    ask: (id) => { setupCheck.set(id, { ...(setupCheck.get(id) || {}), phase: "confirm" }); draw(); },
+    cancel: (id) => { const old = setupCheck.get(id) || {}; setupCheck.set(id, { ...old, phase: "idle" }); draw(); },
+    confirm: async (id) => {
+      if (busy) return;
+      busy = true;
+      const before = setupSupportOf(id, chats);
+      const st = { phase: "trying", version: before ? before.version : "", try: null, verifyError: "" };
+      setupCheck.set(id, st);
+      draw();
+      try {
+        try {
+          const r = await api.post(`/api/setup/tools/${encodeURIComponent(id)}/try`, { confirmed: true });
+          st.try = { success: r.success === true, message: String(r.message || "") };
+        } catch (e) { st.try = { success: false, message: e.message }; }
+        if (token === seq && st.try.success) {
+          st.phase = "verifying";
+          draw();
+          await readChats();
+          const now = setupSupportOf(id, chats);
+          if (token === seq && now && now.state === "unverified" && !now.running) {
+            try { await api.post("/api/chat-support/verify", { engine: id, version: st.version || undefined }); }
+            catch (e) { st.verifyError = e.message; }
+          }
+        }
+      } finally { st.phase = "done"; busy = false; }
+      if (token !== seq) return;
+      await refresh(true, true);
+      draw();
+    },
+  };
   const dailySummary = el("summary");
   const updateDailySummary = () => { dailySummary.textContent = dailyNow === null
     ? "每天最多花多少（目前的值：未知；預設 US$3）"
@@ -13844,6 +14530,7 @@ async function viewSetup() {
     el("p", { class: "small muted" }, "之後可以在『設定』的『用量與上限』改。"),
     dailyLimitEditor({ current: dailyNow, onSaved: (res) => { dailyNow = res.daily_usd; updateDailySummary(); } }));
   const dailySection = () => dailyBox;
+  const choose = (id) => { setupPickWrite(id); picked = id; draw(); };
   const draw = () => {
     const rows = Array.isArray(shown.tools) ? shown.tools : [];
     const anyReady = rows.some((r) => r && r.ready === true);
@@ -13851,14 +14538,25 @@ async function viewSetup() {
     const leave = el("button", { class: "btn primary", type: "button", "data-setup": "leave", disabled: !canLeave }, SETUP_LEAVE_LABEL);
     leave.addEventListener("click", () => run(leave, async () => {
       if (shown.setup_done !== true) await api.post("/api/config", { setup_done: true });
-      location.hash = ceoStepWanted(await ceoPlan()) ? "#/ceo" : "#/";          // P38-8: no card to chat with yet: make the first CEO
+      location.hash = ceoStepShown(await ceoPlan()) ? "#/ceo" : "#/";          // P38-8: no card to chat with yet: make the first CEO (P48-3: also when the picked AI is not ready, so the page says why)
     }));
     const recheck = el("button", { class: "btn", type: "button", "data-setup": "recheck" }, "重新檢查");
     recheck.addEventListener("click", () => run(recheck, () => refresh(false, true)));
+    const vendor = setupVendorOf(picked);
+    const pickedRow = vendor ? setupRowOf(shown, vendor.id) : null;
+    const top = vendor
+      ? [el("div", { class: "setup-picked", "data-setup": "picked" },
+          el("p", { class: "setup-text" }, `你選了：${vendor.maker}（${vendor.tool}）`),
+          el("button", { class: "btn small", type: "button", "data-setup": "change-pick", on: { click: () => { picked = ""; draw(); } } }, "換一家")),
+        pickedRow ? el("ul", { class: "setup-list" }, toolCard(pickedRow, true)) : notice("warn", `讀不到 ${vendor.maker} 這個 AI 工具的狀態。`)]
+      : [setupPickerNode((v) => setupVendorStatus(v, shown, chats), choose)];
+    const others = vendor ? rows.filter((r) => r && r.id !== vendor.id) : [];
     setKids(host,
       anyReady ? null : notice("info", SETUP_NONE_READY),
-      el("ul", { class: "setup-list" }, rows.map(toolCard)),
+      top,
       dailySection(),
+      others.length ? el("details", { class: "section setup-others", "data-setup": "others" }, el("summary", null, SETUP_OTHERS_TITLE),
+        el("ul", { class: "setup-list" }, others.map((r) => toolCard(r, false)))) : null,
       el("section", { class: "section setup-foot" },
         el("div", { class: "row" }, leave, recheck),
         canLeave ? el("p", { class: "small muted" }, "之後隨時可以從「設定」的「AI 工具」回到這一頁，加其他 AI 工具。")
@@ -13883,8 +14581,13 @@ const CEO_COST = "建立員工不花錢，也不會讓 CEO 開始做任何事。
 const CEO_AGY_NOTE = "這位 CEO 會用 AGY：和它的對話內容會送到 Google，它會用到你自己裝的 AGY 技能。AGY 的聊天要先通過驗證，才能開始聊。";
 const CEO_MODE = "每件事先問我：CEO 只能在自己的工作資料夾裡動手，要執行指令或改檔案前，都會先問你，你按允許才做。";
 const CEO_OPENING_NOTE = "上面這句開場是 VBear 先幫你填好的，可以改成你自己想說的話。按「送出」才會真的送出，也才會開始用你的 AI 方案。";
+const CEO_OPENING_NOTE_YOURS = "這是你剛才打的字，還沒送出。按「送出」才會送。";
+const CEO_OPENING_NOTE_CHOICE = "上面這句是你選的開場，可以接著改。按「送出」才會真的送出，也才會開始用你的 AI 方案。";
+const CEO_PICK_KEY = "vbear-setup-pick";          // written by the start-up page (P48-1) when the person presses 「選這個」; only read here
+const CEO_PICKS = ["claude", "codex", "agy"];
 const CEO_NAME_MAX = 200;
 const CEO_INSTRUCTIONS_MAX = 2000;
+const ceoVbearOpenings = new Set();   // the opening sentences VBear itself filled in (the server's words); anything else in a draft is the person's own
 const ceoDrafts = new Map();          // chat id -> the opening sentence put in its box; taken (and gone) when that chat is opened.
                                       // P47-4: before the chat exists (the AI tool cannot chat yet) the key is the employee's id; it moves to the chat's id when one is opened
 
@@ -13898,14 +14601,27 @@ function ceoMoveDraft(profileId, chatId) {
   ceoDrafts.delete(profileId);
   if (typeof t === "string" && t) ceoDrafts.set(chatId, t);
 }
+// The AI the person picked in the start-up (P48-1 keeps it in the browser); anything else that may be there counts as no pick.
+function ceoPickedTool() {
+  try {
+    const v = localStorage.getItem(CEO_PICK_KEY);
+    return typeof v === "string" && CEO_PICKS.includes(v) ? v : "";
+  } catch (_) { return ""; }
+}
 async function ceoPlan() {
   try {
-    const r = await api.get("/api/first-ceo");
+    const pick = ceoPickedTool();
+    const r = await api.get(pick ? `/api/first-ceo?tool=${encodeURIComponent(pick)}` : "/api/first-ceo");       // the same path with the pick as a query (ADR 0014; 15b lists it)
     return r && typeof r === "object" ? r : null;
   } catch (_) { return null; }
 }
 // The step is for a person who has no card to chat with and a ready tool to make one on; anything the server did not say
 // plainly counts as "not needed".
+// P48-3: the step's page is opened for anyone who still has no card to chat with, also when the AI they picked is not ready (the page then says why
+// and offers nothing to make); a plan that could not be read leaves the person on the home page.
+function ceoStepShown(plan) {
+  return !!plan && plan.needed === true;
+}
 function ceoStepWanted(plan) {
   return !!plan && plan.needed === true && plan.can_create === true && typeof plan.tool === "string" && plan.tool !== "";
 }
@@ -13915,6 +14631,7 @@ function ceoStepWanted(plan) {
 // page with the card chosen, which says why.
 async function ceoOpenChat(profileId, opening, reuseId) {
   let chatId = reuseId || "";
+  if (opening) ceoVbearOpenings.add(opening);       // P48-3: the page that opens the chat can tell VBear's sentence from words the person typed
   // The AI tool must be able to chat before the conversation is opened: when it is not (not checked for chat yet, held back by an administrator's policy,
   // not logged in), the person goes to the page that says why and has one action, and the opening waits under the employee's id.
   // Only a state that was read and says "start" opens it: a read that fails, a card that is not in the list and a missing chat support are not a go
@@ -13986,19 +14703,27 @@ async function viewCeo() {
   });
   const glance = chatSupportGlance(chatsRes);
   const mine = glance ? glance.find((g) => g.id === plan.tool) : null;
-  const toolState = !mine ? "（聊天的狀態讀不到）" : mine.ready ? "（已就緒）" : mine.state === "policy" ? "（這台電腦有管理員設定，VBear 不能用它聊天）"
+  // P48-3: the line follows the state that was read: 「可以聊天了」 only when a chat can start, and a safety check that is running is said so
+  const sup = chatsRes && chatsRes.support && typeof chatsRes.support === "object" ? chatsRes.support : null;
+  const part = sup ? (plan.tool === "claude" ? sup : sup[plan.tool]) : null;
+  const checking = !!part && typeof part === "object" && part.verify && part.verify.running === true;
+  const toolState = !mine ? "（聊天的狀態讀不到）" : mine.ready ? "（可以聊天了）" : mine.state === "policy" ? "（這台電腦有管理員設定，VBear 不能用它聊天）"
+    : mine.state === "unverified" && checking ? "（聊天安全檢查還在做，通常要幾分鐘；你可以先建立 CEO，做完才能開始聊）"
     : mine.state === "unverified" ? "（第一次聊天前要先做一次安全檢查，建立後會帶你做）" : "（聊天現在還不能用，建立後會告訴你原因）";
   const toolLine = el("p", { "data-ceo": "tool" }, el("strong", null, "用哪個 AI 工具："), `${plan.tool_name || plan.tool}${toolState}`);
+  // P48-3: what is read once and not needed to press the button is folded; the mode line and (AGY) the line about Google are not
+  const more = el("details", { class: "fold ceo-more", "data-ceo": "more" }, el("summary", null, "詳細資訊"),
+    el("label", { class: "ceo-field" }, el("span", null, "CEO 的說明（可以改，也可以先不動）"), about),
+    plan.chat_note ? el("p", { class: "small", "data-ceo": "chat-note" }, plan.chat_note, " ", el("a", { href: "#/setup" }, "到開始設定")) : null,
+    el("p", { class: "small muted", "data-ceo": "limits" }, CEO_LIMITS),
+    el("p", { class: "small muted", "data-ceo": "cost" }, CEO_COST));
   setKids(main, head, el("p", { class: "lede" }, CEO_LEDE),
     el("section", { class: "panel pad ceo-form", "data-ceo": "form" },
       el("label", { class: "ceo-field" }, el("span", null, "名字"), name),
-      el("label", { class: "ceo-field" }, el("span", null, "CEO 的說明（可以改，也可以先不動）"), about),
       toolLine,
       el("p", { class: "small", "data-ceo": "mode" }, CEO_MODE),
       plan.tool === "agy" ? el("p", { class: "small", "data-ceo": "agy-note" }, CEO_AGY_NOTE) : null,
-      plan.chat_note ? el("p", { class: "small", "data-ceo": "chat-note" }, plan.chat_note, " ", el("a", { href: "#/setup" }, "到開始設定")) : null,
-      el("p", { class: "small muted", "data-ceo": "limits" }, CEO_LIMITS),
-      el("p", { class: "small muted", "data-ceo": "cost" }, CEO_COST),
+      more,
       errorBox,
       el("div", { class: "row" }, go, el("a", { class: "btn", href: "#/", "data-ceo": "later" }, "先不要，回首頁"))));
 }
@@ -14409,7 +15134,7 @@ function chatLimitsText(limits, ledger) {
 }
 
 // P47-4: what the page of one employee whose chat has to be prepared says and offers (pure). `card`: one of GET /api/chats' cards; `data`:
-// the whole answer (support, ledger...). -> { kind: "start" | "verify" | "link", reason, label, href?, verify?: { engine, version, title, cost } }.
+// the whole answer (support, ledger...). -> { kind: "start" | "running" | "verify" | "link", reason, label, href?, verify?: { engine, version, title, cost } }.
 function chatPrepState(card, data) {
   if (!card || typeof card !== "object") return null;
   const name = card.name || "這位員工";
@@ -14432,6 +15157,10 @@ function chatPrepState(card, data) {
     return linkSetup("到 AI 工具看看", `這台電腦的 ${tool} 有管理員設定，VBear 不能用它聊天。可以到「AI 工具」看看有沒有別的工具能用。`);
   }
   const why = `${tool} ${word}，先處理這一步才能和 ${name} 聊天。`;
+  // P48-3 (D10): the safety check was started elsewhere (the start-up page) and is still going: nothing to press, the chat opens by itself when it passes
+  if (state === "unverified" && part && part.verify && typeof part.verify === "object" && part.verify.running === true) {
+    return { kind: "running", label: "", reason: `${tool}的聊天安全檢查還在做（通常要幾分鐘）。做完會自動開始和 ${name} 的對話。`, version };
+  }
   if (state === "unverified") {
     if (engine === "agy-chat") return { kind: "verify", label: "驗證聊天", reason: why, verify: { engine: "agy", version, title: "驗證 AGY 的聊天", cost: CHAT_AGY_VERIFY_COST } };
     if (engine === "codex-chat") return { kind: "verify", label: "先做一次安全檢查", reason: why, verify: { engine: "codex", version, title: "做一次安全檢查", cost: CHAT_VERIFY_COST_CODEX } };
@@ -14666,7 +15395,13 @@ async function viewChat(id, params) {
     const status = part && part.verify && typeof part.verify === "object" ? part.verify : null;
     const running = (status && status.running === true) || ui.pending === true;
     let action = null;
-    if (st && running && st.kind === "verify") action = el("p", { class: "small", "data-chat": "prep-running", role: "status" }, "安全檢查進行中，通常要幾分鐘…");
+    // P48-3: a check that is running opens the chat by itself when it passes; one that failed (back to 'verify' with nothing running) does not, until the person asks again
+    if (st && st.kind === "running") prepAuto = true;
+    else if (st && st.kind === "verify" && !running) prepAuto = false;
+    if (st && st.kind === "running") {
+      action = el("div", null, el("p", { class: "small", "data-chat": "prep-running", role: "status" }, "安全檢查進行中，這一頁會自己更新，不用重新整理。"),
+        el("p", { class: "small" }, el("a", { href: "#/chat" }, "看所有對話紀錄")));
+    } else if (st && running && st.kind === "verify") action = el("p", { class: "small", "data-chat": "prep-running", role: "status" }, "安全檢查進行中，通常要幾分鐘…");
     else if (st && st.kind === "start") {
       action = el("button", { type: "button", class: "btn primary", "data-chat": "prep-action", disabled: lampRed || prepStarting, on: { click: () => prepStart() } }, st.label);
     } else if (st && st.kind === "verify") {
@@ -14796,6 +15531,71 @@ function chatMoreMenu(items) {
   return { node: wrap, button, list, open, close: () => close(false) };
 }
 
+// ---------- CEO opening choices (v0.22, P48-3) ----------------------------------------------------------------------------------
+// Two small buttons under the box of a CEO's conversation nobody has spoken in yet. A press only puts words in the box and gives it the
+// focus: no request is made, nothing is sent (the person's own press of the send button is the only thing that sends). They go away when
+// the person changes the words, or once a message was sent; the person's own words are never replaced.
+const CEO_CHOICES = [
+  { key: "questions", label: "請你先問我幾個問題，再幫我整理計畫", text: "請你先問我幾個問題，了解我想做什麼，再幫我整理成一份計畫。" },
+  { key: "have-one", label: "我已經有一件想做的事", text: "我想做的事是：" },
+];
+// -> { node, sync }: `node` holds the buttons and the line under the box; `sync()` redraws them from the words in the box (call it when they may have changed).
+// `sent()`: how many messages the person sent in this conversation; `yours`: words the person typed earlier that were put back in the box ("" for none).
+function ceoOpeningChoices(input, opts) {
+  const node = el("div", { class: "chat-choices", "data-chat": "opening-choices" });
+  const note = el("div", { "data-chat": "opening-note-host" });
+  const isChoice = (t) => CEO_CHOICES.some((c) => c.text === t);
+  const noteText = () => {
+    const t = input.value;
+    if (!t) return "";
+    if (ceoVbearOpenings.has(t)) return CEO_OPENING_NOTE;
+    if (isChoice(t)) return CEO_OPENING_NOTE_CHOICE;
+    return opts.yours && t === opts.yours ? CEO_OPENING_NOTE_YOURS : "";
+  };
+  const shown = () => opts.ceo && opts.sent() === 0 && (input.value.trim() === "" || ceoVbearOpenings.has(input.value) || isChoice(input.value));
+  let last = null;
+  const sync = () => {
+    const key = `${shown()}|${noteText()}`;
+    if (key === last) return;
+    last = key;
+    setKids(node, shown() ? CEO_CHOICES.map((c) => el("button", { type: "button", class: "btn small", "data-chat": "opening-choice", "data-choice": c.key,
+      on: { click: () => {
+        input.value = c.text;
+        input.focus();
+        if (typeof input.setSelectionRange === "function") input.setSelectionRange(c.text.length, c.text.length);
+        last = null; sync();
+      } } }, c.label)) : null);
+    const t = noteText();
+    setKids(note, t ? el("p", { class: "small", "data-ceo": "opening-note" }, t) : null);
+  };
+  input.addEventListener("input", sync);
+  return { node, note, sync };
+}
+// ---------- end of CEO opening choices -------------------------------------------------------------------------------------------
+
+// ---------- the hint to ask the chief of staff (v0.22, P48-3) ---------------------------------------------------------------------
+// After the CEO's reply that reads like a plan, a small card under it offers 「請幕僚長安排」. The button is the function of the 「⋯」 menu's item
+// (the chief of staff's desk `open`): it asks for the preview and opens the dialog that says the cost and where the words go, and only that
+// dialog's own start button spends anything. The rule is literal, a question on the page and not a claim that the plan is done.
+const CEO_HINT_TEXT = "計畫整理好了嗎？可以請幕僚長照這份計畫分配工作給員工。幕僚長會先給你看提議，你確認了才會做。";
+const CEO_LIST_LINE = /^\s*(?:\d{1,2}[.、]\s*(?!\d)\S|[一二三四五六七八九十]{1,3}、\s*\S|[-•・]\s+\S|[•・]\s*\S)/;
+// `records`: the conversation's records, oldest first. True when the last thing said is the CEO's reply, the person spoke at least twice,
+// and the reply has three lines or more that start like a list.
+function ceoPlanShaped(records) {
+  const talk = (Array.isArray(records) ? records : []).filter((r) => r && (r.kind === "user_message" || r.kind === "reply") && typeof r.text === "string");
+  if (!talk.length || talk[talk.length - 1].kind !== "reply") return false;
+  if (talk.filter((r) => r.kind === "user_message").length < 2) return false;
+  return talk[talk.length - 1].text.split(/\r?\n/).filter((l) => CEO_LIST_LINE.test(l)).length >= 3;
+}
+function ceoChiefHint(chief, onNo) {
+  return el("div", { class: "chat-hint", "data-chat": "chief-hint", role: "note" },
+    el("p", { class: "small" }, CEO_HINT_TEXT),
+    el("div", { class: "row" },
+      el("button", { type: "button", class: "btn small primary", "data-chat": "chief-hint-go", on: { click: () => chief.open() } }, "請幕僚長安排"),
+      el("button", { type: "button", class: "btn small", "data-chat": "chief-hint-no", on: { click: onNo } }, "先不用")));
+}
+// ---------- end of the hint ------------------------------------------------------------------------------------------------------
+
 async function viewChatDetail(token, id) {
   let all;
   try { all = await chatReadAll(id); }
@@ -14826,7 +15626,23 @@ async function viewChatDetail(token, id) {
   if (ownerId) { if (ceoDrafts.has(id)) ceoDrafts.delete(ownerId); else ceoMoveDraft(ownerId, id); }   // one set of words per chat, the newest; never pasted twice
   const opening = ceoTakeDraft(id);        // P38-8: the first CEO's opening sentence: put in the box, sent only by the send button
   if (opening) input.value = opening;
-  const openingNote = opening ? el("p", { class: "small", "data-ceo": "opening-note" }, CEO_OPENING_NOTE) : null;
+  // P48-3: only a CEO's conversation nobody has spoken in has the two opening choices; the line under the box says whose words are in it
+  let sentNow = 0;                          // messages the person sent from this page (the records may come a moment later)
+  const talkSeen = [];                      // the records that are words said (the person's and the reply), oldest first
+  const ceoChat = !all.group && !!all.card && all.card.position === "planner";
+  const openers = ceoOpeningChoices(input, { ceo: ceoChat, sent: () => sentNow + talkSeen.filter((r) => r.kind === "user_message").length, yours: opening && !ceoVbearOpenings.has(opening) ? opening : "" });
+  const hintBox = el("div", { "data-chat": "chief-hint-host" });
+  let chiefRef = null, hintDismissed = false;
+  const hintWanted = () => {
+    if (!chiefRef || hintDismissed || busy || view.more === true || turnOpen()) return false;
+    const cards = view.live && Array.isArray(view.live.cards) ? view.live.cards : [];
+    return cards.length === 0 && ceoPlanShaped(talkSeen);
+  };
+  let hintNode = null;
+  const syncHint = () => {
+    if (!hintWanted()) { if (hintNode) { hintNode = null; setKids(hintBox, null); } return; }
+    if (!hintNode) { hintNode = ceoChiefHint(chiefRef, () => { hintDismissed = true; syncHint(); }); setKids(hintBox, hintNode); }
+  };
   const sendBtn = el("button", { type: "button", class: "btn primary", "data-chat": "send", on: { click: () => send() } }, "送出");
   const stopBtn = el("button", { type: "button", class: "btn", "data-chat": "stop", on: { click: () => stop() } }, "停止這一回合");
   const sendNote = el("p", { class: "small muted", "data-chat": "send-note" });
@@ -14870,6 +15686,8 @@ async function viewChatDetail(token, id) {
     sendBtn.disabled = Boolean(busy || blocked || turnOpen());
     stopBtn.hidden = !turnOpen();
     setKids(sendNote, noteText || (turnOpen() ? "員工還在處理上一則訊息。" : blocked ? "現在不能送訊息。" : ""));
+    openers.sync();
+    syncHint();
   };
   const drawLive = () => {
     const live = view.live && typeof view.live === "object" ? view.live : null;
@@ -14892,6 +15710,7 @@ async function viewChatDetail(token, id) {
     for (const r of records) {
       if (!r || typeof r.seq !== "number" || r.seq <= lastSeq) continue;
       lastSeq = r.seq;
+      if (r.kind === "user_message" || r.kind === "reply") talkSeen.push(r);
       if (r.kind === "plan_usage") planRecord = r;
       const line = chatLine(r, { engine: engineOf(), remember: rememberLine, saveSkill: saveSkillLine, who: view.card && view.card.name });
       if (line) { transcript.append(line); if (line.origin) chatOriginFill(line, line.origin); }
@@ -14992,7 +15811,8 @@ async function viewChatDetail(token, id) {
     try {
       await api.post(`/api/chats/${encodeURIComponent(id)}/messages`, { text });
       input.value = "";
-      if (openingNote) openingNote.remove();
+      sentNow += 1;
+      openers.sync();
       await pollOnce();
     } catch (e) {
       // The day's limit stopped it (nothing was sent, nothing was spent): said in plain words with the way to the settings; the words stay in the box.
@@ -15078,10 +15898,13 @@ async function viewChatDetail(token, id) {
   const groupNote = inGroup ? el("p", { class: "small", "data-chat": "group-note" },
     `這是群組「${typeof inGroup.name === "string" ? inGroup.name : ""}」裡的對話，要說話請到群組裡。 `,
     el("a", { href: `#/chat/group/${encodeURIComponent(inGroup.id)}` }, "回到群組")) : null;
-  const composer = inGroup ? null : el("div", { class: "chat-composer" }, input,
-    el("div", { class: "row" }, sendBtn, stopBtn, skillUseButton(input)), sendNote, limitBox, openingNote);
+  const composer = inGroup ? null : el("div", { class: "chat-composer" }, input, openers.node,
+    el("div", { class: "row" }, sendBtn, stopBtn, skillUseButton(input)), sendNote, limitBox, openers.note);
   const isCeo = !inGroup && !!all.card && all.card.position === "planner";        // P40: only a CEO's chat has 「請幕僚長安排」
   const chief = isCeo ? chiefDesk(id, all.card) : null;
+  chiefRef = chief;
+  syncHint();
+  openers.sync();
   const suggest = inGroup ? null : memorySuggestDesk(id);                   // P42-4: 「整理要記住的事」, one-to-one chats only
   const skillDesk = inGroup ? null : skillSuggestDesk(id);                  // P44-5: 「整理成常用做法」, one-to-one chats only
   // Deleting a chat asks first and says what stays; it is only in the 「⋯」 menu, away from the send button.
@@ -15104,7 +15927,7 @@ async function viewChatDetail(token, id) {
   ].filter((x, i, arr) => x !== null || (i > 0 && arr[i - 1] !== null));
   const more = inGroup ? null : chatMoreMenu(menuItems);
   setKids(headBox, el("div", { class: "chat-head-top" }, titleBox, more ? more.node : null), lineBox, detailsBox);
-  setKids(main, crumbs([["員工", "#/employees"], [view.card && view.card.name || id]]), headBox, groupNote, chief ? chief.node : null, suggest ? suggest.node : null, skillDesk ? skillDesk.node : null, noteBox, transcript, liveBox, composer);
+  setKids(main, crumbs([["員工", "#/employees"], [view.card && view.card.name || id]]), headBox, groupNote, chief ? chief.node : null, suggest ? suggest.node : null, skillDesk ? skillDesk.node : null, noteBox, transcript, liveBox, hintBox, composer);
   activeViewCleanup = () => { stopStream(); if (more) more.close(); if (chief) chief.stop(); if (suggest) suggest.stop(); if (skillDesk) skillDesk.stop(); };
   stream();
   if (opening) input.focus();
@@ -19694,7 +20517,7 @@ async function viewStaffingDetail(token, id) {
 
 setTheme(store.get("theme", "auto"));
 setInterval(() => { if (!document.hidden && !authLostShown && !authPending) { refreshTranslations(); pollRoleTranslations(); } }, 2500);
-setInterval(() => { if (!document.hidden && !authLostShown && !authPending) refreshWaitingBar(); }, 30000);
+setInterval(() => { if ((!document.hidden || notifyIsOn()) && !authLostShown && !authPending) { refreshWaitingBar(); notifyReadHome(); } }, 30000);   // P48-4: on while hidden, if the notification is on
 // Coming back to this tab: refresh at once instead of waiting.
 document.addEventListener("visibilitychange", () => { if (!document.hidden && liveTick && !authPending) liveTick(); });
 // The skip link moves focus only; it must not become a route ("#main" is not a page).
@@ -19706,6 +20529,7 @@ function skipToMain(e) {
 }
 document.querySelector("a.skip").addEventListener("click", skipToMain);
 wireNavMenu();
+brandMarkGuard();
 window.addEventListener("hashchange", () => {
   if (authPending) return;   // bootstrap routes to the address as it is once the login code is traded
   if (location.hash === "#main" && routedHash !== null) {  // reached without the click handler
@@ -19796,7 +20620,18 @@ function tplScheduleText(r) {
   const days = r.days.length === 7 ? "每天" : `每週${r.days.map((d) => ROUTINE_DAYS[d]).join("、")}`;
   return `${days}　${r.times.join("、")}`;
 }
-function tplModelText(card) { return card.claude_model ? `建議模型 ${card.claude_model}` : ""; }
+// The name a model is shown by (P48-6): the label the catalog's model_options gives that very model id, else the id as it is (nothing is guessed).
+const TPL_NO_POSITION = "沒有指定職位";
+function tplModelName(catalog, tool, id) {
+  const all = catalog && catalog.model_options;
+  const src = all && typeof all === "object" && cardHas(all, tool) && all[tool] && typeof all[tool] === "object" ? all[tool] : null;
+  for (const group of ["listed", "latest", "observed"]) {
+    const hit = src && Array.isArray(src[group]) ? src[group].find((o) => o && o.value === id && typeof o.label === "string" && o.label && o.label !== id) : null;
+    if (hit) return hit.label;
+  }
+  return id;
+}
+function tplModelText(card, catalog) { return card.claude_model ? `建議模型 ${tplModelName(catalog, "claude", card.claude_model)}` : ""; }
 
 // One team template as a block: its name, what it is for, and three rows of tick boxes. `ctx.sel` is the selection of the page; `ctx.boxes` collects
 // the boxes so that one call of `ctx.sync()` can redraw their state and the line at the bottom.
@@ -19811,7 +20646,7 @@ function templatesBlock(template, ctx) {
     box.checked = sel[kind].has(tplId(ref));
     ctx.boxes.push({ box, kind, id: tplId(ref) });
     const facts = kind === "cards"
-      ? [el("span", { class: "tag" }, CARD_POSITION_LABEL[item.position] || "未指定"), " ", el("span", { class: "small muted" }, tplModelText(item))]
+      ? [el("span", { class: "tag" }, CARD_POSITION_LABEL[item.position] || TPL_NO_POSITION), " ", el("span", { class: "small muted" }, tplModelText(item, ctx.catalog))]
       : kind === "routines"
         ? [el("span", { class: "small muted" }, `${tplScheduleText(item)}　交給：${item.who ? cardName(item.who) || "（這個團隊範本裡沒有）" : "套用時再選"}`)]
         : [];
@@ -19909,7 +20744,7 @@ function templatesMineSection(ctx) {
     box.checked = now[kind].has(item.id);
     return el("li", { class: "tpl-item", "data-tpl-now-item": kind },
       el("label", { class: "tpl-pick" }, box, " ", el("strong", null, item.name), " ",
-        kind === "cards" ? el("span", { class: "tag" }, CARD_POSITION_LABEL[item.position] || "未指定") : null));
+        kind === "cards" ? el("span", { class: "tag" }, CARD_POSITION_LABEL[item.position] || TPL_NO_POSITION) : null));
   };
   const empty = TPL_KINDS.every(([kind]) => (have[kind] || []).length === 0);
   const count = el("span", { class: "small", "data-templates": "now-count" });
@@ -20221,12 +21056,12 @@ function openTemplatesPreview(ctx) {
         ? el("p", { class: "small", "data-templates": "tool-not-ready" }, TPL_PREVIEW_LINES.notReady, chosen.why ? ` ${chosen.why}` : "") : null);
   };
   const cardLine = (c) => {
-    const input = el("input", { type: "text", maxlength: "40", value: c.name, "data-tpl-name": tplId(c.from), "aria-label": `員工的名字：${c.default_name}`,
+    const input = el("input", { type: "text", class: "input", maxlength: "40", value: c.name, "data-tpl-name": tplId(c.from), "aria-label": `員工的名字：${c.default_name}`,
       on: { change: (e) => { const entry = ctx.sel.cards.get(tplId(c.from)); if (entry) { entry.name = e.target.value; ask(); } } } });
     input.value = c.name;
     return el("li", { "data-tpl-preview": "card" }, input, " ",
-      el("span", { class: "tag" }, CARD_POSITION_LABEL[c.position] || "未指定"), " ",
-      el("span", { class: "small muted" }, `${TPL_TOOL_LABEL[state.preview.tool]}${c.model_id ? `　${c.model_id}` : "　工具自己的預設模型"}`),
+      el("span", { class: "tag" }, CARD_POSITION_LABEL[c.position] || TPL_NO_POSITION), " ",
+      el("span", { class: "small muted" }, `${TPL_TOOL_LABEL[state.preview.tool]}${c.model_id ? `　${tplModelName(ctx.catalog, state.preview.tool, c.model_id)}` : "　工具自己的預設模型"}`),
       c.instructions_head ? el("p", { class: "small tpl-text", "data-tpl-preview": "head" }, c.instructions_head + (c.instructions_cut ? "…" : "")) : null,
       c.same_in_batch ? el("p", { class: "small muted", "data-tpl-preview": "same-batch" }, `這次有不只一位叫「${c.name}」，只是提醒。`) : null,
       c.same_existing ? el("p", { class: "small muted", "data-tpl-preview": "same-existing" }, `你已經有一位叫「${c.name}」，只是提醒。`) : null);
@@ -20334,11 +21169,11 @@ async function viewTemplates() {
   try { data = await api.get("/api/templates"); }
   catch (e) { setKids(claim(token), el("h1", null, "團隊範本"), notice("bad", "讀不到團隊範本：" + e.message)); return; }
   // the line about the CEO is for a person who has none: shown only when the employees were read and none of them is a CEO (not read: not said)
-  const staff = await api.get("/api/agent-profiles").catch(() => null);
+  const [staff, catalog] = await Promise.all([api.get("/api/agent-profiles").catch(() => null), api.get("/api/agent-builder/catalog").catch(() => null)]);
   if (token !== seq) return;
   const noCeo = !!staff && Array.isArray(staff.profiles) && !staff.profiles.some((p) => p && typeof p === "object" && cardPosition({ position: p.position }) === MEETING_CHAIR_POSITION);
   const main = claim(token);
-  const ctx = { data, sel: tplSelection(), boxes: [], reload: () => viewTemplates() };
+  const ctx = { data, sel: tplSelection(), boxes: [], catalog: catalog && catalog.ok ? catalog : null, reload: () => viewTemplates() };
   const count = el("span", { "data-templates": "count" });
   const preview = el("button", { class: "btn primary", type: "button", "data-tpl-action": "preview", on: { click: () => openTemplatesPreview(ctx) } }, "預覽並套用");
   ctx.sync = () => {
@@ -20620,6 +21455,8 @@ if (typeof module !== "undefined" && module.exports) {
     SETUP_UPGRADE_NOTICE,
     SETUP_REOPEN_HINT,
     setupToolView,
+    SETUP_TRY_ESTIMATE, CHAT_VERIFY_COST_CLAUDE, CHAT_VERIFY_COST_CODEX, CHAT_AGY_VERIFY_COST,
+    setupPickRead, setupPickWrite, setupSupportOf, setupVendorStatus, setupCheckView, setupCheckConfirmLines, SETUP_VENDORS,
     setupTryView,
     setupDailyResultWords,
     claudeCodeNeed,
@@ -20696,6 +21533,10 @@ if (typeof module !== "undefined" && module.exports) {
     viewChat,
     viewCeo,
     ceoStepWanted,
+    ceoStepShown,
+    ceoPlanShaped,
+    chatPrepState,
+    ceoDrafts,
     MEETING_BUBBLES,
     MEETING_ERROR_TEXT,
     MEETING_MONEY_WHY,

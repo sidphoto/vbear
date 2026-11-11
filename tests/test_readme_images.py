@@ -214,15 +214,17 @@ class ChangelogRelease(unittest.TestCase):
 
     def test_the_release_heading_matches_the_version(self):
         headings = [h for h in re.findall(r"^## (.+)$", self.text, re.M) if h != "Unreleased"]
-        self.assertTrue(headings[0].startswith("v0.21.0"), headings[:4])            # (P47-6 put v0.21.0 in front)
-        self.assertTrue(headings[1].startswith("v0.20.0"), headings[:4])
-        self.assertTrue(headings[2].startswith("v0.19.0"), headings[:4])
-        self.assertTrue(headings[3].startswith("v0.18.0"), headings[:4])
+        self.assertTrue(headings[0].startswith("v0.22.0"), headings[:5])            # (P48-7 put v0.22.0 in front)
+        self.assertTrue(headings[1].startswith("v0.21.0"), headings[:5])
+        self.assertTrue(headings[2].startswith("v0.20.0"), headings[:5])
+        self.assertTrue(headings[3].startswith("v0.19.0"), headings[:5])
+        self.assertTrue(headings[4].startswith("v0.18.0"), headings[:5])
         init = (ROOT / "vbear" / "__init__.py").read_text(encoding="utf-8")
         # P46-6 wrote the v0.20.0 section and left the version number alone: the coordinator bumps it when the release is made, and it is
         # 0.19.0 until then and 0.20.0 after (the heading and the number must never disagree once it is bumped). P47-6 wrote the v0.21.0
         # section and again left the number: it stays 0.20.0 until the coordinator bumps it to 0.21.0 and this line is changed with it.
-        self.assertIn('__version__ = "0.21.0"', init)
+        # P48-7 bumped the number to 0.22.0 together with the v0.22.0 heading (the coordinator makes the release itself).
+        self.assertIn('__version__ = "0.22.0"', init)
 
     def test_the_v090_section_covers_positions_professions_and_the_hover_box(self):
         section = self.text[self.text.index("## v0.9.0"):self.text.index("## v0.8.9")]
