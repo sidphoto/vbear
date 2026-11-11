@@ -2133,3 +2133,13 @@ input[type="checkbox"] { width: 18px; height: 18px; flex: none; accent-color: va
 .chat-list-box .mt-row { display: flex; padding: 12px 2px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; box-shadow: none; }
 .chat-list-box .mt-row:last-child { border-bottom: 0; }
 .chat-wait-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--warn); }
+
+/* P52-1 (v0.25.0): the first run of a person with no employee is one block of the home page (ADR 0017): a big line, the picker, the chosen tool's steps and the CEO's name. Only the
+   theme's own variables; the cards, checks and the name box are the start-up and CEO pages' own classes. */
+.home-first-title { font-size: 22px; line-height: 1.35; margin: 0 0 4px; overflow-wrap: anywhere; }
+.home-first-run .setup-picker { margin-top: 12px; }
+.home-first-ceo { display: grid; gap: 8px; max-width: 46rem; margin-top: 12px; }
+.home-first-ceo p { margin: 0; overflow-wrap: anywhere; }
+.home-first-ceo .row { flex-wrap: wrap; }
+.home-first-foot { margin-top: 18px; }
+@media (max-width: 520px) { .home-first-ceo .btn { flex: 1 1 100%; justify-content: center; } }

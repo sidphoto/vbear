@@ -392,23 +392,24 @@ function check16dPace(times, forced) {
     assert.ok(text(page.main).includes("對話紀錄"), "the work page is there");
   });
 
-  await test("16c: no employee yet: the three steps' frame is there at once, step 1 says it is looking at the tools until they are read, then the words", async () => {
+  await test("16c: no employee yet: the first-run block's frame is there at once and says it is looking at the tools until they are read, then the cards (P52-1: in place of the three steps)", async () => {
     const page = await home(world({ profiles: [], cards: [] }), "#/", { hold: ["/api/setup/tools"] });
-    const step = one(page.main, "data-home-step", "1");
-    assert.ok(step, "step 1 is there");
-    assert.deepStrictEqual(loadingKeys(page.main), ["first-steps"]);
-    assert.ok(text(step).includes("正在看你的 AI 工具…"));
-    assert.ok(!/AI 工具已就緒|還沒有就緒|讀不到 AI 工具/.test(text(step)), "no conclusion before the answer");
+    const block = one(page.main, "data-home", "first-run");
+    assert.ok(block, "the block is there");
+    assert.deepStrictEqual(loadingKeys(page.main), ["first-run"]);
+    assert.ok(text(block).includes("正在看你的 AI 工具…"));
+    assert.ok(!/還沒安裝|讀不到|可以聊天/.test(text(block)), "no conclusion before the answer");
+    assert.strictEqual(byData(page.main, "data-setup-pick-go", "claude").length, 0, "nothing to choose before the answer");
     await page.release();
     assert.deepStrictEqual(loadingKeys(page.main), []);
-    assert.ok(/已經有可以聊天的 AI 工具就緒了/.test(text(one(page.main, "data-home-step", "1"))));
-    assert.ok(one(page.main, "data-home", "first-steps"));
+    assert.ok(byData(page.main, "data-setup-pick-go", "claude").length === 1, "the cards are there");
+    assert.ok(one(page.main, "data-home", "first-run"));
   });
 
   await test("16c: the employees' data could not be read: the block says so (the frame stays, nothing is shown as an empty team) and no 載入中 is left", async () => {
     const page = await home(world({ fail: { "GET /api/agent-profiles": { status: 500, body: { error: "壞了" } } } }));
     assert.ok(/讀不到員工的資料/.test(text(one(page.main, "data-home", "team"))));
-    assert.ok(!one(page.main, "data-home", "first-steps"));
+    assert.ok(!one(page.main, "data-home", "first-run"));
     assert.deepStrictEqual(check16c(page.main, "done"), []);
   });
 

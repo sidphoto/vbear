@@ -320,22 +320,27 @@ test("P48-3: the AI the person picked is not ready (another one is): 「下一�
 // with no employee (step 2 is 建立 CEO), and for a person who has a CEO the box 「想做什麼？跟 CEO 說」, which sends only on the person's own press.
 // What the doors did on pressing 聊聊看 (open the chat, the opening sentence in its box) is the work of 「建立 CEO，開始聊」 now (P47-4).
 const homeOf = (main, key) => byAttr(main, "data-home", key);
-test("home: a person with no card to chat with is offered to make a CEO (step 2 of the three); one who has a card is not", async () => {
+test("home: a person with no card to chat with is offered to make a CEO on the home page itself (P52-1: the first-run block, no longer step 2 and a link to #/ceo); one who has a card is not", async () => {
   setPage();
   let main = await open("#/");
-  const steps = homeOf(main, "first-steps");
-  assert(steps, "the three steps are on the home page");
-  const step2 = byAttr(main, "data-home-step", "2");
-  assert(/CEO/.test(text(step2)));
-  assert.strictEqual(attr(step2.find((n) => n.tag === "a"), "href"), "#/ceo");
+  assert(homeOf(main, "first-run"), "the first-run block is on the home page");
+  assert.strictEqual(homeOf(main, "first-steps"), null);
+  assert.strictEqual(main.findAll((n) => n.tag === "a" && attr(n, "href") === "#/ceo").length, 0, "there is no way to another page: it is made here");
+  assert.strictEqual(homeOf(main, "first-ceo-create"), null, "nothing to make before the person chose an AI");
+  await click(byAttr(main, "data-setup-pick-go", "claude"));
+  main = h.dom().mainEl;
+  assert(FETCH_LOG.some((c) => c.url === "/api/first-ceo?tool=claude"), "the plan was read for the chosen AI");
+  const make = homeOf(main, "first-ceo-create");
+  assert(make && /建立 CEO，開始聊/.test(text(make)), "and the button that makes it");
   assert.strictEqual(posts("/api/chats").length + posts("/api/agent-profiles").length, 0, "showing it makes nothing");
   setPage({ plan: plan({ needed: false, can_create: false, tool: null }), profiles: [profile()] });
   main = await open("#/");
-  assert.strictEqual(homeOf(main, "first-steps"), null, "a person who has a card is not shown the steps");
+  assert.strictEqual(homeOf(main, "first-run"), null, "a person who has a card is not shown the first run");
   assert(homeOf(main, "ask"), "and has the box for the CEO");
+  global.localStorage._store = {};
   setPage({ planStatus: 503 });
   main = await open("#/");
-  assert(homeOf(main, "first-steps"), "a plan that cannot be read does not change the steps: the page asks the start-up page's tool list, not the plan");
+  assert(homeOf(main, "first-run"), "a plan that cannot be read does not remove the block: the page asks the start-up page's tool list, not the plan");
 });
 
 test("home: a CEO who was made and not yet talked to: the box says to say the first words; showing it opens nothing; the press opens the chat and sends the typed words", async () => {

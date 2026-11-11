@@ -2356,6 +2356,7 @@ async function viewHome() {
   let slow = false;                  // 3 seconds have passed
   let setup = { redirect: false, notice: false };
   let advancedPart = null;
+  let firstRun = null;               // the first run of a person with no employee (the home page draws it in place of the old three steps)
   let staticError = null;            // the index of skills could not be read (a failed read says so; it does not blank the page)
   let bodyKind = "";
   let focusDone = false;             // the cursor is put in the box once, when it is first drawn
@@ -2423,8 +2424,12 @@ async function viewHome() {
       }
     }
     if (kind === "first") {
-      const loading = !ready("first");
-      paint("first", String(loading) + String(back.has("tools")) + String(back.has("chats")), () => setKids(firstHost, homeFirstSteps(state.tools, state.chats, loading)));
+      // v0.25 (P52-1, ADR 0017): a person with no employee does the first run here, on one page. The block keeps its own state (the pick, the typed name, an open
+      // confirmation) and draws itself again only when what it shows changed, so the 5-second refresh and a late answer do not clear it.
+      if (!firstRun) firstRun = homeFirstRun({ alive: () => token === seq && !authLostShown, tools: () => state.tools, setTools: (r) => { state.tools = r; },
+        chats: () => state.chats, setChats: (r) => { state.chats = r; } });
+      paint("first", "host", () => setKids(firstHost, firstRun.node));
+      firstRun.update(!ready("first"));
       return;
     }
     if (kind === "loading") {
@@ -2527,6 +2532,7 @@ async function viewHome() {
     ticking = true;
     try {
       await state.refreshWaiting();
+      if (firstRun && bodyKind === "first") { firstRun.update(); await firstRun.tick(); }       // reads the tools quietly; the chats are the ones the line above read
       if (advancedPart) await advancedPart.refresh();
     } finally { ticking = false; }
   };
@@ -3002,6 +3008,144 @@ function homeToolStep(toolReady, rows, glance) {
   if (held) return { done: false, line: `這台電腦的 ${held.name} 有管理員設定，VBear 不能用它聊天。` };
   if (glance.some((g) => g.state === "unverified")) return { done: false, line: "AI 工具已就緒，第一次聊天前要先做一次安全檢查（建立 CEO 後會帶你做）。" };
   return { done: false, line: toolReady ? "AI 工具已就緒，但聊天現在還不能用，到「看 AI 工具」看原因。" : unread };
+}
+// ---- the first run on the home page (v0.25, P52-1, ADR 0017) ----
+// A person with no employee picks one AI here, prepares it with the start-up page's own pieces (setupPickerNode, setupKit) and makes the CEO with the CEO page's own request
+// (ceoCreate): one page instead of three. Every step is the person's own press: nothing is chosen, checked, logged in or made by the page. The safety check is the
+// start-up page's one button (its first press only opens the confirmation with the whole cost; 「確認，開始」 sends). Reads on its own: the tools (at the 5-second refresh, quietly),
+// the daily limit and the first-CEO plan (once each); it never reads the chats itself (the home page already does).
+const FIRST_TITLE = "先選一家你有在用的 AI";
+const FIRST_SUB = "選了就能開始聊，之後隨時可以再加。";
+const FIRST_LOOKING = "正在看你的 AI 工具…";
+const FIRST_UNREAD = "讀不到你的 AI 工具的狀態。";
+const FIRST_SETUP_LINK = "到開始設定看全部 AI 工具";
+const FIRST_PLAN_UNREAD = "讀不到建立 CEO 需要的資料，請稍後再試。";
+function homeFirstRun(env) {
+  let picked = setupPickRead();
+  let loading = true;
+  let plan = null;                 // the answer of GET /api/first-ceo for the tool in `planFor` (null: not read, or it could not be)
+  let planFor = "";                // the tool the plan was asked for ("" : not asked); the answer is dropped when the person chose another since
+  let planDone = false;
+  let dailyState = "";             // "" | "asking" | "done"
+  let dailyBox = null;
+  let creating = false;
+  let nameTouched = false;
+  let lastKey = "";
+  const host = el("section", { class: "section home-block home-first-run", "data-home": "first-run" });
+  // these are made once and put back at every drawing, so what is typed, an open fold and a disabled button survive it
+  const name = el("input", { type: "text", maxlength: String(CEO_NAME_MAX), "aria-label": "CEO 的名字", autocomplete: "off", "data-home": "first-ceo-name" });
+  name.value = "CEO";
+  name.addEventListener("input", () => { nameTouched = true; });
+  const errorBox = el("div", { "data-home": "first-ceo-error", role: "alert" });
+  const go = el("button", { type: "button", class: "btn primary", "data-home": "first-ceo-create" }, "建立 CEO，開始聊");
+  const fail = (msg) => setKids(errorBox, msg ? notice("bad", msg) : null);
+  const kit = setupKit({ alive: env.alive, tools: env.tools, setTools: env.setTools, chats: env.chats, setChats: env.setChats, picked: () => picked, draw: () => draw(), quietChats: false });
+  go.addEventListener("click", async () => {
+    if (creating || !ceoStepWanted(plan) || plan.tool !== picked) return;
+    const nm = name.value.trim();
+    if (!nm) { fail("請幫 CEO 取個名字，不能空白。"); return; }
+    creating = true; go.disabled = true; fail("");
+    try {
+      await ceoCreate(plan, nm, typeof plan.instructions === "string" ? plan.instructions : "");
+    } catch (e) {
+      fail("沒有建立成功：" + e.message);
+      creating = false; go.disabled = false;
+    }
+  });
+  const askPlan = () => {
+    const forTool = picked;
+    planFor = forTool; plan = null; planDone = false;
+    ceoPlan(forTool).then((p) => {
+      if (!env.alive() || planFor !== forTool) return;
+      plan = p; planDone = true;
+      if (p && typeof p.name === "string" && !nameTouched) name.value = p.name;
+      draw();
+    });
+  };
+  const askDaily = () => {
+    if (dailyState) return;
+    dailyState = "asking";
+    api.get("/api/setup/daily-limit").then((r) => r, () => null).then((r) => {
+      if (!env.alive()) return;
+      dailyBox = setupDailyBox(r && typeof r.daily_usd === "number" ? r.daily_usd : null);
+      dailyState = "done";
+      draw();
+    });
+  };
+  const choose = (id) => { setupPickWrite(id); picked = id; draw(); };
+  const recheckBtn = () => {
+    const b = el("button", { class: "btn small", type: "button", "data-home": "first-recheck" }, "重新檢查");
+    b.addEventListener("click", () => kit.run(b, () => kit.refresh(false, true)));
+    return b;
+  };
+  // the CEO part of a chosen tool that can chat now: the name, the mode line and the button (nothing is made before the press)
+  const ceoPart = (vendor) => {
+    if (!planDone) return el("p", { class: "small muted", "data-home": "first-ceo-loading" }, "正在準備建立 CEO 要用的資料…");
+    if (!ceoStepWanted(plan) || plan.tool !== vendor.id) {
+      const again = el("button", { class: "btn small", type: "button", "data-home": "first-ceo-retry" }, "再讀一次");
+      again.addEventListener("click", () => { planFor = ""; draw(); });
+      return el("div", { "data-home": "first-ceo" }, notice("info", plan && typeof plan.reason === "string" && plan.reason ? plan.reason : FIRST_PLAN_UNREAD), el("div", { class: "row" }, again));
+    }
+    return el("div", { class: "home-first-ceo", "data-home": "first-ceo" },
+      el("label", { class: "ceo-field" }, el("span", null, "CEO 的名字"), name),
+      el("p", { class: "small", "data-home": "first-ceo-mode" }, CEO_MODE),
+      vendor.id === "agy" ? el("p", { class: "small", "data-home": "first-ceo-agy" }, CEO_AGY_NOTE) : null,
+      el("p", { class: "small muted", "data-home": "first-ceo-cost" }, CEO_COST),
+      errorBox,
+      el("div", { class: "row" }, go));
+  };
+  const frame = () => [el("h2", { class: "home-first-title" }, FIRST_TITLE), el("p", { class: "small muted" }, FIRST_SUB)];
+  const foot = () => el("p", { class: "small muted home-first-foot" }, el("a", { href: "#/setup", "data-home": "first-setup-link" }, FIRST_SETUP_LINK));
+  function draw() {
+    if (!env.alive()) return;
+    const keep = document.activeElement;
+    const tools = env.tools(), chats = env.chats();
+    const rows = tools && typeof tools === "object" && Array.isArray(tools.tools) ? tools.tools : null;
+    let body;
+    if (loading) {
+      body = [homeLoadingLine("first-run", FIRST_LOOKING), setupPickerNode(() => null, () => {})];
+    } else if (!rows) {
+      body = [notice("warn", FIRST_UNREAD), el("div", { class: "row" }, (() => {
+        const b = el("button", { class: "btn small", type: "button", "data-home": "first-retry" }, "再讀一次");
+        b.addEventListener("click", () => kit.run(b, () => kit.refresh(false, true)));
+        return b;
+      })())];
+    } else if (!setupVendorOf(picked)) {
+      body = [el("div", { "data-home": "first-pick" }, setupPickerNode((v) => setupVendorStatus(v, tools, chats), choose))];
+    } else {
+      const vendor = setupVendorOf(picked);
+      const row = setupRowOf(tools, vendor.id);
+      const st = setupVendorStatus(vendor, tools, chats);
+      if (planFor !== picked && st.kind === "ready") askPlan();
+      body = [
+        el("div", { class: "setup-picked", "data-setup": "picked" },
+          el("p", { class: "setup-text" }, `你選了：${vendor.maker}（${vendor.tool}）`),
+          el("button", { class: "btn small", type: "button", "data-setup": "change-pick", on: { click: () => { picked = ""; draw(); } } }, "換一家")),
+        el("div", { "data-home": "first-prepare" },
+          row ? el("ul", { class: "setup-list" }, kit.toolCard(row, true)) : notice("warn", `讀不到 ${vendor.maker} 這個 AI 工具的狀態。`),
+          el("div", { class: "row" }, recheckBtn())),
+        st.kind === "ready" ? ceoPart(vendor) : el("p", { class: "small", "data-home": "first-reason" }, "還不能建立 CEO：" + st.text),
+      ];
+    }
+    if (!loading && rows) askDaily();
+    setKids(host, frame(), body, !loading && rows ? dailyBox : null, foot());
+    if (keep && keep !== document.body && host.contains(keep)) keep.focus();
+  }
+  // `isLoading` (optional): whether the tools and the chats are still being read. Draws only when what the block shows changed.
+  const update = (isLoading) => {
+    if (typeof isLoading === "boolean") loading = isLoading;
+    const tools = env.tools(), chats = env.chats();
+    const key = JSON.stringify([loading, tools ? setupToolKey(tools.tools) : null, chats ? setupChatsKey(chats) : null]);
+    if (key === lastKey) return;
+    lastKey = key;
+    draw();
+  };
+  const tick = async () => {
+    if (loading || document.hidden || kit.isBusy() || creating || !env.tools()) return;
+    await kit.refresh(true);
+  };
+  update(true);
+  return { node: host, update, tick };
 }
 function homeFirstSteps(toolsRes, chatsRes, loading) {
   const rows = toolsRes && typeof toolsRes === "object" && Array.isArray(toolsRes.tools) ? toolsRes.tools : null;
@@ -14494,54 +14638,37 @@ function setupCheckNode(id, row, chats, st, on) {
 const setupCheck = new Map();          // tool id -> { phase, try, verifyError, version }
 // ---------- end of the setup picker -------------------------------------------------------------------------------------
 
-async function viewSetup() {
-  const token = seq;
-  setupTry.clear();
-  setupCheck.clear();
-  let picked = setupPickRead();
-  const first = claim(token);
-  if (token !== seq) return;
-  // The frame first: the title, the sentence and the cards (or the chosen tool) are drawn before any answer is back; what is still being read says so.
-  const frame = () => {
-    const vendor = setupVendorOf(picked);
-    return vendor
-      ? el("div", { "data-setup": "page" }, el("p", { class: "setup-text", "data-setup": "picked" }, `你選了：${vendor.maker}（${vendor.tool}）`),
-        el("p", { class: "small muted", "data-setup": "loading" }, SETUP_LOOKING))
-      : el("div", { "data-setup": "page" }, setupPickerNode(() => null, () => {}));
-  };
-  setKids(first, el("h1", null, SETUP_TITLE), el("p", { class: "lede" }, SETUP_LEDE), frame());
-  const got = (p) => p.then((value) => ({ value }), (error) => ({ error }));
-  const [toolsGot, chatsGot, dailyGot] = await Promise.all([got(api.get("/api/setup/tools?force=1")), got(api.get("/api/chats")), got(api.get("/api/setup/daily-limit"))]);
-  const main = claim(token);
-  if (token !== seq) return;
-  if (toolsGot.error) {          // coming in is a fresh look; a tool list that cannot be read is said so
-    setKids(main, el("h1", null, SETUP_TITLE), notice("bad", "讀不到 AI 工具的狀態：" + toolsGot.error.message));
-    return;
-  }
-  let shown = toolsGot.value;
-  let chats = chatsGot.error ? null : chatsGot.value;          // null: the chat state could not be read
-  let dailyNow = !dailyGot.error && typeof dailyGot.value.daily_usd === "number" ? dailyGot.value.daily_usd : null;      // the daily limit in force, or null when it could not be read
+// ---------- setup kit (v0.25, P52-1) ------------------------------------------------------------------------------------
+// The part of the start-up page that prepares ONE chosen tool (its card with the install and login buttons, the list of checks and the one button with its
+// confirmation) is a function of its own, so the home page of a person with no employee uses the same pieces and sends the same requests (ADR 0017). The page that
+// makes it says how it reads and writes what it shows. ctx: { alive(): this page is still the one shown, tools() / setTools(res): the answer of
+// GET /api/setup/tools, chats() / setChats(res): the answer of GET /api/chats (null: not read), picked(): the tool id the person chose, draw(): draw the page again,
+// quietChats: false when a quiet refresh must not read the chats (the home page already reads them) }.
+function setupChatsKey(c) {
+  return JSON.stringify(SETUP_VENDORS.map((v) => { const s = setupSupportOf(v.id, c); return s ? [s.state, s.version, s.running, s.result, s.resultMessage, s.resultVersion] : null; }));
+}
+function setupKit(ctx) {
   let busy = false;
-  const host = el("div", { "data-setup": "page" });
-  const chatsKey = (c) => JSON.stringify(SETUP_VENDORS.map((v) => { const s = setupSupportOf(v.id, c); return s ? [s.state, s.version, s.running, s.result, s.resultMessage, s.resultVersion] : null; }));
-  const checkRunning = () => { const s = picked ? setupSupportOf(picked, chats) : null; return !!s && s.running; };
+  const draw = () => ctx.draw();
+  const checkRunning = () => { const id = ctx.picked(); const s = id ? setupSupportOf(id, ctx.chats()) : null; return !!s && s.running; };
   const readChats = async () => {
     let next = null;
     try { next = await api.get("/api/chats"); } catch (e) { next = null; }
-    if (token !== seq) return false;
-    const changed = chatsKey(next) !== chatsKey(chats);
-    chats = next;
+    if (!ctx.alive()) return false;
+    const changed = setupChatsKey(next) !== setupChatsKey(ctx.chats());
+    ctx.setChats(next);
     return changed;
   };
   const refresh = async (quiet, force) => {
     try {
       const next = await api.get(force ? "/api/setup/tools?force=1" : "/api/setup/tools");
-      if (token !== seq) return;
+      if (!ctx.alive()) return;
+      const shown = ctx.tools() || {};
       const toolsChanged = setupToolKey(next.tools) !== setupToolKey(shown.tools) || next.setup_done !== shown.setup_done;
-      shown = next;
+      ctx.setTools(next);
       // the chat state is read again when the person asked, when a tool changed, and while a safety check runs (reads only)
-      const chatsChanged = (!quiet || force || toolsChanged || checkRunning()) ? await readChats() : false;
-      if (token !== seq) return;
+      const chatsChanged = (!quiet || force || (ctx.quietChats !== false && (toolsChanged || checkRunning()))) ? await readChats() : false;
+      if (!ctx.alive()) return;
       if (toolsChanged || chatsChanged || !quiet) draw();
       if (!quiet) toast("已重新檢查");
     } catch (e) { if (!quiet) toast("重新檢查失敗：" + e.message); }
@@ -14576,7 +14703,7 @@ async function viewSetup() {
       el("p", { class: "setup-text", "data-setup": "blurb" }, row.blurb || ""),
       v.note ? el("p", { class: "small muted setup-text", "data-setup": "note" }, v.note) : null,
       buttons.length ? el("div", { class: "setup-actions" }, buttons) : null,
-      el("div", { "data-setup-slot": "try" }, isPicked ? setupCheckNode(row.id, row, chats, setupCheck.get(row.id), checkOn) : tryBox(row)));
+      el("div", { "data-setup-slot": "try" }, isPicked ? setupCheckNode(row.id, row, ctx.chats(), setupCheck.get(row.id), checkOn) : tryBox(row)));
   };
   const tryBox = (row) => {
     const v = setupTryView(row, setupTry.get(row.id));
@@ -14616,7 +14743,7 @@ async function viewSetup() {
     confirm: async (id) => {
       if (busy) return;
       busy = true;
-      const before = setupSupportOf(id, chats);
+      const before = setupSupportOf(id, ctx.chats());
       const st = { phase: "trying", version: before ? before.version : "", try: null, verifyError: "" };
       setupCheck.set(id, st);
       draw();
@@ -14625,30 +14752,69 @@ async function viewSetup() {
           const r = await api.post(`/api/setup/tools/${encodeURIComponent(id)}/try`, { confirmed: true });
           st.try = { success: r.success === true, message: String(r.message || "") };
         } catch (e) { st.try = { success: false, message: e.message }; }
-        if (token === seq && st.try.success) {
+        if (ctx.alive() && st.try.success) {
           st.phase = "verifying";
           draw();
           await readChats();
-          const now = setupSupportOf(id, chats);
-          if (token === seq && now && now.state === "unverified" && !now.running) {
+          const now = setupSupportOf(id, ctx.chats());
+          if (ctx.alive() && now && now.state === "unverified" && !now.running) {
             try { await api.post("/api/chat-support/verify", { engine: id, version: st.version || undefined }); }
             catch (e) { st.verifyError = e.message; }
           }
         }
       } finally { st.phase = "done"; busy = false; }
-      if (token !== seq) return;
+      if (!ctx.alive()) return;
       await refresh(true, true);
       draw();
     },
   };
-  const dailySummary = el("summary");
-  const updateDailySummary = () => { dailySummary.textContent = dailyNow === null
+  return { toolCard, run, refresh, readChats, isBusy: () => busy };
+}
+
+// The daily spending limit as a folded box, as the start-up page has always had it: `current` is the limit in force, or null when it could not be read.
+function setupDailyBox(current) {
+  const summary = el("summary");
+  const update = (now) => { summary.textContent = now === null
     ? "每天最多花多少（目前的值：未知；預設 US$3）"
-    : `每天最多花 ${setupUsd(dailyNow)}${dailyNow === SETUP_DAILY_DEFAULT ? "（預設，可以不用動）" : ""}`; };
-  updateDailySummary();
-  const dailyBox = el("details", { class: "section setup-daily", "data-setup-slot": "daily-limit" }, dailySummary,
+    : `每天最多花 ${setupUsd(now)}${now === SETUP_DAILY_DEFAULT ? "（預設，可以不用動）" : ""}`; };
+  update(current);
+  return el("details", { class: "section setup-daily", "data-setup-slot": "daily-limit" }, summary,
     el("p", { class: "small muted" }, "之後可以在『設定』的『用量與上限』改。"),
-    dailyLimitEditor({ current: dailyNow, onSaved: (res) => { dailyNow = res.daily_usd; updateDailySummary(); } }));
+    dailyLimitEditor({ current, onSaved: (res) => update(res.daily_usd) }));
+}
+// ---------- end of the setup kit ----------------------------------------------------------------------------------------
+
+async function viewSetup() {
+  const token = seq;
+  setupTry.clear();
+  setupCheck.clear();
+  let picked = setupPickRead();
+  const first = claim(token);
+  if (token !== seq) return;
+  // The frame first: the title, the sentence and the cards (or the chosen tool) are drawn before any answer is back; what is still being read says so.
+  const frame = () => {
+    const vendor = setupVendorOf(picked);
+    return vendor
+      ? el("div", { "data-setup": "page" }, el("p", { class: "setup-text", "data-setup": "picked" }, `你選了：${vendor.maker}（${vendor.tool}）`),
+        el("p", { class: "small muted", "data-setup": "loading" }, SETUP_LOOKING))
+      : el("div", { "data-setup": "page" }, setupPickerNode(() => null, () => {}));
+  };
+  setKids(first, el("h1", null, SETUP_TITLE), el("p", { class: "lede" }, SETUP_LEDE), frame());
+  const got = (p) => p.then((value) => ({ value }), (error) => ({ error }));
+  const [toolsGot, chatsGot, dailyGot] = await Promise.all([got(api.get("/api/setup/tools?force=1")), got(api.get("/api/chats")), got(api.get("/api/setup/daily-limit"))]);
+  const main = claim(token);
+  if (token !== seq) return;
+  if (toolsGot.error) {          // coming in is a fresh look; a tool list that cannot be read is said so
+    setKids(main, el("h1", null, SETUP_TITLE), notice("bad", "讀不到 AI 工具的狀態：" + toolsGot.error.message));
+    return;
+  }
+  let shown = toolsGot.value;
+  let chats = chatsGot.error ? null : chatsGot.value;          // null: the chat state could not be read
+  const dailyNow = !dailyGot.error && typeof dailyGot.value.daily_usd === "number" ? dailyGot.value.daily_usd : null;      // the daily limit in force, or null when it could not be read
+  const host = el("div", { "data-setup": "page" });
+  const kit = setupKit({ alive: () => token === seq, tools: () => shown, setTools: (v) => { shown = v; }, chats: () => chats, setChats: (v) => { chats = v; },
+    picked: () => picked, draw: () => draw() });
+  const dailyBox = setupDailyBox(dailyNow);
   const dailySection = () => dailyBox;
   const choose = (id) => { setupPickWrite(id); picked = id; draw(); };
   const draw = () => {
@@ -14656,19 +14822,19 @@ async function viewSetup() {
     const anyReady = rows.some((r) => r && r.ready === true);
     const canLeave = anyReady || shown.setup_done === true;
     const leave = el("button", { class: "btn primary", type: "button", "data-setup": "leave", disabled: !canLeave }, SETUP_LEAVE_LABEL);
-    leave.addEventListener("click", () => run(leave, async () => {
+    leave.addEventListener("click", () => kit.run(leave, async () => {
       if (shown.setup_done !== true) await api.post("/api/config", { setup_done: true });
       location.hash = ceoStepShown(await ceoPlan()) ? "#/ceo" : "#/";          // P38-8: no card to chat with yet: make the first CEO (P48-3: also when the picked AI is not ready, so the page says why)
     }));
     const recheck = el("button", { class: "btn", type: "button", "data-setup": "recheck" }, "重新檢查");
-    recheck.addEventListener("click", () => run(recheck, () => refresh(false, true)));
+    recheck.addEventListener("click", () => kit.run(recheck, () => kit.refresh(false, true)));
     const vendor = setupVendorOf(picked);
     const pickedRow = vendor ? setupRowOf(shown, vendor.id) : null;
     const top = vendor
       ? [el("div", { class: "setup-picked", "data-setup": "picked" },
           el("p", { class: "setup-text" }, `你選了：${vendor.maker}（${vendor.tool}）`),
           el("button", { class: "btn small", type: "button", "data-setup": "change-pick", on: { click: () => { picked = ""; draw(); } } }, "換一家")),
-        pickedRow ? el("ul", { class: "setup-list" }, toolCard(pickedRow, true)) : notice("warn", `讀不到 ${vendor.maker} 這個 AI 工具的狀態。`)]
+        pickedRow ? el("ul", { class: "setup-list" }, kit.toolCard(pickedRow, true)) : notice("warn", `讀不到 ${vendor.maker} 這個 AI 工具的狀態。`)]
       : [setupPickerNode((v) => setupVendorStatus(v, shown, chats), choose)];
     const others = vendor ? rows.filter((r) => r && r.id !== vendor.id) : [];
     setKids(host,
@@ -14676,7 +14842,7 @@ async function viewSetup() {
       top,
       dailySection(),
       others.length ? el("details", { class: "section setup-others", "data-setup": "others" }, el("summary", null, SETUP_OTHERS_TITLE),
-        el("ul", { class: "setup-list" }, others.map((r) => toolCard(r, false)))) : null,
+        el("ul", { class: "setup-list" }, others.map((r) => kit.toolCard(r, false)))) : null,
       el("section", { class: "section setup-foot" },
         el("div", { class: "row" }, leave, recheck),
         canLeave ? el("p", { class: "small muted" }, "之後隨時可以從「設定」的「AI 工具」回到這一頁，加其他 AI 工具。")
@@ -14684,7 +14850,7 @@ async function viewSetup() {
   };
   setKids(main, el("h1", null, SETUP_TITLE), el("p", { class: "lede" }, SETUP_LEDE), host);
   draw();
-  setupTick = () => (document.hidden || busy ? Promise.resolve() : refresh(true));
+  setupTick = () => (document.hidden || kit.isBusy() ? Promise.resolve() : kit.refresh(true));
 }
 
 // ---------- the first CEO (P38-8) ---------------------------------------------------------------------------------------------
@@ -14728,9 +14894,9 @@ function ceoPickedTool() {
     return typeof v === "string" && CEO_PICKS.includes(v) ? v : "";
   } catch (_) { return ""; }
 }
-async function ceoPlan() {
+async function ceoPlan(tool) {
   try {
-    const pick = ceoPickedTool();
+    const pick = CEO_PICKS.includes(tool) ? tool : ceoPickedTool();        // v0.25: the home page passes the tool the person chose just now
     const r = await api.get(pick ? `/api/first-ceo?tool=${encodeURIComponent(pick)}` : "/api/first-ceo");       // the same path with the pick as a query (ADR 0014; 15b lists it)
     return r && typeof r === "object" ? r : null;
   } catch (_) { return null; }
@@ -14781,6 +14947,17 @@ async function ceoOpenChat(profileId, opening, reuseId) {
   return true;
 }
 
+// Makes the CEO card (always in safe mode) and opens the chat with it; the opening sentence only goes into the box. The one request of the first CEO: the CEO page's
+// button and the home page's 「建立 CEO，開始聊」 both come here, and only a press of either gets here. Throws with the server's words when it fails.
+async function ceoCreate(plan, name, instructions) {
+  const r = await api.post("/api/agent-profiles", { name, position: plan.position, instructions, launch_mode: "safe",
+    model: { tool: plan.tool, model_id: "" } });
+  const id = r && r.profile && typeof r.profile.id === "string" ? r.profile.id : "";
+  if (!id) throw new Error("建立了，但讀不到員工的編號");
+  await api.post("/api/config", { first_ceo_id: id }).catch(() => {});      // the lobby offers the chat once, if this one is left
+  await ceoOpenChat(id, typeof plan.opening === "string" ? plan.opening : "", "");
+}
+
 async function viewCeo() {
   const token = seq;
   const plan = await ceoPlan();
@@ -14810,12 +14987,7 @@ async function viewCeo() {
     if (!nm) { fail("請幫 CEO 取個名字，不能空白。"); return; }
     busy = true; go.disabled = true; fail("");
     try {
-      const r = await api.post("/api/agent-profiles", { name: nm, position: plan.position, instructions: about.value, launch_mode: "safe",
-        model: { tool: plan.tool, model_id: "" } });
-      const id = r && r.profile && typeof r.profile.id === "string" ? r.profile.id : "";
-      if (!id) throw new Error("建立了，但讀不到員工的編號");
-      await api.post("/api/config", { first_ceo_id: id }).catch(() => {});      // the lobby offers the chat once, if this one is left
-      await ceoOpenChat(id, typeof plan.opening === "string" ? plan.opening : "", "");
+      await ceoCreate(plan, nm, about.value);
     } catch (e) {
       fail("沒有建立成功：" + e.message);
       busy = false; go.disabled = false;

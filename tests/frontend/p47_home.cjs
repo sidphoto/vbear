@@ -455,17 +455,18 @@ function check15c(log, phase, typed, messages) {
     assert.strictEqual(p2.location.hash, "#/chat/c-new");
   });
 
-  await test("fix47 three steps: step 1 is ticked and says 'can chat' only when a chat can start; a policy or an unchecked tool is said as it is", async () => {
-    const step = async (support) => { const page = await home(world({ profiles: [], cards: [], support })); return one(one(page.main, "data-home", "first-steps"), "data-home-step", "1"); };
-    const ok = await step({ state: "verified", detected: "2.1.318" });
-    assert.ok(ok.className.includes("done") && text(ok).includes("可以聊天"));
-    const held = await step({ state: "policy", detected: "2.1.318" });
-    assert.ok(!held.className.includes("done") && !text(held).includes("可以聊天") && text(held).includes("管理員設定"), text(held));
-    const unchecked = await step({ state: "unverified", detected: "2.1.318" });
-    assert.ok(!unchecked.className.includes("done") && !text(unchecked).includes("可以聊天") && text(unchecked).includes("安全檢查"), text(unchecked));
-    const codex = await step({ state: "unknown", codex: { state: "ready" } });
-    assert.ok(codex.className.includes("done"), "any tool that can chat ticks it");
-    assert.ok(all(held, (n) => n.tag === "a" && n.getAttribute("href") === "#/setup").length === 1, "still the way to look at the tools");
+  await test("fix47 first run: a tool's card says 'can chat' only when a chat can start; a policy or an unchecked tool is said as it is (P52-1: the card of the picker, in place of step 1)", async () => {
+    const READY = (id, over = {}) => ({ id, ready: true, state: "ready", installed: true, version: "1.2.3", login: "logged_in", ...over });
+    const card = async (support, tools, id = "claude") => { const page = await home(world({ profiles: [], cards: [], support, tools: tools || [READY("claude")] })); return { page, node: one(one(page.main, "data-home", "first-run"), "data-setup-pick", id) }; };
+    const ok = await card({ state: "verified", detected: "2.1.318" });
+    assert.ok(text(ok.node).includes("可以聊天"));
+    const held = await card({ state: "policy", detected: "2.1.318" });
+    assert.ok(!text(held.node).includes("可以聊天") && text(held.node).includes("管理員設定"), text(held.node));
+    const unchecked = await card({ state: "unverified", detected: "2.1.318" });
+    assert.ok(!text(unchecked.node).includes("可以聊天") && text(unchecked.node).includes("安全檢查"), text(unchecked.node));
+    const codex = await card({ state: "unknown", codex: { state: "ready" } }, [READY("codex", { chat_login: { state: "logged_in", problem: "" } })], "codex");
+    assert.ok(text(codex.node).includes("可以聊天"), "any tool that can chat says so");
+    assert.ok(all(held.page.main, (n) => n.tag === "a" && n.getAttribute("href") === "#/setup" && n.getAttribute("data-home") === "first-setup-link").length === 1, "still the way to look at all the tools");
   });
 
   await test("fix47 look: the home box (now the rounded .home-box of P50-1) and the settings' own limit box have the other boxes' style (border, panel colour, the page's font), not the browser's grey box", () => {
@@ -485,26 +486,24 @@ function check15c(log, phase, typed, messages) {
   });
 
   // ---- the three first steps -----------------------------------------------------------------------------------------------
-  await test("no employees: the three steps (the tool, the CEO, the first words) and nothing else; the third is grey; GET only", async () => {
+  await test("no employees: the first-run block (the big line, the three cards) and nothing else; nothing is chosen; GET only (P52-1: in place of the three steps)", async () => {
     const page = await home(world({ profiles: [], cards: [] }));
-    const steps = one(page.main, "data-home", "first-steps");
-    assert.ok(steps);
-    assert.deepStrictEqual(all(steps, (n) => n.getAttribute && n.getAttribute("data-home-step")).map((n) => n.getAttribute("data-home-step")), ["1", "2", "3"]);
-    assert.ok(one(steps, "data-home-step", "1").className.includes("done"), "a ready tool ticks step 1");
-    assert.ok(all(one(steps, "data-home-step", "1"), (n) => n.tag === "a" && n.getAttribute("href") === "#/setup").length === 1);
-    assert.ok(all(one(steps, "data-home-step", "2"), (n) => n.tag === "a" && n.getAttribute("href") === "#/ceo").length === 1);
-    const third = one(steps, "data-home-step", "3");
-    assert.ok(third.className.includes("off") && all(third, (n) => n.tag === "a").length === 0);
+    const first = one(page.main, "data-home", "first-run");
+    assert.ok(first);
+    assert.ok(text(first).includes("先選一家你有在用的 AI"));
+    assert.deepStrictEqual(all(first, (n) => n.getAttribute && n.getAttribute("data-setup-pick")).map((n) => n.getAttribute("data-setup-pick")), ["claude", "codex", "agy"]);
+    assert.strictEqual(one(page.main, "data-home", "first-steps"), null, "the old three steps are not drawn");
+    assert.strictEqual(all(page.main, (n) => n.tag === "a" && n.getAttribute("href") === "#/ceo").length, 0);
     assert.ok(!one(page.main, "data-home", "ask") && !one(page.main, "data-home", "team"));
     assert.deepStrictEqual(check15c(page.log, "draw"), []);
     const none = await home(world({ profiles: [], cards: [], tools: [{ id: "claude", ready: false, state: "not_installed" }], support: { state: "unknown", detected: null } }));
-    assert.ok(!one(one(none.main, "data-home", "first-steps"), "data-home-step", "1").className.includes("done"), "no ready tool: not ticked");
+    assert.ok(!text(one(one(none.main, "data-home", "first-run"), "data-setup-pick", "claude")).includes("可以聊天"), "no ready tool: not said");
   });
 
-  await test("no employees: what waits for the person is still listed above the three steps", async () => {
+  await test("no employees: what waits for the person is still listed above the first-run block", async () => {
     const page = await home(world({ profiles: [], cards: [], waiting: [{ kind: "routine_due", run_id: "run1", routine_id: "r1", name: "晨間整理", slot: "2026-11-10T08:00" }] }));
     const order = all(page.main, (n) => n.tag === "section" && n.getAttribute("data-home")).map((n) => n.getAttribute("data-home"));
-    assert.deepStrictEqual(order, ["waiting", "first-steps"]);
+    assert.deepStrictEqual(order, ["waiting", "first-run"]);
     assert.strictEqual(rows(page.main).length, 1);
   });
 
@@ -646,7 +645,7 @@ function check15c(log, phase, typed, messages) {
   await test("team: a list that could not be read says so (not an empty team); a chats list that could not be read does not make anyone grey", async () => {
     const bad = await home(world({ fail: { "GET /api/agent-profiles": { status: 500, body: { error: "壞了" } } } }));
     assert.ok(text(one(bad.main, "data-home", "team")).includes("讀不到員工"));
-    assert.ok(!one(bad.main, "data-home", "first-steps"), "not the three steps for a team nobody could read");
+    assert.ok(!one(bad.main, "data-home", "first-run"), "not the first run for a team nobody could read");
     const nochat = await home(world({ fail: { "GET /api/chats": { status: 500, body: { error: "壞了" } } } }));
     assert.ok(all(nochat.main, (n) => n.getAttribute && n.getAttribute("data-employee") && n.className.includes("home-avatar-off")).length === 0);
   });
@@ -668,10 +667,10 @@ function check15c(log, phase, typed, messages) {
     assert.deepStrictEqual(check15c(adv.log, "draw"), []);
   });
 
-  await test("advanced mode: with no employees the first game is under 進階, the three steps stay on top", async () => {
+  await test("advanced mode: with no employees the first game is under 進階, the first-run block stays on top", async () => {
     const page = await home(world({ profiles: [], cards: [], config: { advanced_mode: true, onboarding_dismissed: false } }));
     const order = all(page.main, (n) => n.tag === "section" && n.getAttribute("data-home")).map((n) => n.getAttribute("data-home"));
-    assert.deepStrictEqual(order, ["waiting", "first-steps", "advanced"]);
+    assert.deepStrictEqual(order, ["waiting", "first-run", "advanced"]);
     assert.ok(text(one(page.main, "data-home", "advanced")).includes("新手第一局") || byData(page.main, "id", "h-onboarding").length === 1);
     const normal = await home(world({ profiles: [], cards: [], config: { advanced_mode: false, onboarding_dismissed: false } }));
     assert.ok(!text(normal.main).includes("新手第一局"));
