@@ -1,6 +1,6 @@
 """P50-4 documents: ADR 0015 is final (and ADR 0013 points to it), the changelog, both READMEs, the security model, the architecture, the reference and the
 glossary say what v0.23.0 changed and what it did not, the words they quote are the page's, the files of guard rule 17 are there and each carries its number, the
-version is the release's (0.24.0 since P51-4), and nothing P50-4 added names a person or a machine.
+version is the release's (0.25.0 since P52), and nothing P50-4 added names a person or a machine.
 
 Seams: the text of the documents (whitespace flattened), the page's source for the words it uses, and the files of the guard rule."""
 from __future__ import annotations
@@ -55,10 +55,10 @@ class DocumentsTests(unittest.TestCase):
 
     def test_the_changelog_starts_with_this_release_and_the_version_is_the_release(self):
         import vbear
-        self.assertTrue(self.changelog.startswith("# Changelog\n\n## v0.24.0 — "), self.changelog[:60])      # (v0.24.0 put itself in front of v0.23.0's)
+        self.assertTrue(self.changelog.startswith("# Changelog\n\n## v0.25.0 — "), self.changelog[:60])      # (v0.25.0 and v0.24.0 put themselves in front of v0.23.0's)
         self.assertIn("\n## v0.23.0 — ", self.changelog)
         self.assertLess(self.changelog.index("## v0.23.0"), self.changelog.index("## v0.22.1"))
-        self.assertEqual(vbear.__version__, "0.24.0")
+        self.assertEqual(vbear.__version__, "0.25.0")
         self.assertNotIn("Unreleased", self.first)
         self.assertEqual(problems(self.first, "CHANGELOG v0.23.0"), [])
 

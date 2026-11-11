@@ -32,13 +32,20 @@ where you decide.
 > switch, off by default, that asks the Mac only when you press it and carries only a number. Deleting a meeting or a proposal no longer lowers today's spending.
 > Details: [CHANGELOG.md](CHANGELOG.md), [ADR 0014](docs/adr/0014-pick-one-ai-first.md) and the 「Easy start 2 (v0.22)」 section of [docs/SECURITY-MODEL.md](docs/SECURITY-MODEL.md).
 
+> **Since v0.25 a new person does the first run on the home page itself, and the chat page (v0.24) reads like text.** With no employee yet, the home page says 「先選一家你有在用的 AI」: you pick one,
+> get it ready with the same steps as the start-up page (the one button 「試一下，並做聊天安全檢查」 still says the cost and asks first), and press 「建立 CEO，開始聊」, which opens the conversation with the
+> opening sentence only put in the box. You are not sent to the start-up page any more (it is still there, and the home page links to it). Every step is your own press; nothing is picked, checked or created for you.
+> When an AI tool has updated itself to a version VBear does not know yet, the screen says so in plain words (the server's sentence stays under 「技術細節」), and a tool that is not ready says which step is missing.
+> The chat page (v0.24) has no frames around the words, folds the tool lines into one closed line, and the box has a button to change whom you talk to. Details: [CHANGELOG.md](CHANGELOG.md),
+> [ADR 0016](docs/adr/0016-chat-reads-like-text.md), [ADR 0017](docs/adr/0017-first-run-on-one-page.md) and [docs/SECURITY-MODEL.md](docs/SECURITY-MODEL.md) ("First run on one page (v0.25)").
+
 > **Since v0.23 the home page is one greeting and one box (「今天想做什麼？」), and the left bar is 新對話, 最近, then 員工, 工作, 設定.** Colours are neutral greys now.
 > The screens use plain company words since v0.21 (ADR 0013, ADR 0015). **首頁** (home): what waits for your decision (等你決定, a pill that opens in place), your
 > employees (點頭像就聊), today, and a box 「今天想做什麼？」. **員工**: add, set up, chat with and delete employees, plus memory, the shared
 > folder, team templates and the office. **工作**: conversations, 分配工作, 定時工作, meetings, 常用做法 and 「AI 自己做了什麼」. **設定**. The engineering
 > pages (指令視窗, 工作台, 流程, 專案資料夾, AI 工具的外掛清單, 員工詳細資料) are behind **進階模式** in 設定 → 顯示: it only adds them to the menu and shows
-> paths and diagnostics, it changes no permission, and every old address still opens. A new person sees three steps on the home page: get an AI tool
-> ready, create a CEO, say the first sentence. The daily spending limit is in 設定 → **用量與上限** (closed until you open it; you can type your own
+> paths and diagnostics, it changes no permission, and every old address still opens. A new person does the first run on the home page (v0.25): pick an AI,
+> get it ready, create a CEO. The daily spending limit is in 設定 → **用量與上限** (closed until you open it; you can type your own
 > amount). The game words and the pictures in the rest of this page describe the engineering view of v0.20; [GLOSSARY.md](GLOSSARY.md) says which
 > word is now which.
 
@@ -492,8 +499,8 @@ install and login for you.
 2. **Open VBear.** The first time, the app shows a short page, 第一次打開 VBear, with these same steps and a picture, then the
    start-up page (see [The start-up page](#the-start-up-page-開始設定)). Once an AI tool is ready the app opens its own window on the home page, 首頁. The bar on the left has 新對話 (back to the box on the home page), 最近 (the employees you talked with lately) and, smaller, 員工, 工作 and 設定
    (with 進階模式 on, also 指令視窗, 工作台, 流程, 專案資料夾, AI 工具的外掛清單 and 員工詳細資料; on a phone-width window the bar is a drawer behind a button 選單 in a bar at the top). VBear lists the skills and agent roles it finds on your Mac (read-only; it
-   changes none of them). With no employee yet, the home page shows three steps: get an AI tool ready, create a CEO (建立 CEO，開始聊 opens the chat
-   with him, the opening sentence already in the box; you press 送出 yourself), and say the first sentence.
+   changes none of them). With no employee yet (v0.25), the home page does the first run in one place: pick the AI you use, get it ready (the same steps as the start-up page, and the safety check still asks first), and press
+   建立 CEO，開始聊, which opens the chat with him, the opening sentence already in the box; you press 送出 yourself. The home page no longer sends you to the start-up page.
 3. **Collect, bring in a project, and play.** This is the engineering route with git task cards: it is on the 進階 part of the home page and in the
    進階 menu once 進階模式 is on (the card pool is 員工詳細資料 there). The everyday route is 員工 → 新增員工 → 聊天.
    - Open **角色卡池** and press **用起手牌組開始** for three ready cards (CEO, 全端工程師 and 審查員 for the review gate),

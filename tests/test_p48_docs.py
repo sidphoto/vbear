@@ -100,7 +100,7 @@ class ChangelogTests(unittest.TestCase):
     def test_the_release_heading_is_first_and_not_unreleased(self):
         # (v0.22.1 put its small section in front of v0.22.0's: the heading of v0.22.0 is still there, in front of v0.21.0's)
         self.assertIn("\n## v0.22.0 — easier to pick up, part 2 (好上手 2)\n", self.text)
-        self.assertRegex(self.text, r"\A# Changelog\n\n## v0\.(?:22\.[01]|23\.0|24\.0) — ")       # (v0.23.0 and v0.24.0 put themselves in front)
+        self.assertRegex(self.text, r"\A# Changelog\n\n## v0\.(?:22\.[01]|23\.0|24\.0|25\.0) — ")       # (v0.23.0, v0.24.0 and v0.25.0 put themselves in front)
         self.assertLess(self.text.index("## v0.22.0"), self.text.index("## v0.21.0"))
         self.assertNotIn("Unreleased", self.first)
 
@@ -262,7 +262,7 @@ class GlossaryTests(unittest.TestCase):
 class VersionAndWalkTests(unittest.TestCase):
     def test_the_version_is_the_release(self):
         import vbear
-        self.assertEqual(vbear.__version__, "0.24.0")                       # (v0.24.0 bumped it; v0.23.0's, v0.22.1's and v0.22.0's sections stay below)
+        self.assertEqual(vbear.__version__, "0.25.0")                       # (v0.25.0 bumped it; v0.24.0's, v0.23.0's, v0.22.1's and v0.22.0's sections stay below)
         self.assertIn("## v0.22.0", raw("CHANGELOG.md"))
         self.assertIn("## v0.22.1", raw("CHANGELOG.md"))
 

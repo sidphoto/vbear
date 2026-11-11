@@ -75,8 +75,8 @@ class ChangelogAndModelTests(unittest.TestCase):
 
     def test_the_release_is_first_and_the_version_is_the_release(self):
         self.assertIn("\n## v0.22.1 — Claude Code 2.1.322 and Codex 0.167.0\n", self.text)            # (v0.23.0 put itself in front of it)
-        self.assertTrue(self.text.startswith("# Changelog\n\n## v0.24.0 — "), self.text[:60])      # (v0.24.0 put itself in front of v0.23.0's)
-        self.assertEqual(vbear.__version__, "0.24.0")
+        self.assertTrue(self.text.startswith("# Changelog\n\n## v0.25.0 — "), self.text[:60])      # (v0.25.0 put itself in front of v0.24.0's)
+        self.assertEqual(vbear.__version__, "0.25.0")
         self.assertNotIn("Unreleased", self.first)
 
     def test_the_changelog_says_what_was_added_what_was_not_and_what_is_still_to_do(self):
