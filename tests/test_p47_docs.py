@@ -197,9 +197,12 @@ class SecurityModelTests(unittest.TestCase):
             self.assertIn(word, self.section, word)
 
     def test_the_sentences_it_quotes_are_the_pages(self):
-        for words in ("允許這一次", "改內容再允許", "拒絕", "技術細節", "保護範圍（沙盒）", "用量與上限", "想做什麼？跟 CEO 說"):
+        for words in ("允許這一次", "改內容再允許", "拒絕", "技術細節", "保護範圍（沙盒）", "用量與上限"):
             self.assertTrue(words in self.app, words)
             self.assertTrue(words in self.section, words)
+        # P50-1: the box under 「想做什麼？跟 CEO 說」 became the greeting 「今天想做什麼？」 (the v0.21 section keeps quoting the old words as that version's)
+        self.assertTrue("想做什麼？跟 CEO 說" in self.section)
+        self.assertTrue("今天想做什麼？" in self.app)
         self.assertTrue("到設定調高" in self.app)
 
     def test_the_old_words_are_no_longer_quoted_as_the_page_says_them(self):

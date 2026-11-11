@@ -2309,6 +2309,13 @@ function sectionHead(title, sub, action) {
 // routines page's own requests). The parts of the old lobby (the board, task cards, skill search, recent projects) are under 「進階」 and only in
 // the advanced mode, which decides nothing but what is shown.
 let homeTick = null;     // the refresh of the home page every 5 seconds (route() runs it); null on any other page
+let homeFocusAsk = null; // while the home page is up: puts the cursor in its box (the side bar's 「新對話」 calls it)
+let homeFocusPending = false;   // 「新對話」 was pressed on another page: the home page draws its box with the cursor in it
+// The cursor goes into the home box only when nothing else has it (the page, the body and the main area do not count as "something"), and never by itself on a touch
+// screen (the keyboard would cover the page); the person's own press of 「新對話」 always does.
+function homeNothingFocused() { const a = document.activeElement; return !a || a === document.body || a === document.documentElement || a === $main(); }
+function homeCoarsePointer() { try { return !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches); } catch (_) { return false; } }
+function homeFocusBox(input) { if (!input || typeof input.focus !== "function") return; try { input.focus({ preventScroll: true }); } catch (_) { input.focus(); } }
 // The words the progress line uses for the blocks that are still being read (the page names nothing else: it does not know more than which block waits).
 const HOME_LOADING_TEXT = "載入中…";
 const HOME_BLOCK_WORDS = { waiting: "等你決定的事", team: "你的員工", today: "今天的定時工作", first: "你的 AI 工具", advanced: "進階的區塊" };
@@ -2323,7 +2330,7 @@ function homeLater(ms, fn) {
 function homeLoadingLine(key, words) { return el("p", { class: "small muted home-loading", "data-home-loading": key }, words || HOME_LOADING_TEXT); }
 // The frame of a block whose data is not in yet: its title (so the page does not jump) and one line, never a result.
 function homeBlockLoading(key, title) {
-  return el("section", { class: "section home-block", "data-home": key }, sectionHead(title, null), homeLoadingLine(key));
+  return el("section", { class: "section home-block", "data-home": key }, title ? sectionHead(title, null) : null, homeLoadingLine(key));
 }
 
 // The page draws its frame as soon as the config is in (it decides whether the person is sent to the start-up page), then asks for everything at
@@ -2348,6 +2355,7 @@ async function viewHome() {
   let advancedPart = null;
   let staticError = null;            // the index of skills could not be read (a failed read says so; it does not blank the page)
   let bodyKind = "";
+  let focusDone = false;             // the cursor is put in the box once, when it is first drawn
   let finish;
   const finished = new Promise((r) => { finish = r; });
 
@@ -2356,14 +2364,23 @@ async function viewHome() {
   const noteHost = el("div", { "data-home": "note-host" });
   const bodyHost = el("div", { "data-home": "body" });
   const teamHost = el("div"), todayHost = el("div"), askHost = el("div"), firstHost = el("div"), advancedHost = el("div");
+  let waitingCount = null;           // how many rows wait (null: not known yet); with the kind of the body it decides where the greeting stands
+  state.layout = (m) => { waitingCount = m.rows.length; applyLayout(); };
   const waiting = homeWaiting(state);
   const main = claim(token);
-  const head = [el("h1", null, WORDS.home.use), el("p", { class: "lede" }, "這裡看有什麼等你決定、你的員工，和今天要做的事。")];
-  const drawFrame = () => setKids(main, ...head, noticesHost, waiting.node, bodyHost, noteHost, advancedHost);
+  // The page is a greeting and one box (ADR 0015): the title is only for a screen reader, the column is 720px wide, and the advanced part (a wide grid) is outside it.
+  const title = el("h1", { class: "sr-only", "data-home": "title" }, WORDS.home.use);
+  const column = el("div", { class: "home-page", "data-home": "page", "data-home-layout": "center" }, title, noticesHost, waiting.node, bodyHost, noteHost);
+  const drawFrame = () => setKids(main, column, advancedHost);
+  // the greeting stands about a fifth of the way down while nothing waits and a CEO can be talked to; anything else starts at the top
+  function applyLayout() {
+    const centred = (bodyKind === "team" || bodyKind === "loading" || bodyKind === "") && !waitingCount;
+    column.setAttribute("data-home-layout", centred ? "center" : "top");
+  }
   // A person who has not finished the start-up may be sent there: until the server has settled that, only the title and the line saying what is being waited for are
   // drawn (the blocks of the home page are not shown to someone who is about to be sent away).
   const gating = setupGateWanted(configRes);
-  if (gating) setKids(main, head[0], homeLoadingLine("setup", "正在確認開始設定…")); else drawFrame();
+  if (gating) setKids(main, title, homeLoadingLine("setup", "正在確認開始設定…")); else drawFrame();
 
   // what each block needs before it can say anything; a block that waited 60 seconds is read with what there is
   const NEED = {
@@ -2396,7 +2413,8 @@ async function viewHome() {
     if (kind !== bodyKind) {
       bodyKind = kind;
       for (const k of ["team", "today", "ask", "first"]) delete painted[k];
-      setKids(bodyHost, kind === "first" ? [firstHost] : kind === "team" ? [teamHost, todayHost, askHost] : [teamHost, todayHost]);
+      setKids(bodyHost, kind === "first" ? [firstHost] : kind === "team" ? [askHost, teamHost, todayHost] : [teamHost, todayHost]);
+      applyLayout();
       if (kind === "first" && !back.has("tools")) {        // the three steps need the tools: asked only now, when there is nobody yet
         api.get("/api/setup/tools").catch(() => null).then((r) => land("tools", () => { state.tools = r; }));
       }
@@ -2407,15 +2425,22 @@ async function viewHome() {
       return;
     }
     if (kind === "loading") {
-      paint("team", "loading", () => setKids(teamHost, homeBlockLoading("team", WORDS.employeeList.use)));
+      paint("team", "loading", () => setKids(teamHost, homeBlockLoading("team", null)));
     } else if (kind === "unread") {
-      paint("team", "unread", () => setKids(teamHost, el("section", { class: "section", "data-home": "team" }, sectionHead(WORDS.employeeList.use, null),
+      paint("team", "unread", () => setKids(teamHost, el("section", { class: "section", "data-home": "team" },
         notice("warn", "讀不到員工的資料，所以先不顯示。重新整理看看；還是不行，請到「設定」看一下 VBear 的狀態。"))));
     } else {
       paint("team", "team" + back.has("chats"), () => setKids(teamHost, homeTeam(state)));
     }
-    paint("today", ready("today") ? "in" : "loading", () => setKids(todayHost, ready("today") ? homeToday(state) : homeBlockLoading("today", "今天")));
-    if (kind === "team") paint("ask", ready("ask") ? "in" : "loading", () => setKids(askHost, ready("ask") ? homeAsk(state) : homeBlockLoading("ask", "想做什麼？跟 CEO 說")));
+    paint("today", ready("today") ? "in" : "loading", () => setKids(todayHost, ready("today") ? homeToday(state) : homeBlockLoading("today", null)));
+    if (kind === "team") {
+      paint("ask", ready("ask") ? "in" : "loading", () => setKids(askHost, ready("ask") ? homeAsk(state) : homeAskLoading()));
+      if (ready("ask") && !focusDone && state.askInput) {
+        focusDone = true;
+        if (homeFocusPending || (!homeCoarsePointer() && homeNothingFocused())) homeFocusBox(state.askInput);
+        homeFocusPending = false;
+      }
+    }
   };
   const drawAdvanced = () => {
     if (!advanced) return;
@@ -2503,8 +2528,8 @@ async function viewHome() {
       if (advancedPart) await advancedPart.refresh();
     } finally { ticking = false; }
   };
-  activeViewCleanup = () => { homeTick = null; };
-  // no auto-focus on the boxes: it would scroll the page past what waits for the person
+  homeFocusAsk = () => { if (state.askInput) homeFocusBox(state.askInput); };      // 「新對話」 pressed on the home page puts the cursor back in the box
+  activeViewCleanup = () => { homeTick = null; homeFocusAsk = null; };
   await finished;
 }
 
@@ -2615,17 +2640,6 @@ function homeCeoOf(profiles, conf) {
 function homeCardOf(chatsRes, profileId) {
   const cards = chatsRes && typeof chatsRes === "object" && Array.isArray(chatsRes.cards) ? chatsRes.cards : null;
   return cards ? cards.find((c) => c && c.id === profileId) || null : null;
-}
-function homeWhen(sec, now) {
-  const t = Number(sec);
-  if (!Number.isFinite(t) || t <= 0) return "";
-  const d = new Date(t * 1000);
-  const two = (n) => String(n).padStart(2, "0");
-  const dayStart = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const gap = Math.round((dayStart(now) - dayStart(d)) / 86400000);
-  if (gap === 0) return `${two(d.getHours())}:${two(d.getMinutes())}`;
-  if (gap === 1) return "昨天";
-  return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
 // Opens the chat with an employee, and with `opts.text` sends it, the way the chat page's 送出 does. One call = at most one POST /api/chats (when
@@ -2762,8 +2776,16 @@ function homeRowNode(row, act) {
 }
 // The block: it starts as a frame that says 載入中 and is drawn by `paint(model)` (the model of waitingFold) once its data is in. `paint` returns
 // whether something changed. `state.refreshWaiting()` (set by the page) reads again, with the same GETs as the page.
+// v0.23 (ADR 0015): with N >= 1 things waiting the block is one pill, 有 N 件事等你決定, that opens the old list where it is; with none it is hidden and says
+// nothing; a note about what could not be read stays outside the closed pill, so it is never hidden under it.
 function homeWaiting(state) {
-  const list = el("div", { class: "home-rows", "data-home": "waiting-list" }, homeLoadingLine("waiting"));
+  const loading = homeLoadingLine("waiting");
+  const notesBox = el("div", { class: "home-notes", "data-home": "waiting-notes" });
+  const pillBox = el("div", { class: "home-pill-box" });
+  const rowsBox = el("div", { class: "home-rows", id: "home-waiting-rows", "data-home": "waiting-rows" });
+  showHidden(rowsBox, true);
+  const list = el("div", { class: "home-waiting-body", "data-home": "waiting-list" }, loading);
+  const section = el("section", { class: "section home-block home-waiting", "data-home": "waiting" }, list);
   const note = (m) => notice("warn", m);
   const requests = {
     "wait-start": (id) => api.post(`/api/routines/waiting/${encodeURIComponent(id)}`, { action: "start" }),
@@ -2777,17 +2799,33 @@ function homeWaiting(state) {
     await state.refreshWaiting(true);
     refreshWaitingBar();
   };
+  let open = false;                  // the list is open: it stays so while the rows change under it
+  let pill = null;
+  const toggle = () => {
+    open = !open;
+    showHidden(rowsBox, !open);
+    if (pill) pill.setAttribute("aria-expanded", String(open));
+  };
   const paint = (m) => {
     const key = JSON.stringify([m.rows, m.notes, m.complete]);
     if (key === state.shown) return false;
     state.shown = key;
-    setKids(list,
-      m.notes.map(note),
-      m.rows.length ? el("div", { class: "home-row-list" }, m.rows.map((r) => homeRowNode(r, act)))
-        : el("p", { class: "small muted", "data-home": "waiting-none" }, m.complete ? "現在沒有要你決定的事。" : "目前讀得到的資料裡，沒有要你決定的事。"));
+    const n = m.rows.length;
+    if (!n) open = false;
+    pill = n ? el("button", { type: "button", class: "home-pill", "data-home": "waiting-pill", "aria-expanded": String(open), "aria-controls": "home-waiting-rows", on: { click: toggle } },
+      el("span", { class: "home-dot", "aria-hidden": "true" }), `有 ${n} 件事等你決定`) : null;
+    showHidden(rowsBox, !open);
+    setKids(notesBox, m.notes.map(note));
+    setKids(pillBox, pill);
+    setKids(rowsBox, n ? el("div", { class: "home-row-list" }, m.rows.map((r) => homeRowNode(r, act))) : null);
+    // nothing waits and everything was read: the block takes no room and says nothing; a partial read says so (it does not claim that nothing waits)
+    const quiet = !n && !m.notes.length && m.complete;
+    setKids(list, notesBox, pillBox, rowsBox, !n && !m.notes.length && !m.complete ? el("p", { class: "small muted", "data-home": "waiting-none" }, "目前讀得到的資料裡，沒有要你決定的事。") : null);
+    showHidden(section, quiet);
+    if (state.layout) state.layout(m);
     return true;
   };
-  return { node: el("section", { class: "section home-block", "data-home": "waiting" }, sectionHead(WORDS.waiting.use, null), list), paint };
+  return { node: section, paint };
 }
 
 // ---- 我的員工 ----
@@ -2798,24 +2836,24 @@ function homeAvatar(p, chatsRes) {
   const pos = cardPosition(p);
   const reason = off ? plainWords(card.reason || "現在不能聊天").text : "";
   const btn = el("button", { type: "button", class: `home-avatar${off ? " home-avatar-off" : ""}`, "data-employee": p.id, "data-employee-action": "chat",
-    "aria-label": `和 ${p.name || p.id} 聊天${off ? "（現在不能聊天）" : ""}`, on: { click: () => { openChatWith(p.id); } } },
+    "aria-label": `和 ${p.name || p.id} 聊天${off ? "（現在不能聊天）" : ""}`, title: pos ? CARD_POSITION_LABEL[pos] : undefined, on: { click: () => { openChatWith(p.id); } } },
     el("span", { class: "home-avatar-art", "aria-hidden": "true" }, cardAvatar(p, 3)),
-    el("span", { class: "home-avatar-name" }, p.name || p.id),
-    el("span", { class: "home-avatar-pos small muted" }, pos ? CARD_POSITION_LABEL[pos] : ""));
+    el("span", { class: "home-avatar-name" }, p.name || p.id));
   return el("div", { class: "home-person" }, btn, reason ? el("span", { class: "small muted home-avatar-why", "data-employee-note": p.id }, reason) : null);
 }
+// The last of the row: a plus (its name is for the screen reader and the tooltip).
 function homeNewEmployee(state) {
-  return el("button", { type: "button", class: "btn small", "data-employee-action": "new", on: { click: () => {
+  return el("button", { type: "button", class: "home-new", "data-employee-action": "new", "aria-label": WORDS.newEmployee.use, title: WORDS.newEmployee.use, on: { click: () => {
     if (!state.catalog) { toast("現在還不能新增員工，請稍後再試。"); return; }
     openCardWizard({ catalog: state.catalog, profiles: state.profiles || [], existing: null, onSaved: () => route() });
-  } } }, WORDS.newEmployee.use);
+  } } }, el("span", { "aria-hidden": "true" }, "＋"));
 }
+// A row of small avatars and the plus; no heading (the avatar is a button that says whom it talks to).
 function homeTeam(state) {
   const ceo = homeCeoOf(state.profiles, state.conf);
   const people = [...(ceo ? [ceo] : []), ...state.profiles.filter((p) => !ceo || p.id !== ceo.id)];
-  return el("section", { class: "section home-block", "data-home": "team" },
-    sectionHead(WORDS.employeeList.use, "點頭像就能聊", homeNewEmployee(state)),
-    el("div", { class: "home-people" }, people.map((p) => homeAvatar(p, state.chats))));
+  return el("section", { class: "section home-block home-team", "data-home": "team" },
+    el("div", { class: "home-people" }, people.map((p) => homeAvatar(p, state.chats)), homeNewEmployee(state)));
 }
 
 // ---- 今天 ----
@@ -2840,53 +2878,63 @@ function homeTodayModel(res, now) {
   }
   return { readable: true, total: res.routines.length, left, next: next ? { name: next.name, time: next.time } : null };
 }
+// One grey line under the rest: what is still to come today, with the way to the routines. With no routine, or none left today, there is no line and the block
+// takes no room; a read that failed is said (it is never shown as zero).
 function homeToday(state) {
-  const now = state.now();
-  const m = homeTodayModel(state.routines, now);
-  let line;
+  const m = homeTodayModel(state.routines, state.now());
+  let line = null;
   if (!m.readable) line = "讀不到定時工作，所以看不出今天還有什麼要做。";
-  else if (!m.total) line = "還沒有定時工作。";
-  else if (!m.left) line = "今天沒有還沒到的定時工作。";
-  else line = `今天還有 ${m.left} 件，下一件 ${m.next.time}「${m.next.name}」`;
-  const chats = state.chats && Array.isArray(state.chats.chats) ? state.chats : null;
-  const routineIds = homeRoutineChatIds(state.routines);
-  const names = new Map((state.profiles || []).map((p) => [p.id, p.name || p.id]));
-  const seen = new Set();
-  const recent = [];
-  for (const c of chats ? chats.chats.slice().sort((a, b) => (Number(b.last_at) || 0) - (Number(a.last_at) || 0)) : []) {
-    if (!c || c.problem || routineIds.has(c.id) || typeof c.routine_title === "string" || !(c.turns > 0) || seen.has(c.profile_id) || !names.has(c.profile_id)) continue;
-    seen.add(c.profile_id);
-    recent.push(`${names.get(c.profile_id)}（${homeWhen(c.last_at, now)}）`);
-    if (recent.length >= 3) break;
-  }
-  return el("section", { class: "section home-block", "data-home": "today" },
-    sectionHead("今天", null),
-    el("p", { "data-home-today": "routines" }, line, " ", el("a", { class: "btn small", href: "#/routines" }, "看定時工作")),
-    chats ? (recent.length ? el("p", { class: "small", "data-home-today": "chats" }, "最近聊過：", recent.join("、")) : el("p", { class: "small muted", "data-home-today": "chats" }, "最近還沒聊過天。"))
-      : el("p", { class: "small muted", "data-home-today": "chats" }, "讀不到最近的對話。"));
+  else if (m.left) line = `今天還有 ${m.left} 件，下一件 ${m.next.time}「${m.next.name}」`;
+  const section = el("section", { class: "section home-block home-today", "data-home": "today" },
+    line ? el("p", { class: "small muted", "data-home-today": "routines" }, line, " ", el("a", { href: "#/routines" }, "看定時工作")) : null);
+  if (!line) showHidden(section, true);
+  return section;
 }
 
-// ---- 想做什麼？跟 CEO 說 ----
+// ---- 今天想做什麼？ (the greeting and the box) ----
+const HOME_GREETING = "今天想做什麼？";
+const HOME_EXAMPLES = ["幫我整理今天的待辦", "幫我寫一篇貼文", "每天早上給我一份摘要"];     // shown only before the first chat
+const HOME_ASK_MAX_PX = 208;                                                               // the box grows with its words up to about eight lines
+function homeGreeting() { return el("p", { class: "home-greeting", "data-home": "greeting" }, HOME_GREETING); }
+// The frame of the box while its data is not in: the greeting (so the page does not jump) and one line, never a result.
+function homeAskLoading() { return el("section", { class: "section home-block home-ask", "data-home": "ask" }, homeGreeting(), homeLoadingLine("ask")); }
+function homeAskGrow(input) {
+  const h = Number(input.scrollHeight);
+  if (!Number.isFinite(h) || h <= 0) { input.style.height = ""; return; }
+  input.style.height = Math.min(h, HOME_ASK_MAX_PX) + "px";
+}
+// 17a: an example sentence only puts its words in the box (in place of what was there) and puts the cursor in it. It sends nothing and asks for nothing: the person
+// reads it, may change it, and presses 送出 (or Cmd/Ctrl + Enter) themselves.
+function homeExampleFill(input, sentence) {
+  input.value = sentence;
+  homeAskGrow(input);
+  input.focus();
+}
+// 17c: only Enter together with Cmd or Ctrl sends from the box (a plain Enter makes a new line, so a half-typed sentence is never sent, and nothing is spent by mistake).
+function homeAskKeydown(e, send) {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.isComposing) { e.preventDefault(); send(); }
+}
 function homeAsk(state) {
   const ceo = homeCeoOf(state.profiles, state.conf);
-  const head = sectionHead("想做什麼？跟 CEO 說", null);
+  const block = (...kids) => el("section", { class: "section home-block home-ask", "data-home": "ask" }, homeGreeting(), ...kids);
   if (!ceo) {
-    return el("section", { class: "section home-block", "data-home": "ask" }, head,
+    return block(
       el("p", null, "先建立一位 CEO，就能在這裡直接跟他說。"),
       el("a", { class: "btn primary", href: "#/ceo", "data-home": "ask-ceo" }, "建立 CEO"));
   }
   const card = homeCardOf(state.chats, ceo.id);
   const prep = card ? chatPrepState(card, state.chats) : null;
   if (prep && prep.kind !== "start") {         // cannot chat yet (card off, tool not checked for chat, policy...): one reason and one way to the page that prepares it
-    return el("section", { class: "section home-block", "data-home": "ask" }, head,
+    return block(
       el("p", null, `${ceo.name || "CEO"} 現在還不能聊天：${plainWords(prep.reason || "").text || "原因不明"}`),
       el("a", { class: "btn primary", href: `#/chat?profile=${encodeURIComponent(ceo.id)}`, "data-home": "ask-prepare" }, "先把聊天準備好"));
   }
   const talked = state.chats && Array.isArray(state.chats.chats) ? state.chats.chats.some((c) => c && c.turns > 0 && !c.problem) : false;
-  const input = el("textarea", { rows: "3", maxlength: "20000", "data-home": "ask-input", "aria-label": "要對 CEO 說的話", placeholder: "例如：幫我把下個月的家庭開銷整理成表（Cmd/Ctrl + Enter 送出）",
-    on: { keydown: (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } } } });
+  const input = el("textarea", { rows: "2", maxlength: "20000", "data-home": "ask-input", "aria-label": "要對 CEO 說的話", placeholder: "跟 CEO 說一件你想做的事",
+    on: { keydown: (e) => homeAskKeydown(e, send), input: () => homeAskGrow(input) } });
+  state.askInput = input;
   const result = el("div", { "data-home": "ask-result", "aria-live": "polite" });
-  const button = el("button", { type: "button", class: "btn primary", "data-home": "ask-send", on: { click: () => send() } }, "送出");
+  const button = el("button", { type: "button", class: "btn primary home-send", "data-home": "ask-send", on: { click: () => send() } }, "送出");
   let busy = false;
   async function send() {
     const text = input.value;
@@ -2904,12 +2952,13 @@ function homeAsk(state) {
       else setKids(result, limit ? limitReachedNotice(r.error.message) : notice("bad", r.error.message || "沒有送出"));
     } else if (r.kept) toast(HOME_BUSY_TEXT);
     else if (r.reason) setKids(result, notice("warn", plainWords(r.reason).text));
-    else if (r.ok) input.value = "";
+    else if (r.ok) { input.value = ""; homeAskGrow(input); }
   }
-  return el("section", { class: "section home-block", "data-home": "ask" }, head,
-    talked ? null : el("p", { class: "small" }, "跟 CEO 說第一句話吧。"),
-    el("div", { class: "home-ask-row" }, input, button),
-    el("p", { class: "small muted" }, HOME_CEO_ASK),
+  return block(
+    el("div", { class: "home-box" }, input, el("div", { class: "home-box-bar" }, button)),
+    el("p", { class: "small muted home-hint" }, talked ? null : "跟 CEO 說第一句話吧。", talked ? null : " ", HOME_CEO_ASK, " ", "按 Cmd/Ctrl + Enter 也能送出。"),
+    talked ? null : el("div", { class: "home-examples", "data-home": "ask-examples" },
+      HOME_EXAMPLES.map((sentence) => el("button", { type: "button", class: "home-example", "data-home": "ask-example", on: { click: () => homeExampleFill(input, sentence) } }, sentence))),
     result);
 }
 

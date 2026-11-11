@@ -429,15 +429,17 @@ async function refresh() { assert(tick, "the home page registered a refresh"); t
 const board = (main) => main.find((n) => n.getAttribute && n.getAttribute("id") === "h-board");
 const headings = (main) => main.findAll(isEl("h2")).map(text);
 
-test("the page is the home page (P47-2): title, lede, 等你決定 first, and in the advanced part the board before the search", async () => {
+test("the page is the home page (P47-2; P50-1: a hidden title and the pill 有 N 件事等你決定 first): what waits comes first, and in the advanced part the board before the search", async () => {
   setPage({ flows: flowsOf([flow("awaiting_approval", { attention: true })]) });
   const main = await open();
   assert.strictEqual(text(main.find(isEl("h1"))), "首頁");
-  assert(text(main).includes("這裡看有什麼等你決定、你的員工，和今天要做的事。"));
+  assert(!text(main).includes("這裡看有什麼等你決定、你的員工，和今天要做的事。"), "the sentence under the old title is gone");
   assert(!text(main).includes("先看告示板上輪到你的任務") && !text(main).includes("冒險者大廳"));
   const hs = headings(main);
-  assert.strictEqual(hs[0], "等你決定", "what waits for the person is the first thing");
-  assert(hs.indexOf("進階") > 0 && hs.indexOf("輪到你") > hs.indexOf("進階"), "the old board is under 進階");
+  const blocks = main.findAll((n) => n.getAttribute && ["waiting", "ask", "team"].includes(n.getAttribute("data-home")) && n.tag === "section").map((n) => n.getAttribute("data-home"));
+  assert.strictEqual(blocks[0], "waiting", "what waits for the person is the first thing");
+  assert(/^有 \d+ 件事等你決定$/.test(text(main.find((n) => n.getAttribute && n.getAttribute("data-home") === "waiting-pill"))), "as one pill");
+  assert(hs.indexOf("進階") >= 0 && hs.indexOf("輪到你") > hs.indexOf("進階"), "the old board is under 進階 (P50-1: 進階 is now the first heading; 等你決定 has none)");
   assert.deepStrictEqual(hs.slice(hs.indexOf("輪到你"), hs.indexOf("輪到你") + 2), ["輪到你", "其他進行中的任務"]);
   assert(hs.indexOf("找技能") > hs.indexOf("其他進行中的任務"), "the search stays after the board");
   assert(hs.includes("最近的專案"));

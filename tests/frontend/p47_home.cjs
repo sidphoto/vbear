@@ -204,12 +204,12 @@ function check15c(log, phase, typed, messages) {
   });
 
   // ---- the home page, normal mode ----------------------------------------------------------------------------------------
-  await test("home: title 首頁; waiting, team, today and ask are there, in this order; the old lobby is not; drawing sends nothing; no amount of money", async () => {
+  await test("home: title 首頁 (hidden, for the screen reader); waiting, ask, team and today are there, in this order (P50-1: the box comes before the team); the old lobby is not; drawing sends nothing; no amount of money", async () => {
     const W = world({ chats: [chatRow("c1", "p-ceo")] });
     const page = await home(W);
     assert.strictEqual(text(all(page.main, (n) => n.tag === "h1")[0]), "首頁");
     const order = all(page.main, (n) => n.getAttribute && ["waiting", "team", "today", "ask"].includes(n.getAttribute("data-home"))).filter((n) => n.tag === "section").map((n) => n.getAttribute("data-home"));
-    assert.deepStrictEqual(order, ["waiting", "team", "today", "ask"]);
+    assert.deepStrictEqual(order, ["waiting", "ask", "team", "today"]);
     const t = text(page.main);
     assert.ok(!/US\$|\$|金額|花了|花費/.test(t), "no money on the home page: " + t.match(/US\$[^ ]*|花[^，。]{0,6}/));
     assert.ok(!t.includes("冒險者大廳") && !t.includes("任務告示板") && !t.includes("新手第一局"));
@@ -217,9 +217,10 @@ function check15c(log, phase, typed, messages) {
     assert.deepStrictEqual(check15c(page.log, "draw"), []);
   });
 
-  await test("home: with nobody waiting the waiting block says so, in words", async () => {
+  await test("home: with nobody waiting (everything read) the waiting block takes no room and says nothing (P50-1: no 現在沒有要你決定的事 line any more); it is not claimed in words either", async () => {
     const page = await home(world());
-    assert.ok(text(one(page.main, "data-home", "waiting")).includes("現在沒有要你決定的事。"));
+    assert.ok(one(page.main, "data-home", "waiting").getAttribute("hidden") !== null, "hidden");
+    assert.ok(!text(page.main).includes("沒有要你決定的事"));
     assert.strictEqual(rows(page.main).length, 0);
   });
 
@@ -227,7 +228,7 @@ function check15c(log, phase, typed, messages) {
     const W = world({ chats: [chatRow("c-old", "p-acc")], cards: [cardOf(CEO), cardOf(ACCOUNTANT, { can_chat: false, reason: "這張卡的 AI 工具還沒準備好" })] });
     const page = await home(W);
     const ceoBtn = one(page.main, "data-employee", "p-ceo");
-    assert.ok(ceoBtn && text(ceoBtn).includes("小執") && text(ceoBtn).includes("CEO"));
+    assert.ok(ceoBtn && text(ceoBtn).includes("小執") && ceoBtn.getAttribute("title") === "CEO", "the name on the avatar, the position as its tooltip (P50-1)");
     const accBtn = one(page.main, "data-employee", "p-acc");
     assert.ok(text(page.main).includes("這張卡的 AI 工具還沒準備好"), "the reason is under the grey one");
     assert.ok(accBtn.className.includes("home-avatar-off") || accBtn.getAttribute("aria-disabled") === "true", "grey");
@@ -467,11 +468,13 @@ function check15c(log, phase, typed, messages) {
     assert.ok(all(held, (n) => n.tag === "a" && n.getAttribute("href") === "#/setup").length === 1, "still the way to look at the tools");
   });
 
-  await test("fix47 look: the home box and the settings' own limit box have the other boxes' style (border, panel colour, the page's font), not the browser's grey box", () => {
-    for (const sel of [".home-ask-row textarea", "input[data-limit-input]"]) {
-      const rule = CSS.split("}").filter((r) => r.split("{")[0].split(",").some((s) => s.trim() === sel)).join(";");
-      assert.ok(/border:\s*1px solid var\(--line-2\)/.test(rule) && /background:\s*var\(--panel\)/.test(rule) && /font:\s*inherit/.test(rule), `${sel}: ${rule}`);
-    }
+  await test("fix47 look: the home box (now the rounded .home-box of P50-1) and the settings' own limit box have the other boxes' style (border, panel colour, the page's font), not the browser's grey box", () => {
+    const ruleOf = (sel) => CSS.split("}").filter((r) => r.split("{")[0].split(",").some((x) => x.trim() === sel)).join(";");
+    const box = ruleOf(".home-box");
+    assert.ok(/border:\s*1px solid var\(--line-2\)/.test(box) && /background:\s*var\(--panel\)/.test(box), `.home-box: ${box}`);
+    assert.ok(/font:\s*inherit/.test(ruleOf(".home-box textarea")), "the textarea in it has the page's font");
+    const limit = ruleOf("input[data-limit-input]");
+    assert.ok(/border:\s*1px solid var\(--line-2\)/.test(limit) && /background:\s*var\(--panel\)/.test(limit) && /font:\s*inherit/.test(limit), `input[data-limit-input]: ${limit}`);
   });
 
   await test("ask: the CEO is the first CEO of the config when that card is there, else the first employee whose position is CEO", async () => {
@@ -616,12 +619,13 @@ function check15c(log, phase, typed, messages) {
   });
 
   // ---- today -----------------------------------------------------------------------------------------------------------------
-  await test("today: how many routines are still to come today and the next one; the last chats; no amounts; a read that failed is said, not 0", async () => {
+  await test("today: how many routines are still to come today and the next one (one grey line, P50-1: the last chats moved to the side bar); no amounts; a read that failed is said, not 0; none to say: no room", async () => {
     const now = new Date(2026, 10, 10, 12, 0, 0);   // Tuesday, 12:00 (the page's clock is passed in)
     const day = (now.getDay() + 6) % 7;
     const rs = [{ id: "r1", name: "記帳提醒", enabled: true, days: [day], times: ["18:00", "07:00"], runs: [], next: { slot: "x", at: now.getTime() / 1000 + 6 * 3600 } },
       { id: "r2", name: "關著的", enabled: false, days: [day], times: ["19:00"], runs: [] }, { id: "r3", name: "別天", enabled: true, days: [(day + 1) % 7], times: ["20:00"], runs: [] }];
-    const page = await home(world({ routines: rs, chats: [chatRow("c1", "p-ceo", { last_at: now.getTime() / 1000 - 600 }), chatRow("c2", "p-acc", { last_at: now.getTime() / 1000 - 86400 * 3 })] }));
+    const late = { id: "r9", name: "收工整理", enabled: true, days: [0, 1, 2, 3, 4, 5, 6], times: ["23:59"], runs: [] };   // still to come at any time of the day the test runs
+    const page = await home(world({ routines: [late], chats: [chatRow("c1", "p-ceo", { last_at: now.getTime() / 1000 - 600 }), chatRow("c2", "p-acc", { last_at: now.getTime() / 1000 - 86400 * 3 })] }));
     const m = evalIn(page, "typeof homeTodayModel");
     assert.strictEqual(m, "function");
     const model = page.ctx.homeTodayModel(JSON.parse(JSON.stringify({ routines: rs, readable: true })), now);
@@ -629,13 +633,14 @@ function check15c(log, phase, typed, messages) {
     assert.strictEqual(model.next.name, "記帳提醒");
     assert.strictEqual(model.next.time, "18:00");
     const t = text(one(page.main, "data-home", "today"));
-    assert.ok(t.includes("定時工作") && t.includes("小執"), t);
+    assert.ok(t.includes("今天還有 1 件，下一件 23:59「收工整理」") && t.includes("看定時工作"), t);
+    assert.ok(!t.includes("小執") && !t.includes("最近聊過"), "the last chats are not on the home page any more");
     assert.ok(!/US\$/.test(t));
     const bad = await home(world({ fail: { "GET /api/routines": { status: 500, body: { error: "讀不到" } } } }));
     const bt = text(one(bad.main, "data-home", "today"));
     assert.ok(bt.includes("讀不到定時工作") && !/今天(還有|沒有)\s*0/.test(bt), bt);
     const none = await home(world());
-    assert.ok(text(one(none.main, "data-home", "today")).includes("還沒有定時工作"));
+    assert.ok(one(none.main, "data-home", "today").getAttribute("hidden") !== null && !text(one(none.main, "data-home", "today")), "no routine: the block takes no room");
   });
 
   await test("team: a list that could not be read says so (not an empty team); a chats list that could not be read does not make anyone grey", async () => {
@@ -656,7 +661,7 @@ function check15c(log, phase, typed, messages) {
     const heads = all(sec, (n) => n.tag === "h2").map(text);
     for (const h of ["找技能", "最近的專案"]) assert.ok(heads.includes(h), h);
     const order = all(adv.main, (n) => n.tag === "section" && n.getAttribute("data-home")).map((n) => n.getAttribute("data-home"));
-    assert.deepStrictEqual(order, ["waiting", "team", "today", "ask", "advanced"]);
+    assert.deepStrictEqual(order, ["waiting", "ask", "team", "today", "advanced"]);
     assert.ok(t.includes("首頁"));
     const normal = await home(world({ config: { advanced_mode: false } }));
     assert.ok(!one(normal.main, "data-home", "advanced") && !one(normal.main, "id", "h-board") && !one(normal.main, "id", "h-tasks"));

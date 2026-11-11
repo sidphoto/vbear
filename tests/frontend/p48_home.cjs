@@ -304,10 +304,10 @@ function check16dPace(times, forced) {
   const DUE = { kind: "routine_due", name: "晨間整理", run_id: "run-1", slot: "2026-11-10T08:00" };
 
   // ---- 16c: the frame first ---------------------------------------------------------------------------------------------------
-  await test("16c: only /api/config is in: the title, the lede and the three blocks are there and say 載入中; nothing says 'nothing waits' or a zero; only GETs", async () => {
+  await test("16c: only /api/config is in: the title (hidden since P50-1, the sentence under it is gone) and the three blocks are there and say 載入中; nothing says 'nothing waits' or a zero; only GETs", async () => {
     const page = await home(world(), "#/", { hold: GETS });
     assert.strictEqual(text(all(page.main, (n) => n.tag === "h1")[0]), "首頁");
-    assert.ok(all(page.main, (n) => n.className === "lede").length === 1, "the lede is there");
+    assert.ok(all(page.main, (n) => n.tag === "h1")[0].className.includes("sr-only"), "the title is there for the screen reader");
     assert.deepStrictEqual(check16c(page.main, "loading"), []);
     assert.deepStrictEqual(loadingKeys(page.main).sort(), ["team", "today", "waiting"]);
     assert.strictEqual(posts(page).length, 0, "only GETs");
@@ -316,11 +316,11 @@ function check16dPace(times, forced) {
     assert.ok(requested.includes("/api/config") && requested.includes("/api/chats"), "the data is asked for at once, not after the frame");
   });
 
-  await test("16c: everything comes in: no 載入中 and no progress line is left; the waiting block says nobody waits, in words; only GETs", async () => {
+  await test("16c: everything comes in: no 載入中 and no progress line is left; the waiting block takes no room (P50-1: it no longer says 'nothing waits' in words; it is hidden); only GETs", async () => {
     const page = await home(world(), "#/", { hold: GETS });
     await page.release();
     assert.deepStrictEqual(check16c(page.main, "done"), []);
-    assert.ok(text(waitingBlock(page)).includes("現在沒有要你決定的事。"));
+    assert.ok(waitingBlock(page).getAttribute("hidden") !== null && !text(waitingBlock(page)), "hidden, nothing in it");
     assert.ok(one(page.main, "data-employee", "p-ceo"), "the team is there");
     assert.ok(one(page.main, "data-home", "ask"), "the ask box is there");
     assert.strictEqual(posts(page).length, 0);
