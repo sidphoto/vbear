@@ -2160,3 +2160,30 @@ input[type="checkbox"] { width: 18px; height: 18px; flex: none; accent-color: va
 
 /* P53 (v0.25.0): the toast is above the phone drawer's backdrop (50), the drawer (60), the dialogs (100) and the skill tip (120): a message must be readable whatever is open (review of v0.23.0). */
 #toast { z-index: 130; }
+
+/* P54 (v0.25.0): what the first real look at the pages (stub console screenshots, tools/shots_stub.py) found. Only the screen is changed here.
+   1. On a phone the top bar was 82 to 200px high, not 57px: the page's grid has two rows that were both `auto`, so the free height of a short page was shared between the bar and
+      the page. The bar is now its own height and the page takes the rest.
+   2. The open drawer covered the brand and left the person no clear way out; now the bar stays above the drawer (the brand is seen, the button says 關閉) and the drawer starts under it.
+   3. The home box showed two rings when it had the focus (its border and an outline 2px away); now it is one ring.
+   4. A message of yours was twice as high as its words and a reply had an empty band under it: the line with your name and time (shown on hover) and the buttons 記住 and
+      存成常用做法 (shown on hover or focus) kept their room while hidden. They now sit over the space between messages (still in the page, still reached by keyboard).
+   5. The line over a fold: a bigger arrow that stays on the first line, and a line under the words when you point at it, so it is seen that it opens.
+   6. A plain select (a drop-down) in a page was the browser's square one; it has the pills' look now (a rule of low weight: a select that has its own rule keeps it). */
+@media (max-width: 720px) {
+  .shell { grid-template-rows: auto minmax(0, 1fr); }
+  .side-panel { top: 57px; padding: 12px 12px 16px; }
+  .side.nav-open .side-top { position: relative; z-index: 70; background: var(--side-bg); box-shadow: 0 1px 0 var(--line); }
+}
+.home-box:focus-within { border-color: transparent; outline: 2px solid var(--gold); outline-offset: -1px; }
+.chat-msg { position: relative; }
+.chat-me .chat-who-quiet { position: absolute; right: 6px; bottom: 100%; margin: 0 0 1px; white-space: nowrap; }
+.chat-me .chat-who:not(.chat-who-quiet) { margin-bottom: 4px; }
+.chat-msg .chat-remember { position: absolute; top: 100%; right: 0; z-index: 5; margin: -6px 0 0; padding: 2px; background: var(--bg); border-radius: 999px; pointer-events: none; }
+.chat-msg:hover .chat-remember, .chat-msg:focus .chat-remember, .chat-msg:focus-within .chat-remember { pointer-events: auto; }
+.chat-me .chat-remember { right: 8px; }
+.chat-quiet-sum { align-items: flex-start; line-height: 1.5; }
+.chat-quiet-sum::before { flex: none; width: 1em; font-size: 13px; text-align: center; }
+.chat-quiet-sum:hover { text-decoration: underline; text-underline-offset: 3px; }
+.chat-quiet-sum:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+main select { min-height: 36px; padding: 6px 10px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--panel); color: var(--ink); }

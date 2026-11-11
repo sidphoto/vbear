@@ -13863,10 +13863,18 @@ function setNavMenu(open) {
   const btn = document.getElementById("nav-toggle");
   if (side && side.classList) side.classList.toggle("nav-open", !!open);
   if (btn) btn.setAttribute("aria-expanded", String(!!open));
+  // P54: while the drawer is open the same button says 關閉 (it stays in the bar above the drawer); closed, it says 選單 and the label that names the page comes back
+  const word = document.getElementById("nav-toggle-label");
+  if (word) word.textContent = open ? "關閉" : "選單";
+  if (btn && btn.dataset) {
+    if (open && !btn.dataset.closedLabel) { btn.dataset.closedLabel = btn.getAttribute("aria-label") || "選單"; btn.setAttribute("aria-label", "關閉選單"); }
+    else if (!open && btn.dataset.closedLabel) { btn.setAttribute("aria-label", btn.dataset.closedLabel); btn.dataset.closedLabel = ""; }
+  }
 }
 function syncNavMenu(top) {
   const btn = document.getElementById("nav-toggle");
   const name = navPageName(top);
+  if (btn && btn.dataset) btn.dataset.closedLabel = "";
   if (btn) btn.setAttribute("aria-label", name ? `選單（目前在「${name}」）` : "選單");   // the button says 選單; a screen reader also hears where you are
   setNavMenu(false);   // going to a page puts the menu away
 }
