@@ -2119,3 +2119,17 @@ input[type="checkbox"] { width: 18px; height: 18px; flex: none; accent-color: va
 .who-later .who-name { font-weight: 500; color: var(--ink-2); }
 .who-why { grid-column: 1 / -1; color: var(--ink-3); overflow-wrap: anywhere; }
 .who-cap { margin: 8px 10px 2px; }
+
+/* P51-3 (v0.24.0, ADR 0016): the head of a chat is one row (the name, the state word, 「⋯」) and the line under it (the work, the AI tool, that everything asks first, which company
+   the words go to) is one step smaller and grey, kept because it says where the words go. The page that prepares a chat and the list of chats are the same 720px column; the list is
+   plain rows with a line between them (no card frame) and a dot in front of a chat that waits for you. Every colour is a token of the theme. */
+.chat-head h1 { margin: 0; font-size: 20px; line-height: 1.35; }
+.chat-head-top { align-items: center; }
+.chat-title { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; }
+.chat-line { margin: 2px 0 6px; font-size: 12.5px; color: var(--ink-3); }
+.chat-details > summary { font-size: 12.5px; color: var(--ink-3); }
+.chat-hint { border: 0; background: var(--panel-2); }
+.chat-list-box .mt-list { gap: 0; }
+.chat-list-box .mt-row { display: flex; padding: 12px 2px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; box-shadow: none; }
+.chat-list-box .mt-row:last-child { border-bottom: 0; }
+.chat-wait-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--warn); }

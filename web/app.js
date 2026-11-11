@@ -15324,7 +15324,9 @@ function chatRow(c) {
     return el("li", { class: "mt-row card", "data-chat": "row" }, el("strong", null, `無法讀取的聊天 ${c.id}`), badge("無法讀取", "b-bad"),
       el("span", { class: "small muted" }, c.problem || "這個聊天的紀錄讀不出來，已留在清單裡，沒有被刪掉。"));
   }
-  return el("li", { class: "mt-row card", "data-chat": "row", "data-chat-id": c.id },
+  // P51-3: a plain row (no card frame): a dot when a card waits for you, the name, the last time; the words and the link are the same
+  return el("li", { class: "mt-row chat-row", "data-chat": "row", "data-chat-id": c.id },
+    c.waiting ? el("span", { class: "chat-wait-dot", "aria-hidden": "true" }) : null,
     el("a", { class: "mt-row-title", href: `#/chat/${encodeURIComponent(c.id)}`, "data-chat": typeof c.routine_title === "string" ? "routine-title" : null }, typeof c.routine_title === "string" ? c.routine_title : (c.name || c.profile_id)),
     el("span", { class: "tag", "data-chat": "tool" }, chatToolName(c.engine)),
     c.waiting ? badge("等你回覆卡片", "b-warn") : c.open ? badge("回覆中", "b-info") : null,
@@ -15340,8 +15342,8 @@ async function viewChat(id, params) {
   try { data = await api.get("/api/chats"); }
   catch (e) {
     const want = typeof (params && params.profile) === "string" ? params.profile : "";
-    if (want) { setKids(claim(token), chatUnreadPage(want, "")); return; }       // sent here to prepare a chat: say that the state could not be read, and offer to read it again
-    setKids(claim(token), el("h1", null, "對話紀錄"), notice("bad", "讀不到對話紀錄：" + e.message)); return;
+    if (want) { setKids(claim(token), chatColumn(chatUnreadPage(want, ""))); return; }       // sent here to prepare a chat: say that the state could not be read, and offer to read it again
+    setKids(claim(token), chatColumn(el("h1", null, "對話紀錄"), notice("bad", "讀不到對話紀錄：" + e.message))); return;
   }
   const readGroups = async () => {
     try { const r = await api.get("/api/groups"); return Array.isArray(r.groups) ? r.groups : []; } catch (_) { return []; }
@@ -15360,7 +15362,7 @@ async function viewChat(id, params) {
   const pick = typeof (params && params.profile) === "string" ? params.profile : "";
   let chosen = pick;
   const chosenCard = () => (Array.isArray(cur.cards) ? cur.cards.find((c) => c && c.id === chosen) : null) || null;
-  if (pick && !chosenCard()) { setKids(main, chatUnreadPage(pick, "")); return; }           // an employee that is not in the list: nothing to prepare, nothing is opened
+  if (pick && !chosenCard()) { setKids(main, chatColumn(chatUnreadPage(pick, ""))); return; }           // an employee that is not in the list: nothing to prepare, nothing is opened
   // The notice for the chosen card's AI tool; with no card chosen, Claude Code's (unless it is not there and Codex is) and
   // Codex's once Codex is installed.
   const drawSupport = () => {
@@ -15543,21 +15545,21 @@ async function viewChat(id, params) {
   const intro = chatIntroNode();
   if (prepMode) {
     const c = chosenCard();
-    setKids(main, el("h1", null, `準備和 ${c.name || "這位員工"} 聊天`), prepBox,
+    setKids(main, chatColumn(el("h1", null, `準備和 ${c.name || "這位員工"} 聊天`), prepBox,
       el("details", { class: "fold section chat-more-info", "data-chat": "prep-more" }, el("summary", null, "了解更多"), supportBox, ledgerBox, intro,
-        el("p", { class: "small" }, el("a", { href: "#/chat" }, "看所有對話紀錄"))));
+        el("p", { class: "small" }, el("a", { href: "#/chat" }, "看所有對話紀錄")))));
     chatTick = refresh;
     activeViewCleanup = () => { chatTick = null; };
     return;
   }
   const moreInfo = el("details", { class: "fold section chat-more-info", "data-chat": "more-info" }, el("summary", null, "了解更多"), ledgerBox, intro);
-  setKids(main, el("h1", null, "對話紀錄"),
+  setKids(main, chatColumn(el("h1", null, "對話紀錄"),
     el("p", { class: "lede" }, "和一位員工一對一對話。員工想動手時，會先問你。"),
     needsClaudeSlot(token, "對話需要 Claude Code、Codex 或 AGY：工具是 Claude Code 的員工用 Claude Code，工具是 Codex 的員工用 Codex（Codex 要先在「開始設定」登入聊天用的那一份），工具是 AGY 的員工用 AGY（AGY 要先通過聊天驗證）。",
       (res) => !codexChatReady(res) && !agyChatReady(res)),
     supportBox, formBox,
     el("section", { class: "section" }, sectionHead("對話紀錄", "每 5 秒更新"), listBox),
-    moreInfo);
+    moreInfo));
   chatTick = refresh;
   activeViewCleanup = () => { chatTick = null; };
 }
@@ -15722,6 +15724,8 @@ function ceoChiefHint(chief, onNo) {
 // kinds are ever put in a fold; a card that waits, its decision, a refusal, an error, an odd message and the words said are never. A turn that was stopped, hit
 // a limit or went wrong, and a process that ended for a reason this page does not know, say so in the open (they are not "the work going well").
 const CHAT_QUIET_KINDS = ["process", "tool", "result", "auto", "cost", "process-end"];       // the data-chat of the lines that may be folded, in the order the summary says them
+// The one centred column of every page of the chat (the list, the page that prepares a chat, one chat): 720px at most.
+function chatColumn(...kids) { return el("div", { class: "chat-page", "data-chat": "page" }, ...kids); }
 function chatTimeNode(at) { return el("span", { class: "chat-time" }, `・${fmtTime(at)}`); }       // in the page for a screen reader; shown on hover, on focus, and always without a mouse
 // Whether this record's line may go into a fold.
 function chatIsQuiet(rec) {
@@ -15888,7 +15892,7 @@ async function viewChatDetail(token, id) {
   let all;
   try { all = await chatReadAll(id); }
   catch (e) {
-    setKids(claim(token), crumbs([["對話紀錄", "#/chat"], ["找不到"]]), notice("bad", e.status === 404 ? e.message : "讀不到這段對話：" + e.message));
+    setKids(claim(token), chatColumn(crumbs([["對話紀錄", "#/chat"], ["找不到"]]), notice("bad", e.status === 404 ? e.message : "讀不到這段對話：" + e.message)));
     return;
   }
   const main = claim(token);
@@ -15953,8 +15957,9 @@ async function viewChatDetail(token, id) {
     const live = view.live && typeof view.live === "object" ? view.live : null;
     const state = live ? live.state : "idle";
     const word = cardHas(CHAT_STATE, state) ? CHAT_STATE[state] : ["狀態不明", "b-mute"];
-    setKids(titleBox, el("h1", null, typeof view.routine_title === "string" ? view.routine_title : (view.card && view.card.name ? view.card.name : "對話")));
-    setKids(lineBox, live ? badge(word[0], word[1]) : null, live ? " " : null, chatHeadLine(view.card, engineOf() || (view.card && view.card.tool)));
+    // P51-3: one row: the name, the state word (and 「⋯」); the line under it is only the facts that say what is asked and where the words go
+    setKids(titleBox, el("h1", null, typeof view.routine_title === "string" ? view.routine_title : (view.card && view.card.name ? view.card.name : "對話")), live ? badge(word[0], word[1]) : null);
+    setKids(lineBox, chatHeadLine(view.card, engineOf() || (view.card && view.card.tool)));
     setKids(detailsBody,
       el("p", { class: "small muted", "data-chat": "limits" }, chatLimitsText(limits, ledger)),
       isAgy() ? el("p", { class: "small muted", "data-chat": "agy-note" }, CHAT_AGY_NOTE)
@@ -16227,7 +16232,7 @@ async function viewChatDetail(token, id) {
   const more = inGroup ? null : chatMoreMenu(menuItems);
   setKids(headBox, el("div", { class: "chat-head-top" }, titleBox, more ? more.node : null), lineBox, detailsBox);
   // P51-1: the page is one centred column, 720px at most
-  setKids(main, el("div", { class: "chat-page", "data-chat": "page" }, crumbs([["員工", "#/employees"], [view.card && view.card.name || id]]), headBox, groupNote, chief ? chief.node : null, suggest ? suggest.node : null, skillDesk ? skillDesk.node : null, noteBox, transcript, liveBox, hintBox, composer));
+  setKids(main, chatColumn(crumbs([["員工", "#/employees"], [view.card && view.card.name || id]]), headBox, groupNote, chief ? chief.node : null, suggest ? suggest.node : null, skillDesk ? skillDesk.node : null, noteBox, transcript, liveBox, hintBox, composer));
   activeViewCleanup = () => { stopStream(); if (more) more.close(); if (chief) chief.stop(); if (suggest) suggest.stop(); if (skillDesk) skillDesk.stop(); };
   stream();
   if (opening) input.focus();
