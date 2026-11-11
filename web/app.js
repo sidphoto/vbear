@@ -2310,9 +2310,8 @@ function sectionHead(title, sub, action) {
 // the advanced mode, which decides nothing but what is shown.
 let homeTick = null;     // the refresh of the home page every 5 seconds (route() runs it); null on any other page
 let homeFocusAsk = null; // while the home page is up: puts the cursor in its box (the side bar's 「新對話」 calls it)
-let homeFocusPending = false;   // 「新對話」 was pressed on another page: the home page draws its box with the cursor in it
-// The cursor goes into the home box only when nothing else has it (the page, the body and the main area do not count as "something"), and never by itself on a touch
-// screen (the keyboard would cover the page); the person's own press of 「新對話」 always does.
+// The cursor goes into the home box only when nothing else has it (the body and the main area do not count as "something": a move to another page puts the focus on
+// the main area first), and never by itself on a touch screen (the keyboard would cover the page); the person's own press of 「新對話」 on the home page always does.
 function homeNothingFocused() { const a = document.activeElement; return !a || a === document.body || a === document.documentElement || a === $main(); }
 function homeCoarsePointer() { try { return !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches); } catch (_) { return false; } }
 function homeFocusBox(input) { if (!input || typeof input.focus !== "function") return; try { input.focus({ preventScroll: true }); } catch (_) { input.focus(); } }
@@ -2437,8 +2436,7 @@ async function viewHome() {
       paint("ask", ready("ask") ? "in" : "loading", () => setKids(askHost, ready("ask") ? homeAsk(state) : homeAskLoading()));
       if (ready("ask") && !focusDone && state.askInput) {
         focusDone = true;
-        if (homeFocusPending || (!homeCoarsePointer() && homeNothingFocused())) homeFocusBox(state.askInput);
-        homeFocusPending = false;
+        if (!homeCoarsePointer() && homeNothingFocused()) homeFocusBox(state.askInput);
       }
     }
   };
@@ -3113,7 +3111,7 @@ const WAITING_REUSE_MS = 30000;
 // GET /api/chats makes the server run the AI tools' --version (about 2 seconds, no cache of its own), so it is read at most every 30 seconds by the
 // waiting model (the page's other reads stay at their own pace); a read the person's own press asks for (`force`) and the home page's first read go at once.
 let waitingChatsRead = null;       // { at, body }: the last whole answer
-function waitingChatsNote(body) { if (body && typeof body === "object") waitingChatsRead = { at: Date.now(), body }; }
+function waitingChatsNote(body) { if (body && typeof body === "object") { waitingChatsRead = { at: Date.now(), body }; drawNavRecent(); } }   // P50-2: the side bar's 最近 follows
 function waitingPublish(m) {
   waitingLast = { m, at: Date.now() };
   const count = m.complete ? Math.min(m.rows.length, 999) : 0;
@@ -13667,8 +13665,8 @@ async function viewRoutines() {
 
 // ---------- router ---------------------------------------------------------
 
-// The menu is four items (首頁、員工、工作、設定); every other page belongs to one of them, and the engineering pages to the advanced part
-// that shows only when the advanced mode (a switch in the settings) is on (ADR 0013). NAV_PARENT says which `data-nav` item a page
+// The side bar (ADR 0013, 0015): 新對話 (the old home item, `data-nav="home"`), 最近, and three items (員工、工作、設定); every other page belongs to one of them,
+// and the engineering pages to the advanced part that shows only when the advanced mode (a switch in the settings) is on. NAV_PARENT says which `data-nav` item a page
 // (the first part of its address) lights. A page that is not in it lights nothing. All the old addresses still open.
 const NAV_PARENT = {
   home: "home",
@@ -13686,8 +13684,8 @@ function navOf(top) { return Object.prototype.hasOwnProperty.call(NAV_PARENT, to
 let navAdvanced = false;
 let navAdvancedKnown = false;
 let navTop = "";
-// The phone: the four items are one row at the top; with the advanced mode on, one more button (進階) opens the advanced list. The
-// button only toggles a class; the CSS does the rest, so a wide window never sees it.
+// The phone (v0.23): the bar is a drawer behind one menu button in a top bar (the advanced items are in it when the advanced mode is on). The button only toggles a
+// class and aria-expanded; the CSS does the rest, so a wide window never sees it.
 function navPageName(top) {
   const want = navOf(top) || top;
   const link = Array.from(document.querySelectorAll("[data-nav]")).find((a) => a.dataset && a.dataset.nav === want);
@@ -13703,9 +13701,9 @@ function setNavMenu(open) {
   if (btn) btn.setAttribute("aria-expanded", String(!!open));
 }
 function syncNavMenu(top) {
-  const label = document.getElementById("nav-toggle-label");
-  const name = ADVANCED_NAV.has(navOf(top)) ? navPageName(top) : "";
-  if (label) label.textContent = name ? `進階：${name}` : "進階";
+  const btn = document.getElementById("nav-toggle");
+  const name = navPageName(top);
+  if (btn) btn.setAttribute("aria-label", name ? `選單（目前在「${name}」）` : "選單");   // the button says 選單; a screen reader also hears where you are
   setNavMenu(false);   // going to a page puts the menu away
 }
 function showHidden(node, hidden) {
@@ -13760,6 +13758,11 @@ function brandMarkGuard() {
   img.addEventListener("error", retry);
   if (img.complete === true && !img.naturalWidth) retry();      // it failed before this script ran (a picture with no width of its own is asked for once more, harmlessly)
 }
+// 「新對話」: on the home page the cursor goes back into the box (a press on the link of the page one is on changes no page); from another page the move to the home
+// page does it (the home page puts the cursor in its box when nothing else has it).
+function navNewChat() {
+  if (navTop === "home" && homeFocusAsk) homeFocusAsk();
+}
 function wireNavMenu() {
   const btn = document.getElementById("nav-toggle");
   if (!btn || !btn.addEventListener) return;
@@ -13767,7 +13770,52 @@ function wireNavMenu() {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && btn.getAttribute("aria-expanded") === "true") { setNavMenu(false); if (btn.focus) btn.focus(); }
   });
+  // a press on a link puts the drawer away, also when the link leads to the page that is already open (no page change happens then)
+  document.querySelectorAll("[data-nav]").forEach((a) => a.addEventListener("click", () => {
+    setNavMenu(false);
+    if (a.dataset && a.dataset.nav === "home") navNewChat();
+  }));
+  const backdrop = document.getElementById("nav-backdrop");
+  if (backdrop && backdrop.addEventListener) backdrop.addEventListener("click", () => setNavMenu(false));
 }
+
+// ---------- the side bar's 最近 (v0.23, P50-2) ----------------------------------------------------------------------------------------
+// The employees the person talked with, newest first (at most 8), one row each: the name, a dot when a card of that employee waits, a link to the chat. It is drawn only
+// from what the page already holds: the last whole answer of GET /api/chats (waitingChatsRead, which the home page's own read and the 30-second waiting model fill).
+// This code asks for nothing and has no timer of its own (guard 17b); it is drawn again when that answer is renewed and at each move to another page. With no
+// answer (not read yet, or it failed) or nobody talked with, the whole part is hidden: it does not say "no chats", because it does not know. A row has the server's
+// facts only (a name, whether a card waits): no title of a chat and none of its words.
+const NAV_RECENT_MAX = 8;
+// -> [{ profileId, name, chatId, waiting }] from the body of GET /api/chats. An employee's row leads to the chat that waits when one does, else to the newest one.
+function navRecentRows(chatsRes) {
+  const body = chatsRes && typeof chatsRes === "object" ? chatsRes : {};
+  const list = Array.isArray(body.chats) ? body.chats : [];
+  const names = new Map((Array.isArray(body.cards) ? body.cards : []).filter((c) => c && typeof c.id === "string" && typeof c.name === "string" && c.name).map((c) => [c.id, c.name]));
+  const byProfile = new Map();
+  for (const c of list.slice().sort((a, b) => (Number(b && b.last_at) || 0) - (Number(a && a.last_at) || 0))) {
+    if (!c || typeof c !== "object" || typeof c.id !== "string" || !c.id || c.problem || typeof c.routine_title === "string" || !names.has(c.profile_id)) continue;
+    if (!(c.turns > 0) && c.waiting !== true) continue;
+    const row = byProfile.get(c.profile_id);
+    if (!row) byProfile.set(c.profile_id, { profileId: c.profile_id, name: names.get(c.profile_id), chatId: c.id, waiting: c.waiting === true });
+    else if (c.waiting === true && !row.waiting) { row.chatId = c.id; row.waiting = true; }
+  }
+  return Array.from(byProfile.values()).slice(0, NAV_RECENT_MAX);
+}
+function drawNavRecent() {
+  const box = document.getElementById("nav-recent");
+  const list = document.getElementById("nav-recent-list");
+  if (!box || !list) return;
+  const rows = waitingChatsRead ? navRecentRows(waitingChatsRead.body) : [];
+  const at = /^#\/chat\/([^/?]+)\/?(?:\?.*)?$/.exec(String(location.hash || ""));
+  let open = "";
+  try { open = at && at[1] !== "group" ? decodeURIComponent(at[1]) : ""; } catch (_) { open = ""; }
+  setKids(list, rows.map((r) => el("li", null,
+    el("a", { class: "recent-link", href: `#/chat/${encodeURIComponent(r.chatId)}`, "data-recent": r.profileId, "aria-current": r.chatId === open ? "page" : undefined, on: { click: () => setNavMenu(false) } },
+      r.waiting ? el("span", { class: "recent-dot", role: "img", "aria-label": "有事等你決定" }) : null,
+      el("span", { class: "recent-name" }, r.name)))));
+  showHidden(box, !rows.length);
+}
+// ---------- end of the side bar's 最近 ---------------------------------------------------------------------------------------------
 
 let liveTimer = null;
 let liveTick = null;
@@ -13793,6 +13841,7 @@ async function route() {
   });
   navTop = top;
   syncNavMenu(top);
+  drawNavRecent();
   syncAdvancedNote(top);
   loadAdvancedNav();   // the first page reads the advanced mode once; it only decides what the menu shows
   setupTick = null;

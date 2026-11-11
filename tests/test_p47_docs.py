@@ -265,7 +265,8 @@ class ReadmeAndReferenceTests(unittest.TestCase):
         self.assertEqual(problems(part, "ARCHITECTURE v0.21"), [])
 
     def test_the_menu_words_the_documents_quote_are_the_pages(self):
-        for word in ("首頁", "員工", "工作", "設定", "進階", "指令視窗", "工作台", "流程", "專案資料夾", "AI 工具的外掛清單", "員工詳細資料", "你的 AI 員工"):
+        # P50-2: the first item of the menu is 「新對話」 (the page itself, #/, is still called 首頁 in the documents)
+        for word in ("新對話", "員工", "工作", "設定", "進階", "指令視窗", "工作台", "流程", "專案資料夾", "AI 工具的外掛清單", "員工詳細資料", "你的 AI 員工"):
             self.assertIn(word, self.index, word)
 
 

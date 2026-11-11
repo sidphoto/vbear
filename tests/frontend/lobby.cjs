@@ -457,9 +457,9 @@ test("opening the lobby does not put the cursor in the skill search (it would sc
   assert(!/setTimeout\(\(\) => input\.focus\(\)/.test(fs.readFileSync(path.join(__dirname, "..", "..", "web", "app.js"), "utf8")), "no deferred focus call on the lobby search");
 });
 
-test("(P47-1) the nav's first item is 首頁 (it was 冒險者大廳), and the pages that were in the nav are still named there or reached from it", () => {
+test("(P47-1; P50-2: the first item is 新對話, still data-nav home and href #/) the nav's first item is not 冒險者大廳 any more, and the pages that were in the nav are still named there or reached from it", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "..", "web", "index.html"), "utf8");
-  assert(/data-nav="home"><span aria-hidden="true">⌂<\/span>首頁</.test(html));
+  assert(/<a class="new-chat" href="#\/" data-nav="home"><span aria-hidden="true">＋<\/span>新對話<\/a>/.test(html));
   assert(!html.includes("我的工作台") && !html.includes("冒險者大廳"));
   for (const label of ["指令視窗", "工作台", "流程", "AI 工具的外掛清單", "員工詳細資料", "專案資料夾", "設定"]) assert(html.includes(`</span>${label}</a>`), label);
 });

@@ -47,6 +47,14 @@ const walk = (n) => n.children.flatMap((c) => [c, ...walk(c)]);
 function navFromHtml() {
   const list = HTML.slice(HTML.indexOf('<ul class="nav" id="nav-list">'), HTML.indexOf("</ul>", HTML.indexOf('<ul class="nav" id="nav-list">')));
   const items = [];
+  // P50-2: the home item is 「新對話」, above the list (it is still a [data-nav] link)
+  const home = /<a class="new-chat" href="([^"]*)" data-nav="([^"]*)"><span aria-hidden="true">([^<]*)<\/span>([^<]*)<\/a>/.exec(HTML);
+  if (home) {
+    const anchor = new Node("a"); anchor.setAttribute("href", home[1]); anchor.dataset.nav = home[2]; anchor.setAttribute("data-nav", home[2]);
+    const g = new Node("span"); g.textContent = home[3]; const t = new Node("#text"); t.textContent = home[4];
+    anchor.children.push(g, t);
+    items.push({ li: new Node("li"), anchor, html: home[0] });
+  }
   for (const m of list.matchAll(/<li([^>]*)>([\s\S]*?)<\/li>/g)) {
     const li = new Node("li");
     for (const a of m[1].matchAll(/([a-z-]+)(?:="([^"]*)")?/g)) if (a[1]) li.setAttribute(a[1], a[2] === undefined ? "" : a[2]);
@@ -129,12 +137,12 @@ async function test(name, fn) {
 
 (async () => {
   // ---- the markup ---------------------------------------------------------------------------------------------------
-  await test("index.html: four items, in this order, with these words; there is no 花費 in the menu", () => {
+  await test("index.html: 新對話 and three items (員工, 工作, 設定; P50-2), in this order, with these words; there is no 花費 in the menu", () => {
     const items = navFromHtml().filter((i) => i.anchor && !i.li.hasAttribute("data-advanced"));
     assert.deepStrictEqual(items.map((i) => [i.anchor.dataset.nav, i.anchor.getAttribute("href"), i.anchor.children[1].textContent]),
-      [["home", "#/", "首頁"], ["employees", "#/employees", "員工"], ["work", "#/work", "工作"], ["settings", "#/settings", "設定"]]);
+      [["home", "#/", "新對話"], ["employees", "#/employees", "員工"], ["work", "#/work", "工作"], ["settings", "#/settings", "設定"]]);
     for (const i of items) assert.ok(!i.li.hasAttribute("hidden"), `${i.anchor.dataset.nav} is always shown`);
-    const nav = HTML.slice(HTML.indexOf('id="nav-list"'), HTML.indexOf("</ul>", HTML.indexOf('id="nav-list"')));
+    const nav = HTML.slice(HTML.indexOf("<nav"), HTML.indexOf("</nav>"));
     assert.ok(!/花費|spending/.test(nav), "no spending item: the limit lives in the settings");
     for (const gone of ["冒險者大廳", "角色卡池", "終端機", "終端工作台", "技能庫", "派工", "例行工作", ">專案<", ">聊天<", "開始設定"]) assert.ok(!nav.includes(gone), `the menu no longer says ${gone}`);
   });
@@ -152,15 +160,15 @@ async function test(name, fn) {
   });
 
   await test("index.html: the icons are text symbols with aria-hidden, no emoji; the brand says 你的 AI 員工; the scan status shows only in advanced", () => {
-    const nav = HTML.slice(HTML.indexOf('id="nav-list"'), HTML.indexOf("</ul>", HTML.indexOf('id="nav-list"')));
+    const nav = HTML.slice(HTML.indexOf("<nav"), HTML.indexOf("</nav>"));
     assert.ok(!/\p{Emoji_Presentation}|\uFE0F/u.test(nav), "no emoji in the menu");
     for (const m of nav.matchAll(/<span aria-hidden="true">([^<]*)<\/span>/g)) assert.ok(m[1].length >= 1 && m[1].length <= 2, m[1]);
     assert.strictEqual((nav.match(/<span aria-hidden="true">/g) || []).length, 10, "ten links, ten hidden icons");
     assert.ok(HTML.includes("<small>你的 AI 員工</small>") && !HTML.includes("技能與團隊主控台"));
     assert.ok(/id="scan-status"[^>]*hidden|hidden[^>]*id="scan-status"/.test(HTML), "hidden until advanced");
     assert.ok(/id="advanced-note"/.test(HTML) && /id="advanced-note"[^>]*hidden/.test(HTML), "the line for an advanced page opened by an address");
-    assert.ok(/<button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-list">/.test(HTML));
-    assert.ok(/id="nav-toggle-label">進階</.test(HTML), "on a phone this button is 進階");
+    assert.ok(/<button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="side-panel">/.test(HTML));
+    assert.ok(/id="nav-toggle-label">選單</.test(HTML), "on a phone this button is 選單 (P50-2: it opens the whole bar, not only the advanced list)");
   });
 
   // ---- which menu item a page lights --------------------------------------------------------------------------------
@@ -344,20 +352,23 @@ async function test(name, fn) {
   });
 
   // ---- the phone ------------------------------------------------------------------------------------------------------
-  await test("phone: the button names the advanced page you are on (進階：…); on any other page it is 進階; going to a page puts the menu away", async () => {
+  await test("phone: the button says 選單 and a screen reader hears the page you are on (P50-2; it was 進階：…); on a page that lights nothing it is just 選單; going to a page puts the menu away", async () => {
     const page = boot("#/team", { config: { advanced_mode: true } });
     await tick(30);
-    assert.strictEqual(page.label.textContent, "進階：員工詳細資料");
+    assert.strictEqual(page.label.textContent, "選單");
+    assert.strictEqual(page.toggle.getAttribute("aria-label"), "選單（目前在「員工詳細資料」）");
     page.toggle.dispatch("click");
     assert.strictEqual(page.toggle.getAttribute("aria-expanded"), "true");
     assert.ok(page.side.classList.contains("nav-open"));
     await page.go("#/flows");
-    assert.strictEqual(page.label.textContent, "進階：流程");
+    assert.strictEqual(page.toggle.getAttribute("aria-label"), "選單（目前在「流程」）");
     assert.strictEqual(page.toggle.getAttribute("aria-expanded"), "false");
     await page.go("#/chat");
-    assert.strictEqual(page.label.textContent, "進階");
+    assert.strictEqual(page.toggle.getAttribute("aria-label"), "選單（目前在「員工」）");
     await page.go("#/term/t1");
-    assert.strictEqual(page.label.textContent, "進階：指令視窗");
+    assert.strictEqual(page.toggle.getAttribute("aria-label"), "選單（目前在「指令視窗」）");
+    await page.go("#/nowhere");
+    assert.strictEqual(page.toggle.getAttribute("aria-label"), "選單");
   });
 
   await test("phone: Escape closes the open advanced list and gives focus back to the button; the page name is the link's own words", async () => {
@@ -369,20 +380,19 @@ async function test(name, fn) {
     esc();
     assert.strictEqual(page.toggle.getAttribute("aria-expanded"), "false");
     assert.strictEqual(Node.focused, page.toggle);
-    assert.strictEqual(evalIn(page, 'navPageName("home")'), "首頁");
+    assert.strictEqual(evalIn(page, 'navPageName("home")'), "新對話");
     assert.strictEqual(evalIn(page, 'navPageName("chat")'), "員工", "the item that a page belongs to");
     assert.strictEqual(evalIn(page, 'navPageName("team")'), "員工詳細資料");
     assert.strictEqual(evalIn(page, 'navPageName("nope")'), "");
   });
 
-  await test("css: on a phone the four items are one row at the top (not folded), the advanced list opens from the 進階 button, and nothing scrolls sideways", () => {
-    const at = CSS.lastIndexOf("@media (max-width: 720px) {\n  .nav-toggle");
-    assert.ok(at > 0, "the phone block");
-    const block = CSS.slice(at, CSS.indexOf("\n}\n", at));
-    assert.ok(!/\.side \.nav\s*\{\s*display:\s*none/.test(block), "the four items are not behind a button");
-    assert.ok(/\.nav-toggle\s*\{[^}]*display:\s*none/.test(block), "the button is not there by default");
-    assert.ok(/\.side\.adv-on \.nav-toggle\s*\{[^}]*display:\s*inline-flex/.test(block), "only when advanced mode is on");
-    assert.ok(/li\[data-advanced\]\s*\{\s*display:\s*none/.test(block) && /\.side\.nav-open \.nav li\[data-advanced\]:not\(\[hidden\]\)\s*\{\s*display:\s*block/.test(block), "advanced items only when the button opened the list");
+  await test("css: on a phone (P50-2) the bar is a drawer behind the menu button (it holds the advanced items too), the button is not there on a wide window, and nothing scrolls sideways", () => {
+    const at = CSS.indexOf("/* P50-2");
+    assert.ok(at > 0, "the P50-2 part");
+    const block = /@media \(max-width: 720px\) \{([\s\S]*?)\n\}\n/.exec(CSS.slice(at))[1];
+    assert.ok(/\.nav-toggle\s*\{[^}]*display:\s*none/.test(CSS.slice(CSS.indexOf(".nav-toggle {"))), "the button is not there by default");
+    assert.ok(/\.nav-toggle\s*\{[^}]*display:\s*inline-flex/.test(block), "the button shows on a phone, whatever the advanced mode");
+    assert.ok(/\.side-panel\s*\{[^}]*translateX\(-100%\)/.test(block) && /\.side\.nav-open \.side-panel\s*\{[^}]*transform:\s*none/.test(block), "the whole bar (advanced items included) is in the drawer");
     assert.ok(!/overflow-x:\s*auto/.test(block), "no sideways scroll");
     assert.ok(/min-height:\s*44px/.test(CSS.slice(CSS.indexOf(".nav-toggle {"))), "a touch-sized target");
     assert.ok(/\.nav \[hidden\]\s*\{\s*display:\s*none/.test(CSS), "a hidden item stays hidden whatever the layout says");
@@ -396,7 +406,7 @@ async function test(name, fn) {
   });
 
   await test("source: the menu code uses no innerHTML, no emoji and no outside resource", () => {
-    const part = SOURCE.slice(SOURCE.indexOf("// The menu is four items"), SOURCE.indexOf("let liveTimer = null;"));
+    const part = SOURCE.slice(SOURCE.indexOf("// The side bar (ADR 0013, 0015)"), SOURCE.indexOf("let liveTimer = null;"));
     assert.ok(part.includes("NAV_PARENT") && part.includes("syncAdvancedNav"));
     assert.ok(!/innerHTML|insertAdjacentHTML/.test(part) && !/https?:\/\//.test(part) && !/\p{Extended_Pictographic}/u.test(part));
   });
