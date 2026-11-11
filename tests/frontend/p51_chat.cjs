@@ -254,9 +254,9 @@ test("the buttons on a message still show on hover and on focus, and stay reacha
 });
 
 test("the source: the new code has no innerHTML and no emoji, loads nothing from outside, and adds no localStorage key", () => {
-  const at = SOURCE.indexOf("// ---------- P51 ");
-  assert(at > 0, "the P51 part of app.js");
-  const mine = SOURCE.slice(at, SOURCE.indexOf("// ---------- end of P51", at));
+  const blocks = [...SOURCE.matchAll(/^\/\/ ---------- P51 [^\n]*\n([\s\S]*?)^\/\/ ---------- end of P51[^\n]*$/gm)].map((m) => m[1]);
+  assert(blocks.length >= 1, "the P51 parts of app.js");
+  const mine = blocks.join("\n");
   assert(mine.length > 1500);
   assert(!/innerHTML|insertAdjacentHTML|outerHTML/.test(mine));
   assert(!/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}]/u.test(mine), "no emoji");

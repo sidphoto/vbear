@@ -796,7 +796,10 @@ test("Codex: a chat shows its tool, the one-line plan use, the money rule and th
   for (const w of ["Codex 員工", "Codex・每件事先問你・對話會送到 OpenAI", "估計 US$0.02", "不是帳單", "ChatGPT 方案：5 小時內已用 7%、本週已用 27%（Codex 回報）",
     "不擋「讀」", "每個指令都會先問你"]) assert(all.includes(w), w);
   assert.strictEqual(text(q(main, "plan-usage")).includes("已用 6%"), false, "the last report is the one shown");
-  assert(!all.includes("Claude Code"));
+  // P51-2: the closed list of whom to talk to names every employee's tool; what this chat says of itself (everything outside that list) names no Claude Code
+  const whoList = main.find((n) => n.getAttribute && n.getAttribute("data-ask") === "who-pop");
+  assert(whoList, "the list of employees is in the page");
+  assert(!all.split(text(whoList)).join("").includes("Claude Code"));
   assert(q(main, "codex-note"));
   assert.strictEqual(FETCH_LOG.filter((c) => c.method !== "GET").length, 0);
   // a Claude chat has none of it

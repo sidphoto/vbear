@@ -2085,3 +2085,37 @@ input[type="checkbox"] { width: 18px; height: 18px; flex: none; accent-color: va
 .chat-quiet-list { list-style: none; margin: 6px 0 2px 4px; padding: 0 0 0 12px; border-left: 2px solid var(--line); display: grid; gap: 8px; }
 .chat-quiet-list .chat-note { font-size: 13px; }
 @media (prefers-reduced-motion: reduce) { .chat-quiet-sum::before { transition: none; } }
+
+/* P51-2 (v0.24.0, ADR 0016): the box of the chat page is the home page's rounded box (.home-box, .home-box-bar and .home-send of P50-1 are shared, not copied; what is here only
+   extends them): the words above, whom you talk to and 「用常用做法」 at the left, stop and send at the right, still sticky at the bottom. The button that says whom you talk to opens a
+   small list (the one you talk to is marked; those who cannot chat yet are below, grey, with why). The two opening choices are the home page's small pills (.home-example). */
+.chat-composer { border-top: 0; padding-top: 8px; }
+.chat-composer .home-box textarea { border: 0; border-radius: 0; background: transparent; resize: none; }
+.chat-composer .chat-choices { margin-bottom: 8px; }
+.chat-box-bar { justify-content: space-between; align-items: center; gap: 8px; }
+.chat-box-left { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; min-width: 0; }
+.chat-box-right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.chat-box-left .btn { padding: 4px 10px; border-color: transparent; background: transparent; color: var(--ink-2); font-size: 13px; }
+.chat-box-left .btn:hover { background: var(--mute-soft); color: var(--ink); }
+.home-stop { padding: 6px 14px; font-size: 13px; }
+.home-box-bar .who-pick { margin-right: auto; }
+.who-pick { position: relative; min-width: 0; }
+.who-btn { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; max-width: 14rem; padding: 4px 12px; border: 1px solid var(--line-2); border-radius: 999px; background: transparent; color: var(--ink-2); font: inherit; font-size: 13px; cursor: pointer; }
+.who-btn:hover { background: var(--mute-soft); color: var(--ink); }
+.who-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.who-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.who-pop { position: absolute; left: 0; z-index: 30; width: min(320px, 82vw); max-height: min(360px, 55vh); overflow-y: auto; padding: 6px; background: var(--panel); border: 1px solid var(--line-2); border-radius: 14px; box-shadow: var(--shadow); }
+.who-pop[data-dir="up"] { bottom: calc(100% + 8px); }
+.who-pop[data-dir="down"] { top: calc(100% + 8px); }
+.who-pop[hidden] { display: none; }
+.who-list, .who-later-box { display: grid; gap: 1px; }
+.who-opt { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 10px; align-items: baseline; width: 100%; padding: 8px 10px; border: 0; border-radius: 10px; background: transparent; color: var(--ink); font: inherit; font-size: 14px; text-align: left; text-decoration: none; cursor: pointer; }
+.who-opt:hover { background: var(--mute-soft); }
+.who-opt:focus-visible { background: var(--mute-soft); outline: none; box-shadow: 0 0 0 2px var(--accent); }
+.who-opt[aria-selected="true"] { background: var(--mute-soft); }
+.who-name { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.who-meta { grid-column: 1; }
+.who-now { grid-row: 1; grid-column: 2; color: var(--accent); }
+.who-later .who-name { font-weight: 500; color: var(--ink-2); }
+.who-why { grid-column: 1 / -1; color: var(--ink-3); overflow-wrap: anywhere; }
+.who-cap { margin: 8px 10px 2px; }

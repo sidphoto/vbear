@@ -2930,11 +2930,28 @@ function homeAsk(state) {
       el("a", { class: "btn primary", href: `#/chat?profile=${encodeURIComponent(ceo.id)}`, "data-home": "ask-prepare" }, "先把聊天準備好"));
   }
   const talked = state.chats && Array.isArray(state.chats.chats) ? state.chats.chats.some((c) => c && c.turns > 0 && !c.problem) : false;
+  // P51-2: whom the box is for. It starts as the CEO on every visit (nothing is remembered); the small button at the left of the box changes it, and a pick changes only this.
+  let target = { id: ceo.id, name: ceo.name || "CEO" };
+  const isCeo = () => target.id === ceo.id;
   const input = el("textarea", { rows: "2", maxlength: "20000", "data-home": "ask-input", "aria-label": "要對 CEO 說的話", placeholder: "跟 CEO 說一件你想做的事",
     on: { keydown: (e) => homeAskKeydown(e, send), input: () => homeAskGrow(input) } });
   state.askInput = input;
   const result = el("div", { "data-home": "ask-result", "aria-live": "polite" });
   const button = el("button", { type: "button", class: "btn primary home-send", "data-home": "ask-send", on: { click: () => send() } }, "送出");
+  const hint = el("p", { class: "small muted home-hint" });
+  const drawHint = () => setKids(hint, talked || !isCeo() ? null : "跟 CEO 說第一句話吧。", talked || !isCeo() ? null : " ", isCeo() ? HOME_CEO_ASK : `${target.name} 要動手前都會先問你。`, " ", "按 Cmd/Ctrl + Enter 也能送出。");
+  const picker = whoPicker({ cards: state.chats && state.chats.cards, data: state.chats, current: ceo.id, currentName: target.name, dir: "down",
+    onPick: (c) => {                          // 18b: a pick only changes whom the box is for; no request, nothing sent
+      target = { id: c.id, name: typeof c.name === "string" && c.name ? c.name : c.id };
+      picker.setCurrent(c.id);
+      input.setAttribute("aria-label", isCeo() ? "要對 CEO 說的話" : `要對 ${target.name} 說的話`);
+      input.setAttribute("placeholder", isCeo() ? "跟 CEO 說一件你想做的事" : `跟 ${target.name} 說一件你想做的事`);
+      drawHint();
+      setKids(result);
+      input.focus();
+    },
+    onLater: (c) => chatWhoLater(c.id, input.value) });
+  drawHint();
   let busy = false;
   async function send() {
     const text = input.value;
@@ -2942,21 +2959,22 @@ function homeAsk(state) {
     if (state.lamp === "red") { setKids(result, limitReachedNotice(null)); return; }       // the limit would stop it: nothing is sent
     busy = true; button.disabled = true; setKids(result);
     let r;
-    try { r = await openChatWith(ceo.id, { text }); }
+    const to = target;                                    // the one it was pressed for, whatever is picked while it waits
+    try { r = await openChatWith(to.id, { text }); }
     catch (e) { r = { ok: false, error: e }; }
     busy = false; button.disabled = false;
     if (r.error) {
       const w = plainWords(r.error);
       const limit = w.limit || HOME_LIMIT_KINDS.includes(r.error.code);
-      if (!limit && CHAT_NOT_READY_CODES.includes(r.error.code)) setKids(result, chatNotReadyNotice(r.error, ceo.id, r.prep, { scope: "home", go: "ask-prepare", keep: () => input.value }));
+      if (!limit && CHAT_NOT_READY_CODES.includes(r.error.code)) setKids(result, chatNotReadyNotice(r.error, to.id, r.prep, { scope: "home", go: "ask-prepare", keep: () => input.value }));
       else setKids(result, limit ? limitReachedNotice(r.error.message) : notice("bad", r.error.message || "沒有送出"));
-    } else if (r.kept) toast(HOME_BUSY_TEXT);
+    } else if (r.kept) toast(to.id === ceo.id ? HOME_BUSY_TEXT : HOME_BUSY_TEXT.split("CEO").join(to.name));
     else if (r.reason) setKids(result, notice("warn", plainWords(r.reason).text));
     else if (r.ok) { input.value = ""; homeAskGrow(input); }
   }
   return block(
-    el("div", { class: "home-box" }, input, el("div", { class: "home-box-bar" }, button)),
-    el("p", { class: "small muted home-hint" }, talked ? null : "跟 CEO 說第一句話吧。", talked ? null : " ", HOME_CEO_ASK, " ", "按 Cmd/Ctrl + Enter 也能送出。"),
+    el("div", { class: "home-box" }, input, el("div", { class: "home-box-bar" }, picker ? picker.node : null, button)),
+    hint,
     talked ? null : el("div", { class: "home-examples", "data-home": "ask-examples" },
       HOME_EXAMPLES.map((sentence) => el("button", { type: "button", class: "home-example", "data-home": "ask-example", on: { click: () => homeExampleFill(input, sentence) } }, sentence))),
     result);
@@ -15659,9 +15677,10 @@ function ceoOpeningChoices(input, opts) {
     const key = `${shown()}|${noteText()}`;
     if (key === last) return;
     last = key;
-    setKids(node, shown() ? CEO_CHOICES.map((c) => el("button", { type: "button", class: "btn small", "data-chat": "opening-choice", "data-choice": c.key,
+    setKids(node, shown() ? CEO_CHOICES.map((c) => el("button", { type: "button", class: "home-example", "data-chat": "opening-choice", "data-choice": c.key,
       on: { click: () => {
         input.value = c.text;
+        homeAskGrow(input);
         input.focus();
         if (typeof input.setSelectionRange === "function") input.setSelectionRange(c.text.length, c.text.length);
         last = null; sync();
@@ -15754,6 +15773,117 @@ function chatQuietLog(log) {
 }
 // ---------- end of P51 -----------------------------------------------------------------------------------------------------------
 
+// ---------- P51 who is talked to (v0.24, ADR 0016) --------------------------------------------------------------------------------
+// The small button at the left of the box says whom the words go to, and opens a list to change it. The list is drawn only from data the page already has (the
+// answer of GET /api/chats it was given): opening it, and choosing from it, ask for nothing. An employee who can chat is an option; one who cannot is below, grey,
+// with one sentence why and a link to the page that prepares them (a press there selects nothing). Choosing never sends a message and never writes anything:
+// on the home page it only changes whom the send button is for; on a chat page it goes to that employee's page and the words not yet sent go along (18b).
+// opts: { cards, data (that answer), current (an employee id), dir ("up" or "down"), onPick(card), onLater(card) } -> { node, button, close, setCurrent(id) }, or null with no card.
+function whoPicker(opts) {
+  const cards = (Array.isArray(opts && opts.cards) ? opts.cards : []).filter((c) => c && typeof c === "object" && typeof c.id === "string" && c.id);
+  if (!cards.length) return null;
+  const nameOf = (c) => (typeof c.name === "string" && c.name ? c.name : c.id);
+  const metaOf = (c) => [cardHas(CARD_POSITION_LABEL, c.position) ? CARD_POSITION_LABEL[c.position] : "", c.tool ? chatToolName(c.tool) : ""].filter(Boolean).join("・");
+  let current = typeof opts.current === "string" ? opts.current : "";
+  let label = (cards.find((c) => c.id === current) || { name: opts.currentName }).name || opts.currentName || "員工";
+  const labelNode = el("span", { class: "who-label" }, label);
+  const button = el("button", { type: "button", class: "who-btn", "data-ask": "who", "aria-haspopup": "listbox", "aria-expanded": "false" }, labelNode, el("span", { class: "who-caret", "aria-hidden": "true" }, "▾"));
+  const listbox = el("div", { class: "who-list", role: "listbox", "aria-label": "要跟誰說" });
+  const laterBox = el("div", { class: "who-later-box", role: "group", "aria-label": "還不能聊的員工" });
+  const pop = el("div", { class: "who-pop", "data-ask": "who-pop", "data-dir": opts.dir === "down" ? "down" : "up" }, listbox, laterBox);
+  const wrap = el("div", { class: "who-pick" }, button, pop);
+  pop.hidden = true;
+  let isOpen = false;
+  let entries = [];
+  const fill = () => {
+    entries = [];
+    const ready = [], later = [];
+    for (const c of cards) {
+      const prep = chatPrepState(c, opts.data);
+      if (!prep) continue;
+      (prep.kind === "start" ? ready : later).push([c, prep]);
+    }
+    setKids(listbox, ready.map(([c]) => {
+      const node = el("button", { type: "button", class: "who-opt", role: "option", "data-ask": "who-option", "data-profile-id": c.id, "aria-selected": String(c.id === current),
+        on: { click: () => choose(c) } },
+        el("span", { class: "who-name" }, nameOf(c)), el("span", { class: "who-meta small muted" }, metaOf(c)), c.id === current ? el("span", { class: "who-now small" }, "目前") : null);
+      entries.push(node);
+      return node;
+    }));
+    setKids(laterBox, later.length ? el("p", { class: "who-cap small muted" }, "還不能聊") : null, later.map(([c, prep]) => {
+      const node = el("a", { class: "who-opt who-later", href: `#/chat?profile=${encodeURIComponent(c.id)}`, "data-ask": "who-later", "data-profile-id": c.id,
+        on: { click: () => { close(false); if (typeof opts.onLater === "function") opts.onLater(c); } } },
+        el("span", { class: "who-name" }, nameOf(c)), el("span", { class: "who-meta small muted" }, metaOf(c)),
+        el("span", { class: "who-why small" }, plainWords(prep.reason || "").text || "原因不明"));
+      entries.push(node);
+      return node;
+    }));
+  };
+  const away = (e) => { if (isOpen && e && e.target && !wrap.contains(e.target)) close(false); };
+  const focusAt = (i) => { if (entries.length) { const n = entries[(i + entries.length) % entries.length]; if (n.focus) n.focus(); } };
+  function open() {
+    if (isOpen) return;
+    isOpen = true;
+    pop.hidden = false;
+    button.setAttribute("aria-expanded", "true");
+    if (document.addEventListener) document.addEventListener("click", away);
+    const at = entries.findIndex((n) => n.getAttribute("data-profile-id") === current && n.getAttribute("data-ask") === "who-option");
+    focusAt(at < 0 ? 0 : at);
+  }
+  function close(giveFocusBack) {
+    if (!isOpen) return;
+    isOpen = false;
+    pop.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+    if (document.removeEventListener) document.removeEventListener("click", away);
+    if (giveFocusBack !== false && button.focus) button.focus();
+  }
+  function choose(c) {
+    close(false);
+    if (c.id === current) { if (button.focus) button.focus(); return; }          // the one you already talk to: nothing changes
+    if (typeof opts.onPick === "function") opts.onPick(c);
+  }
+  const setCurrent = (id) => {
+    current = typeof id === "string" ? id : "";
+    const c = cards.find((x) => x.id === current);
+    if (c) { label = nameOf(c); setKids(labelNode, label); }
+    button.setAttribute("aria-label", `現在對 ${label} 說話，按了可以換人`);
+    fill();
+  };
+  button.addEventListener("click", () => (isOpen ? close(true) : open()));
+  pop.addEventListener("keydown", (e) => {
+    const at = entries.indexOf(document.activeElement);
+    if (e.key === "Escape") { if (e.preventDefault) e.preventDefault(); close(true); }
+    else if (e.key === "ArrowDown") { if (e.preventDefault) e.preventDefault(); focusAt(at < 0 ? 0 : at + 1); }
+    else if (e.key === "ArrowUp") { if (e.preventDefault) e.preventDefault(); focusAt(at < 0 ? -1 : at - 1); }
+    else if (e.key === "Home") { if (e.preventDefault) e.preventDefault(); focusAt(0); }
+    else if (e.key === "End") { if (e.preventDefault) e.preventDefault(); focusAt(-1); }
+    else if (e.key === "Tab") close(false);
+  });
+  button.setAttribute("aria-label", `現在對 ${label} 說話，按了可以換人`);
+  fill();
+  return { node: wrap, button, close: () => close(false), setCurrent };
+}
+// 18b: a pick on a chat page. It only goes to a page: that employee's last chat when the answer already read has one (a chat a routine opened is not one), else the page that
+// opens a chat with them (opening is the person's press there). The words not yet sent wait for the box of that page and are sent only by its send button. No request,
+// no send, and the list of chats is not read again: `chatsRes` is the answer the page already has.
+function chatWhoGo(profileId, words, chatsRes) {
+  const t = typeof words === "string" ? words : "";
+  const chat = homeChatsOf(chatsRes, null, profileId)[0] || null;
+  if (chat) {
+    if (t.trim()) ceoDrafts.set(chat.id, t);
+    location.hash = `#/chat/${encodeURIComponent(chat.id)}`;
+    return;
+  }
+  if (t.trim()) ceoDrafts.set(profileId, t);
+  location.hash = `#/chat?profile=${encodeURIComponent(profileId)}`;
+}
+// A press on someone who cannot chat yet: the link goes to the page that prepares them; the words wait there under their id (as the notice of a refused send keeps them).
+function chatWhoLater(profileId, words) {
+  if (typeof words === "string" && words.trim()) ceoDrafts.set(profileId, words);
+}
+// ---------- end of P51 who ---------------------------------------------------------------------------------------------------------
+
 async function viewChatDetail(token, id) {
   let all;
   try { all = await chatReadAll(id); }
@@ -15778,13 +15908,13 @@ async function viewChatDetail(token, id) {
   const detailsBody = el("div", { class: "chat-details-body" });
   const detailsBox = el("details", { class: "fold chat-details small", "data-chat": "details" }, el("summary", null, "詳細資訊"), detailsBody);
   const noteBox = el("div", { class: "chat-notes" });
-  const input = el("textarea", { rows: "3", "data-chat": "input", "aria-label": "要對員工說的話", maxlength: "20000", placeholder: "要對員工說什麼？（Cmd/Ctrl + Enter 送出）",
-    on: { keydown: (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } } } });
+  const input = el("textarea", { rows: "2", "data-chat": "input", "aria-label": "要對員工說的話", maxlength: "20000", placeholder: "要對員工說什麼？（Cmd/Ctrl + Enter 送出）",
+    on: { keydown: (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.isComposing) { e.preventDefault(); send(); } }, input: () => homeAskGrow(input) } });
   // v0.21.0: words kept under the employee's id (the 「到準備頁」 link, a refused first send) come back to this chat when it has none of its own
   const ownerId = (all && all.card && typeof all.card.id === "string" && all.card.id) || (all && all.chat && all.chat.profile_id) || "";
   if (ownerId) { if (ceoDrafts.has(id)) ceoDrafts.delete(ownerId); else ceoMoveDraft(ownerId, id); }   // one set of words per chat, the newest; never pasted twice
   const opening = ceoTakeDraft(id);        // P38-8: the first CEO's opening sentence: put in the box, sent only by the send button
-  if (opening) input.value = opening;
+  if (opening) { input.value = opening; homeAskGrow(input); }
   // P48-3: only a CEO's conversation nobody has spoken in has the two opening choices; the line under the box says whose words are in it
   let sentNow = 0;                          // messages the person sent from this page (the records may come a moment later)
   const talkSeen = [];                      // the records that are words said (the person's and the reply), oldest first
@@ -15802,8 +15932,8 @@ async function viewChatDetail(token, id) {
     if (!hintWanted()) { if (hintNode) { hintNode = null; setKids(hintBox, null); } return; }
     if (!hintNode) { hintNode = ceoChiefHint(chiefRef, () => { hintDismissed = true; syncHint(); }); setKids(hintBox, hintNode); }
   };
-  const sendBtn = el("button", { type: "button", class: "btn primary", "data-chat": "send", on: { click: () => send() } }, "送出");
-  const stopBtn = el("button", { type: "button", class: "btn", "data-chat": "stop", on: { click: () => stop() } }, "停止這一回合");
+  const sendBtn = el("button", { type: "button", class: "btn primary home-send", "data-chat": "send", on: { click: () => send() } }, "送出");
+  const stopBtn = el("button", { type: "button", class: "btn home-stop", "data-chat": "stop", on: { click: () => stop() } }, "停止這一回合");
   const sendNote = el("p", { class: "small muted", "data-chat": "send-note" });
   const limitBox = el("div", { "data-chat": "limit-box", "aria-live": "polite" });       // the day's limit stopped a send: said in plain words, with the way to the settings
   let noteText = "";                      // the server's last refusal, kept until the person acts again
@@ -15970,6 +16100,7 @@ async function viewChatDetail(token, id) {
     try {
       await api.post(`/api/chats/${encodeURIComponent(id)}/messages`, { text });
       input.value = "";
+      homeAskGrow(input);
       sentNow += 1;
       openers.sync();
       await pollOnce();
@@ -16057,8 +16188,17 @@ async function viewChatDetail(token, id) {
   const groupNote = inGroup ? el("p", { class: "small", "data-chat": "group-note" },
     `這是群組「${typeof inGroup.name === "string" ? inGroup.name : ""}」裡的對話，要說話請到群組裡。 `,
     el("a", { href: `#/chat/group/${encodeURIComponent(inGroup.id)}` }, "回到群組")) : null;
-  const composer = inGroup ? null : el("div", { class: "chat-composer" }, input, openers.node,
-    el("div", { class: "row" }, sendBtn, stopBtn, skillUseButton(input)), sendNote, limitBox, openers.note);
+  // P51-2: the box is the home page's box: the words above, whom you talk to and 「用常用做法」 at the left, stop and send at the right. A chat a routine opened has no
+  // one to change to. The list is drawn from the answer of GET /api/chats read when this page was opened; with none, there is no button.
+  const picker = inGroup || typeof all.routine_title === "string" || !ownerId ? null
+    : whoPicker({ cards: info && info.cards, data: info, current: ownerId, currentName: all.card && all.card.name, dir: "up",
+      onPick: (c) => chatWhoGo(c.id, input.value, info), onLater: (c) => chatWhoLater(c.id, input.value) });
+  const composer = inGroup ? null : el("div", { class: "chat-composer" }, openers.node,
+    el("div", { class: "home-box chat-box", "data-chat": "box" }, input,
+      el("div", { class: "home-box-bar chat-box-bar row" },
+        el("div", { class: "chat-box-left" }, picker ? picker.node : null, skillUseButton(input)),
+        el("div", { class: "chat-box-right" }, stopBtn, sendBtn))),
+    sendNote, limitBox, openers.note);
   const isCeo = !inGroup && !!all.card && all.card.position === "planner";        // P40: only a CEO's chat has 「請幕僚長安排」
   const chief = isCeo ? chiefDesk(id, all.card) : null;
   chiefRef = chief;
@@ -21637,6 +21777,10 @@ if (typeof module !== "undefined" && module.exports) {
     CHAT_INTRO,
     chatLine,
     chatQuietSummary,
+    whoPicker,
+    chatWhoGo,
+    chatWhoLater,
+    homeAsk,
     chatIsQuiet,
     viewMemory,
     viewShared,
