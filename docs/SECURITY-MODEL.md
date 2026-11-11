@@ -2409,3 +2409,20 @@ kind of chat event or `localStorage` key. Guard rule 15b (the `/api/` paths the 
   whether a card waits), no invented title, no message text; it is a link to the chat, which opens nothing and costs nothing.
 - **Only the look of the buttons and colours changed.** The pill for 等你決定 opens the same list in place (`homeWaiting`, the same entries and buttons); while the data has not arrived the block says 「載入中」, never 0.
   The phone drawer is the same links behind a button (`aria-expanded`, `aria-controls`, Escape, a link or the backdrop closes it). Colours are neutral greys; the status colours, the office and the cards of the game are untouched.
+
+## Chat reads like text (v0.24)
+
+v0.24.0 (ADR 0016) changes what the chat page shows and nothing on the server: no file under `vbear/` changed except the version number, and there is no new route, request, setting, data file,
+kind of chat event or `localStorage` key. Guard rule 15b (the `/api/` paths the page uses are a subset of v0.20.0's, the routes and chat events are v0.20.0's) passes unchanged, and rules 15, 16 and 17 were not edited.
+
+- **Folding hides no decision and no record.** Only tool, tool result, auto-allowed, turn-ended (when the turn ended well), process-started and process-ended (for a reason the page can say) lines are put in a fold (`chatIsQuiet`); the card that waits
+  (`live-card` and the `card` line), `card_decision`, `denied`, `error`, `anomaly` and the words said are never in one, and a turn that was stopped, hit a limit or went wrong, or a process that ended for an unknown reason, stays in the open (rule 18a).
+  A fold is a closed `<details>` in the page, not a removed element: every line is still in the page with its `data-seq` and `data-chat`, and `chatQuietLog` neither drops, delays nor redraws a line (a fold you opened is not closed by a new line).
+  The amounts are inside the fold, one line each; the line over a fold is made only of counts (rule 18d).
+- **Changing whom you talk to sends nothing.** The button at the left of the box lists employees from the answer of `GET /api/chats` the page already had (the home page's read; the chat page's read when it was opened): opening the list and choosing make no
+  request, and `chatWhoGo`, `chatWhoLater` and the picker call no send or request function, do no POST, PUT or DELETE, read no chat list and set no timer (rule 18b). On the home page a pick changes only whom the one
+  `openChatWith(profileId, { text })` of the person's press of 送出 is for. On a chat page it goes to that employee's page (their latest chat in the answer already read, else `#/chat?profile=<id>`, where opening a chat is
+  the person's own press) and the words not yet sent wait in `ceoDrafts` (in the page's memory, not on disk) for that page's box; only that page's 送出 sends them. An employee who cannot chat is a link to the preparation page, never an option.
+- **Only Cmd/Ctrl + Enter sends from the chat box** (rule 18c). The box has one keydown handler, and it is the same as before with one more condition, `!e.isComposing` (an IME's Enter sends nothing); no keypress, keyup, form or timer reaches `send`.
+- **Nothing that asks you moved.** The permission card, its buttons and warnings, the 「⋯」 menu and every confirmation it opens, the limit notice, and the line over the head (the work, the AI tool, that everything asks first, which company the words go to) are the same; they are smaller or placed differently, not removed.
+- **Residual risk.** A fold's summary says only how many lines of each kind; a person who never opens it does not see each tool's summary line (what was read or run). The card that asked and the decision are never folded, so what was allowed or refused is always shown; what ran after an allow is in the fold.

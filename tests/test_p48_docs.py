@@ -100,7 +100,7 @@ class ChangelogTests(unittest.TestCase):
     def test_the_release_heading_is_first_and_not_unreleased(self):
         # (v0.22.1 put its small section in front of v0.22.0's: the heading of v0.22.0 is still there, in front of v0.21.0's)
         self.assertIn("\n## v0.22.0 — easier to pick up, part 2 (好上手 2)\n", self.text)
-        self.assertRegex(self.text, r"\A# Changelog\n\n## v0\.(?:22\.[01]|23\.0) — ")       # (v0.23.0 put itself in front)
+        self.assertRegex(self.text, r"\A# Changelog\n\n## v0\.(?:22\.[01]|23\.0|24\.0) — ")       # (v0.23.0 and v0.24.0 put themselves in front)
         self.assertLess(self.text.index("## v0.22.0"), self.text.index("## v0.21.0"))
         self.assertNotIn("Unreleased", self.first)
 
@@ -155,8 +155,9 @@ class SecurityModelTests(unittest.TestCase):
         self.assertEqual(self.model.count("## Easy start 2 (v0.22)"), 1)
         self.assertNotIn(" ## ", self.section[len("## Easy start 2 (v0.22)"):])
         after = self.model[self.model.index("## New versions of the AI tools (v0.22.1)") + 3:]
-        self.assertEqual(after.count(" ## "), 1, "v0.22.1's section is followed by one section only: v0.23's")        # (v0.23.0 added 「Chat-first home (v0.23)」 after v0.22.1's)
+        self.assertEqual(after.count(" ## "), 2, "v0.22.1's section is followed by two sections only: v0.23's and v0.24's")        # (v0.23.0 added 「Chat-first home (v0.23)」 after v0.22.1's, v0.24.0 added 「Chat reads like text (v0.24)」)
         self.assertIn(" ## Chat-first home (v0.23) ", after)
+        self.assertIn(" ## Chat reads like text (v0.24)", after)
         for word in ("does not move any start-up boundary", "`vbear/agent_launch.py`", "`vbear/cli_versions.py`", "`vbear/admin_policy.py`", "No route (API path), no key of `config.json` and no kind of chat event",
                      "`vbear-setup-pick` and `vbear-notify`", "rule 16", "rules 1 to 15 were not loosened", "Residual risks", "Going back to v0.21.0"):
             self.assertIn(word, self.section, word)
@@ -259,7 +260,7 @@ class GlossaryTests(unittest.TestCase):
 class VersionAndWalkTests(unittest.TestCase):
     def test_the_version_is_the_release(self):
         import vbear
-        self.assertEqual(vbear.__version__, "0.23.0")                       # (v0.23.0 bumped it; v0.22.1's and v0.22.0's sections stay below)
+        self.assertEqual(vbear.__version__, "0.24.0")                       # (v0.24.0 bumped it; v0.23.0's, v0.22.1's and v0.22.0's sections stay below)
         self.assertIn("## v0.22.0", raw("CHANGELOG.md"))
         self.assertIn("## v0.22.1", raw("CHANGELOG.md"))
 

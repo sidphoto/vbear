@@ -2,7 +2,7 @@
 // page already has (the home page's read of the employees and GET /api/chats; the chat page's one read when it was opened), so opening it asks for nothing. Those who can chat
 // are the options (the one you talk to is marked); those who cannot are below, grey, each with one sentence why, and a press goes to the page that prepares them (it selects
 // nothing). On the home page a pick only changes who the send button sends to (the same openChatWith as for the CEO); on a chat page a pick goes to that employee's page and
-// takes the words not yet sent along; choosing sends nothing and writes nothing (guard 18b is on the source in tests/test_autonomy_guard.py, here it is on the page).
+// takes the words not yet sent along; choosing sends nothing and writes nothing (guard 18b is on the source in tests/test_autonomy_guard.py, here it is on the page); and only Cmd/Ctrl+Enter sends from the chat box (guard 18c, same way).
 // The real web/app.js on a synthetic DOM and a fetch stub; it is NOT a browser test. Nothing here runs a model.
 // Run: node tests/frontend/p51_who.cjs   (exit code 0 = pass)
 "use strict";

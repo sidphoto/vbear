@@ -707,3 +707,18 @@ v0.23.0 (ADR 0015) changes what the page shows and nothing on the server: `vbear
 - **Look.** The base colours in `:root` and the two dark blocks are neutral greys with a `--side-bg` one step off the page; the P50-2 and P50-3 parts at the end of `web/style.css` hold the bar, the drawer (no animation under
   `prefers-reduced-motion`), pill buttons and card frames without shadow.
 - **Tests.** `tests/frontend/p50_home.cjs`, `p50_nav.cjs`, `p50_theme.cjs`; `tests/test_autonomy_guard.py` (17a, 17b, 17c; 15b unchanged); `tests/test_p50_docs.py` checks the documents.
+
+## Chat reads like text — `web/app.js`, `web/style.css` (v0.24)
+
+v0.24.0 (ADR 0016) changes what the chat pages show and nothing on the server: `vbear/` changed only in the version number, there is no new route or request (guard rule 15b still passes), and no new `localStorage` key.
+
+- **Page and lines.** `chatColumn(...)` is the one centred column (`div.chat-page[data-chat="page"]`, 720px at most) of the list, the page that prepares a chat and a chat. `chatLine(rec, opts)` still makes the `<li>` of each record (same `data-chat`, `data-seq`);
+  the person's and the employee's lines have `.chat-who` (the name) and `.chat-time` (`chatTimeNode`, shown on hover, focus and with no hover), and the person's own line `.chat-who-quiet` unless VBear sent it for a dispatch.
+- **Folds.** `chatIsQuiet(rec)` says whether a record's line may be folded; `chatQuietLog(log).add(line, rec)` appends a line to the log or to the fold that is open at the end (`li[data-chat="quiet-item"] > details[data-chat="quiet-group"]`, its
+  `summary[data-chat="quiet-summary"]` written only by `chatQuietSummary(counts)`, its `ul[data-chat="quiet-list"]` holding the original lines); `CHAT_QUIET_KINDS` lists the six `data-chat` values. Guard rules 18a and 18d scan these.
+- **The box and whom you talk to.** In `viewChatDetail` the box is `div.home-box.chat-box` (`textarea` grown by `homeAskGrow`, `.home-box-bar.chat-box-bar` with `.chat-box-left` (the picker and 「用常用做法」) and `.chat-box-right` (stop, send)); its one keydown is the rule 18c's.
+  `whoPicker(opts)` makes the button (`data-ask="who"`) and the pop-up (`.who-pop`, `role="listbox"` for the options and a group of links for those who cannot chat yet; options are `data-ask="who-option"`, links `data-ask="who-later"`);
+  `chatWhoGo(profileId, words, chatsRes)` and `chatWhoLater(profileId, words)` are the chat page's handlers; `homeAsk` keeps `target` (whom the box is for, the CEO on every visit). Guard rule 18b scans them.
+- **Head, preparation page, list.** `.chat-head-top` holds `.chat-title` (the `h1` and the state badge) and the 「⋯」 menu; `chatHeadLine` still makes the line under it. `chatRow` is a plain row (`.chat-row`, a `.chat-wait-dot` when a card waits).
+- **Look.** The P51-1, P51-2 and P51-3 parts at the end of `web/style.css` (the earlier rules, including P47-4's, are kept and overridden there); `.home-box`, `.home-box-bar`, `.home-send` and `.home-example` of P50-1 are shared, not copied.
+- **Tests.** `tests/frontend/p51_chat.cjs`, `p51_who.cjs`, `p51_head.cjs`; `tests/test_autonomy_guard.py` (18a, 18b, 18c, 18d; 15b unchanged); `tests/test_p51_docs.py` checks the documents.

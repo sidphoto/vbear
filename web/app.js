@@ -1013,6 +1013,8 @@ const WORDS = {
   limits:        { use: "用量與上限", avoid: [], loose: [], scope: "new", note: "設定裡預設收起的一塊：今天已花、花費上限（可自填）、狀態" },
   newChat:       { use: "新對話", avoid: [], loose: [], scope: "new", note: "選單第一項（原本的首頁項目，href 與 data-nav 不變）：回到首頁、游標放進輸入框；本身不開任何對話、不發請求" },
   recent:        { use: "最近", avoid: [], loose: [], scope: "new", note: "選單裡「新對話」下面的清單：最近聊過的員工（最多 8 個）；只用已讀到的聊天清單，不另外讀、不編標題" },
+  chatFold:      { use: "細節", avoid: [], loose: [], scope: "new", note: "聊天裡收起來的那一行（用了幾次工具・自動允許・細節）；摘要沒有金額，要你決定的卡片、錯誤、拒絕永遠不收進去" },
+  whoTo:         { use: "要跟誰說", avoid: [], loose: [], scope: "new", note: "輸入框左下角的小鈕：寫現在說話的對象，按了列出員工；選取不送出任何東西" },
 };
 // -> [{ key, term, use }] for the words a page of that scope must not say (`avoid` only, searched literally). scope "all": the pages of
 // the normal mode; "title": the menu names and the h1 of the advanced pages (and, for a page of scope "all", nothing of this).
