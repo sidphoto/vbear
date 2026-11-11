@@ -1008,6 +1008,8 @@ class Walker:
 DIALOG_OK = '.modal-backdrop .modal-actions .btn.primary'
 LEAVE = '[data-setup="leave"]'
 CEO_GO = '[data-ceo="create"]'
+HOME_CEO_GO = '[data-home="first-ceo-create"]'            # v0.25: the home page of a person with no employee makes the CEO itself
+HOME_PICK_CLAUDE = '[data-setup-pick-go="claude"]'
 NAV_SETTINGS = '[data-nav="settings"]'
 LIMITS_SUMMARY = '[data-settings="limits"] > summary'
 ROUTINE_DAYS = [f'[data-routine-day="{i}"]' for i in range(7)]
@@ -1061,9 +1063,9 @@ PATHS = {
     },
     "after": {
         "first": {"start": "#/", "steps": [
-            {"kind": "press", "sel": LEAVE, "optional": True, "unable": "no AI tool is ready on this computer, so the start button stays off"},
-            {"kind": "press", "sel": '[data-home-step="2"] a[href="#/ceo"]'},
-            {"kind": "press", "sel": CEO_GO, "then": "ceo_made"},
+            {"kind": "press", "sel": LEAVE, "optional": True, "unable": "no AI tool is ready on this computer, so the start button stays off"},      # (v0.25 stays on the home page: only there when something sent the person to the start-up page)
+            {"kind": "press", "sel": HOME_PICK_CLAUDE, "optional": True},      # (the pick may already be there from an earlier run's browser key)
+            {"kind": "press", "sel": HOME_CEO_GO, "then": "ceo_made", "unable": "no AI tool is ready on this computer, so the button that makes the CEO stays off"},
             {"kind": "look", "sel": [CHAT_INPUT, '[data-chat="prep-action"]'], "then": "chat_usable"},
             {"kind": "press", "sel": SEND, "ai": True, "then": "first_reply"},
         ]},
