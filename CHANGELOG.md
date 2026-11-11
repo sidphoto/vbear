@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.23.0 — a greeting and one box
+
+Open VBear and you see one line, 「今天想做什麼？」, and a box. Type, press Cmd/Ctrl + Enter, and you are talking with your CEO. Everything else (your employees, the timed jobs, the settings) stepped back to the left bar. This release only changes what the screen shows; it adds no new request and changes nothing on the server.
+
+- **The home page is a greeting and a box.** What waits for your decision is a small pill, 「有 N 件事等你決定」, that opens the list right where it is; when nothing waits (and VBear is sure it has read everything) the pill is not there, and while the data is still coming it says 「載入中」, never "nothing". The box is a big rounded one with the 送出 button at its corner; it grows as you type, Enter alone still does not send, and the cursor is in it when the page opens (not on a phone or tablet, where the keyboard would cover the page).
+- **Three example sentences for the very first time.** 「幫我整理今天的待辦」, 「幫我寫一篇貼文」 and 「每天早上給我一份摘要」 only put the words in the box for you to change; nothing is sent, nothing costs anything, until you press 送出.
+- **Your employees are small faces with names**, with a 「＋」 at the end to add one. 「今天」 is one grey line. Someone with no employee yet still sees the three steps.
+- **The left bar is a record of conversations.** 新對話 (the old 首頁 item: back to the box), 最近 (the employees you talked with lately, up to 8, newest first, a dot when a card of theirs waits for you), then 員工, 工作 and 設定 a size smaller at the foot, and the advanced items below as before. 最近 uses only the chat list the home page already read: it makes no request of its own and has no timer (the chat list makes the server ask each AI tool for its version, so reading it more often is not free). On a phone the bar is a drawer behind a 選單 button.
+- **Neutral colours, fewer frames.** Black, white and grey instead of cream and green; green is kept for the main buttons and the page you are on. Buttons are round pills, cards keep their frame but lose the shadow, the home page has no boxes inside boxes. The status colours (green, amber, red, blue), the office and the cards of the game did not change. Text contrast is at least as high as before in both light and dark.
+- **Tests and guard rules.** Rule 17a: the example sentences send nothing; 17b: 最近 does not read the chat list and sets no timer; 17c: only Cmd/Ctrl + Enter sends from the home box. Rule 15b (no new `/api/` path, no changed route or event) passes unchanged. `tests/frontend/p50_home.cjs`, `p50_nav.cjs`, `p50_theme.cjs` and `tests/test_p50_docs.py` are new.
+- **Money.** Nothing here costs anything.
+- **Not tried on a real Mac / known limits.** The look was checked by reading the colours and by the tests, not by eye in a browser; the contrast numbers are computed from the colour values. The 最近 list is empty until the home page has read the chat list once (the page does not guess). The example sentence replaces what is already in the box without asking.
+- **Going back to v0.22.1.** Nothing to convert: no data file, setting or browser key changed.
+
 ## v0.22.1 — Claude Code 2.1.322 and Codex 0.167.0
 
 The AI tools update themselves, and a Mac that had updated could no longer chat: the screen said, for example, 「Codex 0.167.0 沒有管理員政策來源清單，不能啟動」. This small release teaches VBear two of the three new versions. **It is not a new feature, and it does not make a version trusted.**

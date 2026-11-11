@@ -89,6 +89,16 @@ Never, whatever the person ticked in 「自己動手」:
      P48-7's documentation test (tests/test_p48_docs.py) checks that these files exist and carry the number of their rule; the first-CEO tool pick
      (``?tool=``, tests/test_p38_first_ceo.py ``WantedToolTests``) and the small fixes (tests/frontend/p48_sweep.cjs) are not rules but are tested beside them.
 
+  17. (P50, ADR 0015) the chat-first home of v0.23.0 changes only what the screen shows: a greeting, one box, a side bar of recent employees and neutral colours; it sends nothing,
+     reads nothing and decides nothing on its own. Three rules about the page's source, tested here on ``web/app.js`` (each with a made-up bad source that must fire), and where the thing is:
+     17a  an example sentence only puts its words in the home box and puts the cursor there: the function that handles it makes no request and calls no send; the button's click
+          calls only that function (P50-1, this file, ``ChatFirstHomeRules``, with tests/frontend/p50_home.cjs).
+     17b  the side bar's 最近 asks for nothing and has no timer: the part of the page that draws it never calls ``api`` or names ``/api/chats``, and sets no ``setInterval`` or
+          ``setTimeout``; it is drawn from the chat list the home page had already read (P50-2, this file, with tests/frontend/p50_nav.cjs).
+     17c  only Cmd/Ctrl + Enter sends from the home box: the box's keydown handler calls the send function in that one case, and nothing else of the box (keypress, keyup, a form's
+          submit) sends (P50-1, this file, with tests/frontend/p50_home.cjs).
+     15b is not changed and still passes: v0.23.0 uses no ``/api/`` path that v0.20.0 did not. tests/test_p50_docs.py checks that these files exist and carry the number of their rule.
+
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
 ``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py``, ``vbear/skillbook*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
 staff, of dispatch, of groups and of memory (the suggestions, P42-4) are held to it the day they are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
@@ -2591,6 +2601,203 @@ class Guard16FilesAreThere(unittest.TestCase):
         self.assertTrue((self.ROOT / "macos" / "VBear" / "main.swift").is_file())
         script = self.read("macos", "test_waiting_bridge.sh")
         self.assertIn("main.swift", script)
+
+
+# ---- 17: the chat-first home (v0.23.0, ADR 0015) ---------------------------------------------------------------------------------------------------
+# These scan the JavaScript of web/app.js as text: the function bodies are cut out by their braces, the comments are dropped, and a rule fires when a body does something it
+# must not. Each ``*_problems`` function is run on the real page (must be empty) and on a made-up bad source (must not be).
+
+def js_without_comments(text: str) -> str:
+    """The text without ``//`` comments (a ``//`` that follows whitespace or starts a line; a URL's ``://`` is kept)."""
+    return "\n".join(re.sub(r"(^|\s)//.*$", r"\1", line) for line in text.splitlines())
+
+
+def js_function_body(source: str, name: str) -> str | None:
+    """The text between the braces of ``function name(...) {...}`` (or ``async function``), comments dropped, or None when there is no such function."""
+    m = re.search(r"(?:^|\n)(?:async )?function " + re.escape(name) + r"\(", source)
+    if not m:
+        return None
+    start = source.index("{", source.index(")", m.end()))
+    depth = 0
+    for i in range(start, len(source)):
+        if source[i] == "{":
+            depth += 1
+        elif source[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return js_without_comments(source[start + 1:i])
+    return None
+
+
+# anything that makes a request, sends, stores or leaves the page
+JS_REACHES_OUT = re.compile(r"\bapi\.|\bfetch\(|XMLHttpRequest|sendBeacon|openChatWith|\bsend\b|\bsubmit\b|\blocation\b|localStorage|sessionStorage|\.post\b|postMessage|\bpost\(|window\.open|\.click\(")
+EXAMPLE_FILL_STATEMENTS = ("input.value = sentence", "homeAskGrow(input)", "input.focus()")
+EXAMPLE_CLICK = re.compile(r'"data-home": "ask-example", on: \{ click: \(\) => ([^}]*?) \}')
+
+
+def example_problems(source: str, label: str = "<app.js>") -> list[str]:
+    """17a: the function that handles an example sentence only writes ``input.value``, grows the box and focuses it; the button calls nothing but that function."""
+    found = []
+    body = js_function_body(source, "homeExampleFill")
+    if body is None:
+        return [f"{label}: homeExampleFill is not there"]
+    for hit in JS_REACHES_OUT.finditer(body):
+        found.append(f"{label}: homeExampleFill reaches out: {hit.group(0)}")
+    for statement in [x.strip() for x in body.replace("\n", " ").split(";") if x.strip()]:
+        if statement not in EXAMPLE_FILL_STATEMENTS:
+            found.append(f"{label}: homeExampleFill does more than fill and focus: {statement[:60]}")
+    clicks = EXAMPLE_CLICK.findall(js_without_comments(source))
+    if not clicks:
+        found.append(f"{label}: no example button wired to homeExampleFill")
+    for call in clicks:
+        if call != "homeExampleFill(input, sentence)":
+            found.append(f"{label}: an example button does more than call homeExampleFill: {call[:60]}")
+    if js_without_comments(source).count('"ask-example"') != len(clicks):
+        found.append(f"{label}: an example button is not wired the way the rule reads")
+    return found
+
+
+NAV_RECENT_START = "// ---------- the side bar's 最近"
+NAV_RECENT_END = "// ---------- end of the side bar's 最近"
+NAV_RECENT_FORBIDDEN = re.compile(r"\bapi\b|/api/|\bfetch\b|XMLHttpRequest|sendBeacon|setInterval|setTimeout|requestAnimationFrame|waitingModel|WebSocket|EventSource")
+
+
+def nav_recent_problems(source: str, label: str = "<app.js>") -> list[str]:
+    """17b: the part of the page between the two markers (the side bar's 最近) never calls ``api``, never names a path under /api/ or the chat list, and sets no timer."""
+    if NAV_RECENT_START not in source or NAV_RECENT_END not in source or source.index(NAV_RECENT_END) < source.index(NAV_RECENT_START):
+        return [f"{label}: the markers of the side bar's 最近 are not there"]
+    part = js_without_comments(source[source.index(NAV_RECENT_START):source.index(NAV_RECENT_END)])
+    found = [f"{label}: the side bar's 最近 reaches out or sets a timer: {hit.group(0)}" for hit in NAV_RECENT_FORBIDDEN.finditer(part)]
+    if "navRecentRows" not in part or "drawNavRecent" not in part:
+        found.append(f"{label}: navRecentRows / drawNavRecent are not between the markers")
+    return found
+
+
+KEYDOWN_BODY = re.compile(r'^if \(e\.key === "Enter" && \(e\.metaKey \|\| e\.ctrlKey\)( && !e\.isComposing)?\) \{ e\.preventDefault\(\); send\(\); \}$')
+HOME_SEND_USES = ("homeAskKeydown(e, send)", "async function send()", "click: () => send()")
+
+
+def home_keydown_problems(source: str, label: str = "<app.js>") -> list[str]:
+    """17c: the keydown handler of the home box calls ``send`` only for Enter together with Cmd or Ctrl; the box has no other key, form or submit path to ``send``."""
+    found = []
+    key = js_function_body(source, "homeAskKeydown")
+    if key is None:
+        return [f"{label}: homeAskKeydown is not there"]
+    if not KEYDOWN_BODY.match(" ".join(key.split())):
+        found.append(f"{label}: homeAskKeydown is not 'Enter with Cmd or Ctrl sends, nothing else': {' '.join(key.split())[:90]}")
+    ask = js_function_body(source, "homeAsk")
+    if ask is None:
+        return found + [f"{label}: homeAsk is not there"]
+    rest = ask
+    for use in HOME_SEND_USES:
+        rest = rest.replace(use, "")
+    for hit in re.finditer(r"(?<![\w-])send(?![\w-])", rest):      # (the word ``send`` as a name, not the ``send`` inside ``home-send`` or ``ask-send``)
+        found.append(f"{label}: homeAsk reaches send another way (near: {rest[max(0, hit.start() - 30):hit.end() + 10].strip()!r})")
+    for hit in re.finditer(r"keypress|keyup|onkeydown|onkeypress|onkeyup|[\"\']submit[\"\']|addEventListener|<form|el\(\"form\"", ask):
+        found.append(f"{label}: homeAsk has another input path: {hit.group(0)}")
+    if len(re.findall(r"keydown:", ask)) != 1 or "keydown: (e) => homeAskKeydown(e, send)" not in ask:
+        found.append(f"{label}: the box does not have exactly one keydown, the one that calls homeAskKeydown")
+    return found
+
+
+class ChatFirstHomeRules(unittest.TestCase):
+    """17a, 17b, 17c"""
+
+    SOURCE = (Path(__file__).resolve().parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+
+    GOOD_FILL = """
+function homeAskGrow(input) { input.style.height = "1px"; }
+function homeExampleFill(input, sentence) {
+  input.value = sentence;   // only the words
+  homeAskGrow(input);
+  input.focus();
+}
+function x() { return el("button", { type: "button", "data-home": "ask-example", on: { click: () => homeExampleFill(input, sentence) } }, sentence); }
+"""
+
+    def test_17a_the_page_only_fills_and_focuses(self):
+        self.assertEqual(example_problems(self.SOURCE), [])
+
+    def test_17a_the_scan_fires_on_a_handler_that_sends_asks_or_stores(self):
+        self.assertEqual(example_problems(self.GOOD_FILL), [])
+        for bad in ("  openChatWith(ceo.id, { text: sentence });", "  api.post(\"/api/chats\", { text: sentence });", "  send();", "  fetch(\"/x\");",
+                    "  location.hash = \"#/chat\";", "  localStorage.setItem(\"k\", sentence);", "  button.click();", "  navigator.sendBeacon(\"/x\");", "  console.log(sentence);"):
+            worse = self.GOOD_FILL.replace("  input.focus();", "  input.focus();\n" + bad)
+            self.assertNotEqual(example_problems(worse), [], bad)
+
+    def test_17a_the_scan_fires_on_a_button_that_does_more_than_call_the_function(self):
+        for call in ("send()", "homeExampleFill(input, sentence); send()", "(homeExampleFill(input, sentence), openChatWith(ceo.id, { text: sentence }))"):
+            worse = self.GOOD_FILL.replace("click: () => homeExampleFill(input, sentence)", "click: () => " + call)
+            self.assertNotEqual(example_problems(worse), [], call)
+        self.assertNotEqual(example_problems("function homeExampleFill(input, sentence) { input.value = sentence; }\n"), [], "no button at all")
+        self.assertNotEqual(example_problems(self.GOOD_FILL + 'x = { "data-home": "ask-example", onclick: send };'), [], "a second example button wired another way")
+        self.assertNotEqual(example_problems("function other() {}"), [], "no function")
+
+    def test_17b_the_side_bar_recent_asks_for_nothing_and_has_no_timer(self):
+        self.assertEqual(nav_recent_problems(self.SOURCE), [])
+
+    def test_17b_the_scan_fires_on_a_read_or_a_timer(self):
+        good = NAV_RECENT_START + "\nfunction navRecentRows(x) { return []; }\nfunction drawNavRecent() { setKids(a, []); }\n" + NAV_RECENT_END + "\n"
+        self.assertEqual(nav_recent_problems(good), [])
+        for bad in ("api.get(\"/api/chats\")", "await api.get(`/api/chats`)", "fetch(\"/api/chats\")", "setInterval(drawNavRecent, 1000)", "setTimeout(drawNavRecent, 10)",
+                    "requestAnimationFrame(drawNavRecent)", "waitingModel.refresh()", "new EventSource(\"/x\")"):
+            worse = good.replace("setKids(a, []);", "setKids(a, []); " + bad + ";")
+            self.assertNotEqual(nav_recent_problems(worse), [], bad)
+        self.assertEqual(nav_recent_problems(good.replace("setKids(a, []);", "setKids(a, []); // api.get(\"/api/chats\") is not called here")), [], "a comment is not a call")
+        self.assertNotEqual(nav_recent_problems("function navRecentRows() {}"), [], "no markers")
+
+    GOOD_ASK = """
+function homeAskKeydown(e, send) {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.isComposing) { e.preventDefault(); send(); }
+}
+function homeAsk(state) {
+  const input = el("textarea", { on: { keydown: (e) => homeAskKeydown(e, send), input: () => homeAskGrow(input) } });
+  const button = el("button", { on: { click: () => send() } }, "送出");
+  async function send() { await openChatWith(1, {}); }
+  return block(el("div", null, input, button));
+}
+"""
+
+    def test_17c_the_box_sends_only_on_cmd_or_ctrl_enter(self):
+        self.assertEqual(home_keydown_problems(self.SOURCE), [])
+
+    def test_17c_the_scan_fires_on_a_plain_enter_or_another_path_to_send(self):
+        self.assertEqual(home_keydown_problems(self.GOOD_ASK), [])
+        worse_keys = ("if (e.key === \"Enter\") { e.preventDefault(); send(); }", "if (e.key === \"Enter\" && !e.shiftKey) { e.preventDefault(); send(); }",
+                      "if (e.key === \"Enter\" && (e.metaKey || e.ctrlKey)) { send(); } else if (e.key === \"Enter\") { send(); }",
+                      "if (e.key === \"Enter\" || (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); }", "send();")
+        for worse in worse_keys:
+            source = self.GOOD_ASK.replace("if (e.key === \"Enter\" && (e.metaKey || e.ctrlKey) && !e.isComposing) { e.preventDefault(); send(); }", worse)
+            self.assertNotEqual(home_keydown_problems(source), [], worse)
+        for extra in ("input.addEventListener(\"keypress\", (e) => { if (e.key === \"Enter\") send(); });", "const f = el(\"form\", { on: { submit: send } });",
+                      "input.onkeyup = (e) => send();", "setTimeout(send, 10);"):
+            source = self.GOOD_ASK.replace("  return block(", "  " + extra + "\n  return block(")
+            self.assertNotEqual(home_keydown_problems(source), [], extra)
+        two = self.GOOD_ASK.replace("input: () => homeAskGrow(input) }", "input: () => homeAskGrow(input), keydown: (e) => send() }")
+        self.assertNotEqual(home_keydown_problems(two), [], "a second keydown")
+
+
+class Guard17FilesAreThere(unittest.TestCase):
+    """17: the three rules of v0.23.0 are kept where the description above says, and each file carries the number of its rule."""
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def read(self, *parts):
+        return self.ROOT.joinpath(*parts).read_text(encoding="utf-8")
+
+    def test_17_the_description_names_all_three_rules_and_their_files(self):
+        text = self.read("tests", "test_autonomy_guard.py")
+        for rule in "abc":
+            self.assertIn(f"     17{rule}  ", text, rule)
+        for name in ("p50_home.cjs", "p50_nav.cjs", "ChatFirstHomeRules"):
+            self.assertIn(name, text, name)
+
+    def test_17_each_file_exists_and_carries_the_number_of_its_rule(self):
+        for rule, parts in (("17a", ("tests", "frontend", "p50_home.cjs")), ("17c", ("tests", "frontend", "p50_home.cjs")), ("17b", ("tests", "frontend", "p50_nav.cjs"))):
+            self.assertIn(rule, self.read(*parts), "/".join(parts))
+        self.assertRegex(self.read("tests", "test_autonomy_guard.py"), r"class ChatFirstHomeRules")
+        for rule in ("test_17a_", "test_17b_", "test_17c_"):
+            self.assertIn(rule, self.read("tests", "test_autonomy_guard.py"), rule)
 
 
 if __name__ == "__main__":

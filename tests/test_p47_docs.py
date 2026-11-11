@@ -229,8 +229,9 @@ class ReadmeAndReferenceTests(unittest.TestCase):
         for name, text in (("en", self.en), ("zh", self.zh)):
             for word in ("首頁", "員工", "工作", "設定", "進階模式", "用量與上限", "GLOSSARY.md", "指令視窗", "AI 工具的外掛清單", "員工詳細資料"):
                 self.assertIn(word, text, (name, word))
-        self.assertIn("The menu on the left has 首頁, 員工, 工作 and 設定", self.en)
-        self.assertIn("左邊選單有「首頁」「員工」「工作」「設定」", self.zh)
+        # P50-4 (v0.23): the bar's first item is 新對話 and the three others are a size smaller (the words of the four items are all still in the text above)
+        self.assertIn("The bar on the left has 新對話 (back to the box on the home page), 最近 (the employees you talked with lately) and, smaller, 員工, 工作 and 設定", self.en)
+        self.assertIn("左邊選單有「新對話」「最近」，以及小一級的「員工」「工作」「設定」", self.zh)
 
     def test_the_old_menu_sentences_are_gone(self):
         self.assertNotIn("The menu on the left has 冒險者大廳", self.en)

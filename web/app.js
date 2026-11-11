@@ -968,7 +968,7 @@ function categoryZh(label) {
 // sees, searched literally), loose (words too common to search literally, for a human to look at), scope ("all": every page of the
 // normal mode; "title": an advanced page changes only its menu name and its h1; "new": a new word, nothing to avoid), note.
 const WORDS = {
-  home:          { use: "首頁", avoid: ["冒險者大廳", "大廳"], loose: [], scope: "all", note: "" },
+  home:          { use: "首頁", avoid: ["冒險者大廳", "大廳"], loose: [], scope: "all", note: "頁面本身（#/）；v0.23 起選單的第一項叫「新對話」，頁面只剩給螢幕閱讀器的標題「首頁」" },
   employee:      { use: "員工", avoid: ["角色卡"], loose: ["角色"], scope: "all", note: "指那份設定時寫「員工設定」" },
   employeeList:  { use: "我的員工", avoid: ["角色卡池", "我的角色卡", "名冊"], loose: [], scope: "all", note: "首頁區塊；選單與頁名是「員工」；舊 #/team 在進階叫「員工詳細資料」" },
   newEmployee:   { use: "新增員工", avoid: ["新角色卡", "拿卡", "起手牌組"], loose: [], scope: "all", note: "起手牌組 = 一次新增幾位常用的員工" },
@@ -1011,6 +1011,8 @@ const WORDS = {
   advancedMode:  { use: "進階模式", avoid: [], loose: [], scope: "new", note: "設定裡的開關；打開後選單多出工程頁並顯示路徑與診斷；不改變任何權限" },
   waiting:       { use: "等你決定", avoid: [], loose: [], scope: "new", note: "首頁最上面一塊：所有要用的人決定的事" },
   limits:        { use: "用量與上限", avoid: [], loose: [], scope: "new", note: "設定裡預設收起的一塊：今天已花、花費上限（可自填）、狀態" },
+  newChat:       { use: "新對話", avoid: [], loose: [], scope: "new", note: "選單第一項（原本的首頁項目，href 與 data-nav 不變）：回到首頁、游標放進輸入框；本身不開任何對話、不發請求" },
+  recent:        { use: "最近", avoid: [], loose: [], scope: "new", note: "選單裡「新對話」下面的清單：最近聊過的員工（最多 8 個）；只用已讀到的聊天清單，不另外讀、不編標題" },
 };
 // -> [{ key, term, use }] for the words a page of that scope must not say (`avoid` only, searched literally). scope "all": the pages of
 // the normal mode; "title": the menu names and the h1 of the advanced pages (and, for a page of scope "all", nothing of this).

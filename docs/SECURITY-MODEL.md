@@ -2392,3 +2392,20 @@ limit moved, and no version was added to any verified list.
   The comparison cannot show behaviour: the files Codex makes in its own folder, the order of its messages, or what a new default-on feature does. (3) *The fixtures are the old version's.* No stream of 2.1.322 or 0.167.0 was recorded.
 - **AGY is not part of it.** AGY 1.5.5 was compared the same way and **not added**: one of AGY's own built-in skill files differs from the table of 1.5.3 (and two files that AGY generates cannot be read from the program),
   so a folder written by 1.5.5 would be refused by the folder check. A new table needs a run of the real 1.5.5 (`docs/evidence/agy-1.5.5-not-added.md`). `AGY_SOURCES` and `agy_chat_protocol.VERSIONS` did not change.
+
+## Chat-first home (v0.23)
+
+v0.23.0 (ADR 0015) changes what the home page, the side bar and the colours show, and nothing on the server: no file under `vbear/` changed except the version number, and there is no new route, request, setting, data file,
+kind of chat event or `localStorage` key. Guard rule 15b (the `/api/` paths the page uses are a subset of v0.20.0's, the routes and chat events are v0.20.0's) passes unchanged.
+
+- **The box still sends only when the person presses.** The home box is the old 「想做什麼？跟 CEO 說」 box with a new look: the same `openChatWith(profileId, { text })`, the same one `POST …/messages`, the same refusal
+  (the words are left in the chat's box) when the employee is busy, has a card waiting or cannot chat yet. Enter alone does not send; only Cmd/Ctrl + Enter (and the 送出 button) do (rule 17c). The cursor goes into
+  the box when the page is drawn, only on the home page, only when nothing else has the focus and not on a touch screen; that is a focus move, not a request.
+- **The example sentences send nothing.** The three buttons (「幫我整理今天的待辦」, 「幫我寫一篇貼文」, 「每天早上給我一份摘要」; shown only before the first conversation) only write the sentence into the box and put the
+  cursor there. The handler makes no request and calls no send function (rule 17a); what costs money is still the person's own press of 送出.
+- **The side bar's 最近 reads nothing of its own.** The list of recent employees is drawn from the `GET /api/chats` result the home page had already read (and the 30-second waiting model's data); the part of the page
+  that draws it calls neither `api.get("/api/chats")` nor `setInterval`/`setTimeout` (rule 17b). `GET /api/chats` makes the server run each AI tool's `--version`, so a side bar that read it on its own would start real
+  programs; it does not. With no data, or when nobody has talked, the list is not shown (no "no conversations" sentence: the page does not know). Each row holds only what the server said (the employee's name and
+  whether a card waits), no invented title, no message text; it is a link to the chat, which opens nothing and costs nothing.
+- **Only the look of the buttons and colours changed.** The pill for 等你決定 opens the same list in place (`homeWaiting`, the same entries and buttons); while the data has not arrived the block says 「載入中」, never 0.
+  The phone drawer is the same links behind a button (`aria-expanded`, `aria-controls`, Escape, a link or the backdrop closes it). Colours are neutral greys; the status colours, the office and the cards of the game are untouched.

@@ -611,12 +611,12 @@ writing the user's defaults. `macos/test_browser_mode.sh` exercises the Swift la
 v0.21.0 (ADR 0013) changes what the page shows and nothing on the server: Python changed only in the Chinese wording of `vbear/autonomy.py` and
 `vbear/first_ceo.py`, and there is no new route, setting, data file or kind of chat event (guard rule 15b).
 
-- **Menu.** `web/index.html` has four static items (首頁, 員工, 工作, 設定) and an 進階 block whose `li` carry `data-advanced` and `hidden`.
+- **Menu.** `web/index.html` has four static items (首頁, 員工, 工作, 設定; since v0.23 the first is 「新對話」 and 員工, 工作, 設定 sit at the foot of the bar, see "Chat-first home" below) and an 進階 block whose `li` carry `data-advanced` and `hidden`.
   `syncAdvancedNav(on)` shows or hides that block: it reads `advanced_mode` from `/api/config` once at start, and the switch in the settings page calls it
   when it changes. `advanced_mode` is a display flag only (rule 15a). `NAV_PARENT` maps the first part of an address to the menu item that is lit
   (`employees`, `chat`, `ceo`, `memory`, `shared`, `templates`, `office` → 員工; `work`, `dispatch`, `routines`, `meetings`, `actions`, `my-skills` → 工作;
   `settings`, `setup`, `welcome` → 設定; the rest → 進階); every route of v0.20.0 still draws, and an advanced page opened while advanced mode is off gets one
-  line saying so. `navPageName` and `wireNavMenu` keep the phone's row of four items and the 進階 button.
+  line saying so. `navPageName` and `wireNavMenu` keep the phone's menu button (a row of four items and a 進階 button until v0.22; since v0.23 the whole bar is a drawer behind the button).
 - **Pages.** `viewHome` draws 等你決定 (`homeWaiting`, the same entries in both modes), 我的員工 (`homeTeam`), 今天 (`homeToday`) and the box 「想做什麼？跟 CEO 說」
   (`homeAsk`), or the three steps (`homeFirstSteps`) when there is no employee; in advanced mode the old home's sections are drawn below, by the same functions.
   `viewEmployees` (`#/employees`) and `viewWork` (`#/work`) read only existing GET routes. `openChatWith(profileId, { text })` finds or opens the one-to-one chat of
@@ -690,3 +690,20 @@ live view with `fetch` and a stream reader (the header cannot be set on `EventSo
 - `tests/frontend/*.cjs` run the UI logic in Node against a minimal synthetic DOM. They are not browser tests.
 - Some runtime tests measure timing, such as stream latency and an 8 s version probe, and can fail
   occasionally on a heavily loaded machine.
+
+## Chat-first home — `web/index.html`, `web/app.js`, `web/style.css` (v0.23)
+
+v0.23.0 (ADR 0015) changes what the page shows and nothing on the server: `vbear/` changed only in the version number, there is no new route or request (guard rule 15b still passes), and no new `localStorage` key.
+
+- **Home.** `viewHome` draws one column (`div.home-page[data-home="page"]`, at most 720px; `data-home-layout="center"` puts about 22vh above it when nothing waits): a visually hidden `h1` 「首頁」, `homeWaiting` (a pill
+  `button.home-pill`, `aria-expanded` / `aria-controls="home-waiting-rows"`, that opens the old list in place; the block is hidden when the data is complete and nothing waits, and says 「載入中」 while it is not here),
+  `homeGreeting` 「今天想做什麼？」, `homeAsk` (the box: `div.home-box`, a `textarea` that grows by `homeAskGrow` up to 208px, the 送出 button at its foot, `HOME_CEO_ASK` in small print under it;
+  `homeAskKeydown` sends only on Enter with Cmd or Ctrl), the three example buttons (`HOME_EXAMPLES`, `data-home="ask-example"`, only before the first conversation, handler `homeExampleFill`: writes the value, grows, focuses),
+  `homeTeam` (small avatars with names and a last 「＋」 button, `aria-label` 「新增員工」) and `homeToday` (one grey line). The cursor goes into the box when nothing else has the focus (`homeNothingFocused`, not on a touch screen).
+- **Side bar.** `web/index.html`: brand and `#nav-toggle` (`.side-top`), then `#side-panel` with 「新對話」 (`href="#/"`, `data-nav="home"`), the 最近 section (`#nav-recent`), `#nav-list` (員工, 工作, 設定 and the 進階 block) and `#scan-status`,
+  then `#nav-backdrop`. `navRecentRows(chatsRes)` and `drawNavRecent()` (marked in the source by `// ---------- the side bar's 最近`) draw at most 8 employees from the result of `GET /api/chats` that the home page already read
+  (`waitingChatsRead`, filled by the 30-second waiting model); they call no `api` and set no timer (guard rule 17b). A dot with `aria-label` 「有事等你決定」 marks a row whose chat has a card waiting.
+  On a phone (720px and narrower) `#side-panel` is a drawer: `.side.nav-open` shows it, `wireNavMenu` closes it on a link, Escape or the backdrop, and `syncNavMenu` puts the page's name in the button's `aria-label`.
+- **Look.** The base colours in `:root` and the two dark blocks are neutral greys with a `--side-bg` one step off the page; the P50-2 and P50-3 parts at the end of `web/style.css` hold the bar, the drawer (no animation under
+  `prefers-reduced-motion`), pill buttons and card frames without shadow.
+- **Tests.** `tests/frontend/p50_home.cjs`, `p50_nav.cjs`, `p50_theme.cjs`; `tests/test_autonomy_guard.py` (17a, 17b, 17c; 15b unchanged); `tests/test_p50_docs.py` checks the documents.

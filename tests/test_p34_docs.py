@@ -120,8 +120,8 @@ class ReadmeTests(unittest.TestCase):
         self.assertNotIn("**還不行。** 預覽會說明原因", self.zh)
 
     def test_the_readmes_describe_the_meetings(self):
-        for text, row, menu in ((self.en, "| **Meeting** |", "首頁, 員工, 工作 and 設定"),
-                                (self.zh, "| **會議** |", "「首頁」「員工」「工作」「設定」")):          # (v0.21: the menu has four items; 會議 is on 工作)
+        for text, row, menu in ((self.en, "| **Meeting** |", "員工, 工作 and 設定"),
+                                (self.zh, "| **會議** |", "「員工」「工作」「設定」")):          # (v0.21: the menu has four items; v0.23: 新對話, 最近 and these three; 會議 is on 工作)
             flat = _flat(text)
             self.assertIn(row, text)
             self.assertIn(menu, flat)

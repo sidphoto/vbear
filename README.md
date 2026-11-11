@@ -32,8 +32,9 @@ where you decide.
 > switch, off by default, that asks the Mac only when you press it and carries only a number. Deleting a meeting or a proposal no longer lowers today's spending.
 > Details: [CHANGELOG.md](CHANGELOG.md), [ADR 0014](docs/adr/0014-pick-one-ai-first.md) and the 「Easy start 2 (v0.22)」 section of [docs/SECURITY-MODEL.md](docs/SECURITY-MODEL.md).
 
-> **Since v0.21 the screens use plain company words, and the menu has four items.** **首頁** (home): what waits for your decision (等你決定), your
-> employees (點頭像就聊), today, and a box 「想做什麼？跟 CEO 說」. **員工**: add, set up, chat with and delete employees, plus memory, the shared
+> **Since v0.23 the home page is one greeting and one box (「今天想做什麼？」), and the left bar is 新對話, 最近, then 員工, 工作, 設定.** Colours are neutral greys now.
+> The screens use plain company words since v0.21 (ADR 0013, ADR 0015). **首頁** (home): what waits for your decision (等你決定, a pill that opens in place), your
+> employees (點頭像就聊), today, and a box 「今天想做什麼？」. **員工**: add, set up, chat with and delete employees, plus memory, the shared
 > folder, team templates and the office. **工作**: conversations, 分配工作, 定時工作, meetings, 常用做法 and 「AI 自己做了什麼」. **設定**. The engineering
 > pages (指令視窗, 工作台, 流程, 專案資料夾, AI 工具的外掛清單, 員工詳細資料) are behind **進階模式** in 設定 → 顯示: it only adds them to the menu and shows
 > paths and diagnostics, it changes no permission, and every old address still opens. A new person sees three steps on the home page: get an AI tool
@@ -489,9 +490,8 @@ install and login for you.
    Applications. The first time, macOS refuses to open it: go to **System Settings → Privacy & Security**, scroll
    down and click **Open Anyway** next to VBear. Homebrew and running from source are in [Install](#install).
 2. **Open VBear.** The first time, the app shows a short page, 第一次打開 VBear, with these same steps and a picture, then the
-   start-up page (see [The start-up page](#the-start-up-page-開始設定)). Once an AI tool is ready the app opens its own window on the home page, 首頁. The menu on the left has 首頁, 員工, 工作 and 設定
-   (with 進階模式 on, also 指令視窗, 工作台, 流程, 專案資料夾, AI 工具的外掛清單 and 員工詳細資料; on a phone-width window the four items sit in one row at the top, and
-   the advanced ones are behind a button 進階). VBear lists the skills and agent roles it finds on your Mac (read-only; it
+   start-up page (see [The start-up page](#the-start-up-page-開始設定)). Once an AI tool is ready the app opens its own window on the home page, 首頁. The bar on the left has 新對話 (back to the box on the home page), 最近 (the employees you talked with lately) and, smaller, 員工, 工作 and 設定
+   (with 進階模式 on, also 指令視窗, 工作台, 流程, 專案資料夾, AI 工具的外掛清單 and 員工詳細資料; on a phone-width window the bar is a drawer behind a button 選單 in a bar at the top). VBear lists the skills and agent roles it finds on your Mac (read-only; it
    changes none of them). With no employee yet, the home page shows three steps: get an AI tool ready, create a CEO (建立 CEO，開始聊 opens the chat
    with him, the opening sentence already in the box; you press 送出 yourself), and say the first sentence.
 3. **Collect, bring in a project, and play.** This is the engineering route with git task cards: it is on the 進階 part of the home page and in the
