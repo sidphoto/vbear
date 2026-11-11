@@ -3027,6 +3027,7 @@ function chatSupportGlance(data) {
 // start-up page's one button (its first press only opens the confirmation with the whole cost; 「確認，開始」 sends). Reads on its own: the tools (at the 5-second refresh, quietly),
 // the daily limit and the first-CEO plan (once each); it never reads the chats itself (the home page already does).
 const FIRST_TITLE = "先選一家你有在用的 AI";
+const FIRST_TITLE_CHOSEN = "準備好就能開始";          // P55: once one is chosen the big line is about what comes next; the small line is gone
 const FIRST_SUB = "選了就能開始聊，之後隨時可以再加。";
 const FIRST_LOOKING = "正在看你的 AI 工具…";
 const FIRST_UNREAD = "讀不到你的 AI 工具的狀態。";
@@ -3043,6 +3044,7 @@ function homeFirstRun(env) {
   let creating = false;
   let nameTouched = false;
   let lastKey = "";
+  let readyFor = "";               // P55: the tool whose checks were last drawn as "can chat" (the fold closes once when a tool turns from cannot-chat to can-chat)
   const host = el("section", { class: "section home-block home-first-run", "data-home": "first-run" });
   // these are made once and put back at every drawing, so what is typed, an open fold and a disabled button survive it
   const name = el("input", { type: "text", maxlength: String(CEO_NAME_MAX), "aria-label": "CEO 的名字", autocomplete: "off", "data-home": "first-ceo-name" });
@@ -3087,11 +3089,10 @@ function homeFirstRun(env) {
     });
   };
   const choose = (id) => { setupPickWrite(id); picked = id; draw(); };
-  const recheckBtn = () => {
-    const b = el("button", { class: "btn small", type: "button", "data-home": "first-recheck" }, "重新檢查");
-    b.addEventListener("click", () => kit.run(b, () => kit.refresh(false, true)));
-    return b;
-  };
+  // made once (P55): it is the button the person may be on when the tool turns to can-chat and the fold closes, so a drawing must not replace it
+  const recheck = el("button", { class: "btn small", type: "button", "data-home": "first-recheck" }, "重新檢查");
+  recheck.addEventListener("click", () => kit.run(recheck, () => kit.refresh(false, true)));
+  const recheckBtn = () => recheck;
   // the CEO part of a chosen tool that can chat now: the name, the mode line and the button (nothing is made before the press)
   const ceoPart = (vendor) => {
     if (!planDone) return el("p", { class: "small muted", "data-home": "first-ceo-loading" }, "正在準備建立 CEO 要用的資料…");
@@ -3108,14 +3109,19 @@ function homeFirstRun(env) {
       errorBox,
       el("div", { class: "row" }, go));
   };
-  const frame = () => [el("h2", { class: "home-greeting home-first-title" }, FIRST_TITLE), el("p", { class: "small muted home-first-sub" }, FIRST_SUB)];
+  // P55: made once, so what the person opened stays open through every drawing; the tool's card and the recheck button are inside it only while the tool can chat
+  const checks = el("details", { class: "small first-checks", "data-home": "first-checks" });
+  const frame = (chosen) => chosen
+    ? [el("h2", { class: "home-greeting home-first-title" }, FIRST_TITLE_CHOSEN)]
+    : [el("h2", { class: "home-greeting home-first-title" }, FIRST_TITLE), el("p", { class: "small muted home-first-sub" }, FIRST_SUB)];
   const foot = () => el("p", { class: "small muted home-first-foot" }, el("a", { href: "#/setup", "data-home": "first-setup-link" }, FIRST_SETUP_LINK));
   function draw() {
     if (!env.alive()) return;
     const keep = document.activeElement;
+    const wasIn = !!(keep && keep !== document.body && host.contains(keep));
     const tools = env.tools(), chats = env.chats();
     const rows = tools && typeof tools === "object" && Array.isArray(tools.tools) ? tools.tools : null;
-    let body;
+    let body, chosen = false, collapsed = false, nowReady = "";
     if (loading) {
       body = [homeLoadingLine("first-run", FIRST_LOOKING), setupPickerNode(() => null, () => {})];
     } else if (!rows) {
@@ -3131,19 +3137,28 @@ function homeFirstRun(env) {
       const row = setupRowOf(tools, vendor.id);
       const st = setupVendorStatus(vendor, tools, chats);
       if (planFor !== picked && st.kind === "ready") askPlan();
-      body = [
-        el("div", { class: "setup-picked", "data-setup": "picked" },
-          el("p", { class: "setup-text" }, `你選了：${vendor.maker}（${vendor.tool}）`),
-          el("button", { class: "btn small", type: "button", "data-setup": "change-pick", on: { click: () => { picked = ""; draw(); } } }, "換一家")),
-        el("div", { "data-home": "first-prepare" },
-          row ? el("ul", { class: "setup-list" }, kit.toolCard(row, true)) : notice("warn", `讀不到 ${vendor.maker} 這個 AI 工具的狀態。`),
-          el("div", { class: "row" }, recheckBtn())),
-        st.kind === "ready" ? ceoPart(vendor) : el("div", { "data-home": "first-reason" }, el("p", { class: "small" }, setupMissingLine(vendor, st)), st.raw ? plainTechFold(st.raw) : null),
-      ];
+      chosen = true;
+      const pickedRow = el("div", { class: "setup-picked", "data-setup": "picked" },
+        el("p", { class: "setup-text" }, `你選了：${vendor.maker}（${vendor.tool}）`),
+        el("button", { class: "btn small", type: "button", "data-setup": "change-pick", on: { click: () => { picked = ""; draw(); } } }, "換一家"));
+      const toolList = el("div", { "data-home": "first-prepare" },
+        row ? el("ul", { class: "setup-list" }, kit.toolCard(row, true)) : notice("warn", `讀不到 ${vendor.maker} 這個 AI 工具的狀態。`),
+        el("div", { class: "row" }, recheckBtn()));
+      if (st.kind === "ready") {
+        // P55: it can chat, so the action is next to the choice and the list of checks is a fold, closed when the tool turns from cannot-chat to can-chat and left as the person has it after that
+        if (readyFor !== picked) { checks.open = false; collapsed = true; }
+        nowReady = picked;
+        setKids(checks, el("summary", null, `${vendor.tool} 可以用了・看檢查結果`), toolList);
+        body = [pickedRow, ceoPart(vendor), checks];
+      } else {
+        body = [pickedRow, el("div", { "data-home": "first-reason" }, el("p", { class: "small" }, setupMissingLine(vendor, st)), st.raw ? plainTechFold(st.raw) : null), toolList];
+      }
     }
     if (!loading && rows) askDaily();
-    setKids(host, frame(), body, !loading && rows ? dailyBox : null, foot());
-    if (keep && keep !== document.body && host.contains(keep)) keep.focus();
+    readyFor = nowReady;
+    setKids(host, frame(chosen), body, !loading && rows ? dailyBox : null, foot());
+    if (wasIn && host.contains(keep)) keep.focus();
+    else if (wasIn && collapsed && checks.children[0] && checks.children[0].focus) checks.children[0].focus();      // the place the person was in is folded: the focus goes to the fold's own line, not to the name box
   }
   // `isLoading` (optional): whether the tools and the chats are still being read. Draws only when what the block shows changed.
   const update = (isLoading) => {

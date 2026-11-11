@@ -30,7 +30,7 @@ class AdrTests(unittest.TestCase):
 
     def test_it_says_what_it_corrects_and_what_stays_the_persons_press(self):
         for part in ("ADR 0013 第 3 點", "ADR 0014 第 1、3、8 點", "只改畫面", "每一步仍然是使用者自己按", "按「確認，開始」才送", "`setup_done`", "不再把人導去開始設定頁",
-                     "避免繞圈", "沒有新增", "版本號只在伺服器回的資料裡真的有時才寫", "技術細節"):
+                     "避免繞圈", "沒有新增", "版本號只在伺服器回的資料裡真的有時才寫", "技術細節", "first-checks", "準備好就能開始"):
             self.assertIn(part, self.adr, part)
 
     def test_the_rules_19a_to_19c_are_named_with_their_files(self):
@@ -58,7 +58,7 @@ class DocumentsTests(unittest.TestCase):
 
     def test_the_changelog_says_what_changed_what_did_not_and_what_is_not_tried(self):
         for part in ("One page for the first run", "New people are no longer sent to the start-up page", "in plain words", "Three small fixes", "Rule 19a", "19b", "19c", "15b (no new",
-                     "Two things the review of v0.23.0 asked for", "the toast", "Guard rule 17 is stronger", "Money.", "Not tried on a real Mac", "Going back to v0.24.0", "`setup_done`", "「確認，開始」"):
+                     "Two things the review of v0.23.0 asked for", "the toast", "Guard rule 17 is stronger", "The main action comes first once a tool can chat", "Money.", "Not tried on a real Mac", "Going back to v0.24.0", "`setup_done`", "「確認，開始」"):
             self.assertIn(part, self.first, part)
 
     def test_the_security_model_says_it_is_only_the_screen_and_one_press(self):

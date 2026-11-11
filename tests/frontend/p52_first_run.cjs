@@ -649,6 +649,64 @@ function judge19bSource(src) {
     assert.deepStrictEqual(posts(page), []);
   });
 
+  // ---- P55: a tool that can chat puts the main action first; one that cannot keeps the list open ---------------------------------------------------------
+  const childIndex = (page, node) => { const kids = block(page).children; return kids.findIndex((k) => k === node || (k.contains && k.contains(node))); };
+  await test("P55: a tool that can chat: the checks are a closed fold under the name and the button, the mode, Google and cost lines stay in plain sight, the big line says 準備好就能開始 and the small line is gone", async () => {
+    const page = await firstPage(chatReady(), { storage: { [PICK]: "claude" } });
+    const checks = h(page, "first-checks");
+    assert.ok(checks && checks.tag === "details" && checks.open === false, "a closed details");
+    assert.ok(text(all(checks, (n) => n.tag === "summary")[0]).includes("Claude Code 可以用了・看檢查結果"), text(all(checks, (n) => n.tag === "summary")[0]));
+    assert.ok(checks.contains(h(page, "first-prepare")) && checks.contains(h(page, "first-recheck")), "the card and the recheck button are inside it");
+    assert.ok(!checks.contains(h(page, "first-ceo-create")) && !checks.contains(h(page, "first-ceo-name")), "the CEO part is not inside it");
+    assert.ok(childIndex(page, h(page, "first-ceo-create")) < childIndex(page, checks), "the button comes before the fold");
+    assert.ok(childIndex(page, one(page.main, "data-setup", "picked")) < childIndex(page, h(page, "first-ceo-name")), "the name comes right after 你選了");
+    for (const k of ["first-ceo-mode", "first-ceo-cost"]) { let n = h(page, k); assert.ok(n, k); for (let p = n.parentNode; p; p = p.parentNode) assert.notStrictEqual(p.tag, "details", k + " is not folded"); }
+    const big = all(block(page), (n) => n.className.includes("home-first-title"));
+    assert.strictEqual(big.length, 1, "one big line");
+    assert.strictEqual(text(big[0]), "準備好就能開始");
+    assert.strictEqual(all(block(page), (n) => n.className.includes("home-first-sub")).length, 0, "no small line after a choice");
+  });
+
+  await test("P55: before a choice the big line and the small line are the old ones; a tool that cannot chat yet keeps the list open (not in a fold) with 還差哪一步 above it", async () => {
+    let page = await firstPage(readyClaude());
+    assert.strictEqual(text(all(block(page), (n) => n.className.includes("home-first-title"))[0]), "先選一家你有在用的 AI");
+    assert.strictEqual(all(block(page), (n) => n.className.includes("home-first-sub")).length, 1);
+    await choose(page, "claude");
+    assert.strictEqual(h(page, "first-checks"), null, "no fold while the list is the thing to do");
+    const prepare = h(page, "first-prepare"), reason = h(page, "first-reason");
+    assert.ok(prepare && reason);
+    for (let p = prepare.parentNode; p; p = p.parentNode) assert.notStrictEqual(p.tag, "details", "the list is not folded");
+    assert.ok(childIndex(page, reason) < childIndex(page, prepare), "還差哪一步 is above the list");
+    assert.ok(chk(page, "go"), "the button of the safety check is in plain sight");
+    assert.strictEqual(text(all(block(page), (n) => n.className.includes("home-first-title"))[0]), "準備好就能開始", "the big line after a choice");
+  });
+
+  await test("P55: what the person opened stays open through the 5-second redraw; it closes once when the tool turns from cannot-chat to can-chat, and the focus stays where it was", async () => {
+    let page = await firstPage(chatReady(), { storage: { [PICK]: "claude" } });
+    const checks = h(page, "first-checks");
+    checks.open = true;
+    page.F.tools = [readyRow("claude", { version: WARM }), installedRow("codex"), trow("agy"), trow("grok")];
+    await page.advance(5000); await page.tickHome();
+    assert.strictEqual(h(page, "first-checks"), checks, "the same fold");
+    assert.strictEqual(checks.open, true, "the person's own opening is kept");
+    // from cannot-chat to can-chat
+    page = await firstPage(readyClaude(), { storage: { [PICK]: "claude" } });
+    assert.strictEqual(h(page, "first-checks"), null);
+    const recheck = h(page, "first-recheck");
+    recheck.focus();
+    page.F.support = verifiedSupport();
+    await page.advance(31000); await page.tickHome();
+    const fold = h(page, "first-checks");
+    assert.ok(fold && fold.open === false, "it closed once, by itself");
+    assert.notStrictEqual(page.doc.activeElement, h(page, "first-ceo-name"), "the focus is not taken to the name box");
+    assert.ok(page.doc.activeElement && fold.contains(page.doc.activeElement), "the focus stayed in that place (the fold's summary)");
+    fold.open = true;
+    page.F.tools = [readyRow("claude", { version: WARM }), installedRow("codex"), trow("agy"), trow("grok")];
+    await page.advance(5000); await page.tickHome();
+    assert.strictEqual(h(page, "first-checks").open, true, "it does not close again on the next redraw");
+    assert.deepStrictEqual(posts(page), [], "nothing was sent by any of this");
+  });
+
   await test("the daily limit is a fold at the bottom (closed) with the start-up page's own words and editor; unread says 未知; the link to the start-up page is the last line", async () => {
     const page = await firstPage();
     const fold = one(page.main, "data-setup-slot", "daily-limit");
