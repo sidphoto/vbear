@@ -121,7 +121,7 @@ class AgyPolicyTests(unittest.TestCase):
         self.assertTrue(r.problems)
 
     def test_the_other_tools_lists_are_unchanged(self):
-        self.assertEqual(set(ap.CODEX_SOURCES), {"0.160.0", "0.163.0"})
+        self.assertEqual(set(ap.CODEX_SOURCES), {"0.160.0", "0.163.0", "0.167.0"})            # (0.167.0: v0.22.1, the same list as 0.163.0's)
         self.assertEqual(tuple(ap.CODEX_SOURCES["0.163.0"]["paths"]), ("etc/codex",))
         self.assertNotIn(AGY, ap.CLAUDE_SOURCES)
 

@@ -16,6 +16,7 @@ from pathlib import Path
 from tests import chat_fixtures as cf
 from tests import leftover
 from vbear.runtime import chat_protocol as cp
+from vbear.runtime import cli_versions
 
 SID = "0f1e2d3c-4b5a-4968-8776-655443322110"
 
@@ -68,7 +69,16 @@ class ConstantsTests(unittest.TestCase):
         self.assertEqual(new.version, "2.1.319")
         self.assertEqual(dataclasses.replace(new, version="2.1.318"), old)
         self.assertIs(cp.constants_for("2.1.319"), new)
-        self.assertEqual(sorted(cp.VERSIONS), ["2.1.318", "2.1.319"])
+        self.assertEqual(sorted(cp.VERSIONS), ["2.1.318", "2.1.319", "2.1.322"])
+
+    def test_2_1_322_has_the_same_constants_as_2_1_319(self):
+        """v0.22.1: the --help of 2.1.322 is identical to 2.1.319's (docs/evidence/claude-code-2.1.322-chat.md), so the chat's
+        constants are the same; only the version differs. Not in any verified list: that needs boundary_check --mode chat."""
+        new, old = cp.VERSIONS["2.1.322"], cp.VERSIONS["2.1.319"]
+        self.assertEqual(new.version, "2.1.322")
+        self.assertEqual(dataclasses.replace(new, version="2.1.319"), old)
+        self.assertIs(cp.constants_for("2.1.322"), new)
+        self.assertNotIn("2.1.322", cli_versions.CHAT_VERIFIED_VERSIONS)
 
     def test_every_recorded_event_kind_is_known(self):
         for name in ("ask", "text"):

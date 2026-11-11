@@ -201,10 +201,13 @@ class PolicyTests(unittest.TestCase):
                   "home_paths": (".claude/remote-settings.json",)}
         # 2.1.318 also names ~/.claude/policy-limits.json, a server-delivered cache (docs/evidence/claude-code-2.1.318-chat.md)
         v318 = dict(claude, home_paths=(".claude/remote-settings.json", ".claude/policy-limits.json"))
-        self.assertEqual(ap.CLAUDE_SOURCES, {"2.1.292": claude, "2.1.296": claude, "2.1.318": v318, "2.1.319": v318})
+        self.assertEqual(ap.CLAUDE_SOURCES, {"2.1.292": claude, "2.1.296": claude, "2.1.318": v318, "2.1.319": v318,
+                                              "2.1.322": v318})
         self.assertEqual(ap.CODEX_SOURCES, {"0.160.0": {"paths": ("etc/codex",), "domain": "com.openai.codex",
                                                         "home_paths": ()},
                                                 "0.163.0": {"paths": ("etc/codex",), "domain": "com.openai.codex",
+                                                            "home_paths": ()},
+                                                "0.167.0": {"paths": ("etc/codex",), "domain": "com.openai.codex",
                                                             "home_paths": ()}})
 
 
@@ -261,6 +264,34 @@ class Claude2_1_319Tests(Claude2_1_318Tests):
     def test_the_version_has_a_list(self):
         self.assertTrue(self.claude().ok)
         self.assertEqual(ap.CLAUDE_SOURCES["2.1.319"], ap.CLAUDE_SOURCES["2.1.318"])
+
+
+class Claude2_1_322Tests(Claude2_1_318Tests):
+    """Claude Code 2.1.322 (v0.22.1): its --help is identical to 2.1.319's and the strings of its binary name the same places
+    (docs/evidence/claude-code-2.1.322-chat.md), so it has the same list, ``policy-limits.json`` included."""
+
+    def claude(self):
+        return ap.check_claude("2.1.322", str(self.root), str(self.home))
+
+    def test_the_version_has_a_list(self):
+        self.assertTrue(self.claude().ok)
+        self.assertEqual(ap.CLAUDE_SOURCES["2.1.322"], ap.CLAUDE_SOURCES["2.1.319"])
+
+
+class Codex0_167_0Tests(PolicyTests):
+    """Codex 0.167.0 (v0.22.1): the strings of its binary name the same system and managed places as 0.163.0's (``/etc/codex`` and the
+    managed preferences domain ``com.openai.codex``; docs/evidence/codex-0.167.0-chat.md), so it has the same list."""
+
+    def codex(self):
+        return ap.check_codex("0.167.0", str(self.root))
+
+    def test_the_version_has_a_list(self):
+        self.assertTrue(self.codex().ok)
+        self.assertEqual(ap.CODEX_SOURCES["0.167.0"], ap.CODEX_SOURCES["0.163.0"])
+
+    def test_a_version_it_does_not_know_still_has_no_list(self):
+        self.assertFalse(ap.check_codex("0.167.1", str(self.root)).ok)
+        self.assertFalse(ap.check_codex("0.168.0", str(self.root)).ok)
 
 
 if __name__ == "__main__":

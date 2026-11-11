@@ -70,11 +70,20 @@ _CLAUDE_2_1_318 = dict(_CLAUDE, home_paths=_CLAUDE["home_paths"] + (".claude/pol
 # 2.1.319 (P40-6): the same list as 2.1.318. Checked on 2026-11-07 with the same method against the strings of the installed
 # 2.1.319 binary: the same /Library paths, the same /etc/claude-code place, the same managed-settings names, and
 # policy-limits.json is still the one more cache (docs/evidence/claude-code-2.1.318-chat.md, "2.1.319").
-CLAUDE_SOURCES = {"2.1.292": _CLAUDE, "2.1.296": _CLAUDE, "2.1.318": _CLAUDE_2_1_318, "2.1.319": _CLAUDE_2_1_318}
+# 2.1.322 (v0.22.1): the same list again. Checked on 2026-11-11, side by side with 2.1.319, against the strings of the installed
+# 2.1.322 binary: the same /Library paths, the same /etc/claude-code place, the same managed-settings names, policy-limits.json
+# still the one more cache (docs/evidence/claude-code-2.1.322-chat.md).
+CLAUDE_SOURCES = {"2.1.292": _CLAUDE, "2.1.296": _CLAUDE, "2.1.318": _CLAUDE_2_1_318, "2.1.319": _CLAUDE_2_1_318,
+                  "2.1.322": _CLAUDE_2_1_318}
 # 0.163.0 (P38-2, chat mode): the same sources as 0.160.0. The Codex chat (ADR 0005) does not pass --ignore-user-config (app-server
 # has no such flag), so the system and managed layers matter as much as for the review. The list is taken over from 0.160.0 and
 # is to be checked against the installed 0.163.0 on a real Mac when the chat check is run (docs/evidence/codex-0.163.0-chat.md).
-CODEX_SOURCES = {"0.160.0": _CODEX, "0.163.0": _CODEX}
+# 0.167.0 (v0.22.1): the same list again. Checked on 2026-11-11, side by side with the installed 0.163.0, against the strings of both
+# binaries: /etc/codex (config.toml, requirements.toml, managed_config.toml in it), the managed preferences domain com.openai.codex
+# (config_toml_base64, requirements_toml_base64 and the legacy managed_config.toml from it) and the cloud bundle cache inside
+# CODEX_HOME are named in both, and the other paths the binaries name are the same
+# (docs/evidence/codex-0.167.0-chat.md).
+CODEX_SOURCES = {"0.160.0": _CODEX, "0.163.0": _CODEX, "0.167.0": _CODEX}
 # 1.5.3 (P46-2, the AGY chat, ADR 0012): NOT taken from the vendor's documentation. The planner read the strings of the
 # installed 1.5.3 binary on 2026-11-09 (the file was not run): /etc/antigravity/admin_settings.json appears as a whole path,
 # beside the words AdminSettings and AdminSettingsPath; com.google.antigravity appears too, and nothing shows whether it is a
