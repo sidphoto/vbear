@@ -2426,3 +2426,37 @@ kind of chat event or `localStorage` key. Guard rule 15b (the `/api/` paths the 
 - **Only Cmd/Ctrl + Enter sends from the chat box** (rule 18c). The box has one keydown handler, and it is the same as before with one more condition, `!e.isComposing` (an IME's Enter sends nothing); no keypress, keyup, form or timer reaches `send`.
 - **Nothing that asks you moved.** The permission card, its buttons and warnings, the 「⋯」 menu and every confirmation it opens, the limit notice, and the line over the head (the work, the AI tool, that everything asks first, which company the words go to) are the same; they are smaller or placed differently, not removed.
 - **Residual risk.** A fold's summary says only how many lines of each kind; a person who never opens it does not see each tool's summary line (what was read or run). The card that asked and the decision are never folded, so what was allowed or refused is always shown; what ran after an allow is in the fold.
+
+## First run on one page (v0.25)
+
+v0.25.0 (ADR 0017) moves the first run of a person with no employee onto the home page and says in plain words why an AI tool cannot be used. **It changes only what the screen shows and where
+a press is.** It does not touch any start-up boundary: nothing under `vbear/` changed (no file of `agent_launch.py`, `runtime/*`, `chat_service.py`, `*_verify.py`, `chat_check.py`, `cli_versions.py` or
+`admin_policy.py`), **no route (API path), no kind of request, no key of `config.json` and no kind of chat event was added**, and the only keys the page writes to the browser's `localStorage` are still
+`vbear-setup-pick` and `vbear-notify`. Guard rule 15b still holds unchanged; rule 19 (19a to 19c) was added and rules 1 to 16 were not loosened.
+
+- **Every step is still the person's own press.** The home block shows the same picker as the start-up page (nothing preselected, nothing marked as recommended, no reordering by state, ADR 0014), expands
+  the chosen tool's steps in place, and offers a name box and 「建立 CEO，開始聊」 only when the chosen tool can chat. Nothing is chosen, checked or created by the page on its own; a pick the person
+  made earlier (`vbear-setup-pick`) is the person's own and opens that tool, as it does on the start-up page.
+- **The chat safety check is asked for the same way.** The block uses the start-up page's own components and requests (one shared set of functions). 「試一下，並做聊天安全檢查」 opens the confirm area, which
+  says what each part does and what it costs; **only 「確認，開始」 sends** (`POST /api/setup/tools/<id>/try {"confirmed": true}`, then, if this version has not been verified, `POST /api/chat-support/verify`);
+  「取消」 sends nothing; a version that passed is not verified again; a tool that an administrator setting blocks gets no button, so nothing is run and nothing is spent (guard rule 19a, with 16a unchanged).
+  A pass is not carried to another version and is not kept in the browser.
+- **The CEO is made by one press.** 「建立 CEO，開始聊」 sends the same request as the create-CEO page (one `POST /api/agent-profiles` in safe mode, i.e. 「每件事先問我」, then the usual `POST /api/config`)
+  for the tool the person chose, with the name they typed. Loading the page, choosing a card, redrawing and the 5-second refresh send no such request (guard rule 19b). The plan for it is read once, only when the chosen tool
+  can chat (`GET /api/first-ceo?tool=<id>`); a plan for any other tool is refused and **never swaps in another tool**. The opening words of the first conversation are only put in the input box; **nothing is sent**.
+  `CEO_MODE` and, for AGY, the sentence that the talk goes to Google stay on the screen and are not folded away.
+- **Reading is bounded.** The home page's existing 5-second refresh gained one quiet `GET /api/setup/tools`; the chat list keeps its 30-second throttle (16d) and the block adds no timer. A person's typed name, an open
+  confirm area and the chosen tool survive the refresh.
+- **Words, not behaviour.** A tool that updated itself to a version VBear does not know is described as 「你的 {工具名} 是 {版本} 版，VBear 還不認得這一版，所以先不能用它聊天。等 VBear 出新版就能用。」 The version is
+  written only when the server's data holds it (never looked up by the page, never written into the code: guard rule 19c); the server's own sentence is kept whole behind 「技術細節」. No table of known or verified
+  versions was changed and no version was added; the page does not tell anyone to downgrade or to edit a setting file. A missing step (not installed, not logged in, no safety check yet, an administrator's settings,
+  an unknown version, or unreadable) is named from the state that was read and guessed from nothing.
+- **Small layout fixes.** The usage and limits box sits above notifications in settings; the team-template dialogs keep their button bar at the bottom. These change no request.
+
+Residual risks: (1) A person who has never finished the start-up page and has no tool ready is still sent to `#/setup` first (the gate was not changed); the one-page first run serves a person who has a tool ready and no
+employee. (2) The tool state on the home page is read every 5 seconds but the chat state follows the 30-second chat read, so it may be up to about 30 seconds behind until the person presses 「重新檢查」 or the
+confirm flow reads it. (3) `tools/qa_p47.py` still names the old home page's step selector and must be updated before it is used for a real-Mac check. (4) The pages were not looked at in a real browser or app
+here; the person tries the first run after upgrading.
+
+Going back to v0.22.1: nothing is migrated; v0.25.0 added no setting and no data. The home page shows the three step links again, the unknown-version words are the server's own sentences again, and `vbear-setup-pick` is
+still read.

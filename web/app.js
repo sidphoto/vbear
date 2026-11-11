@@ -1015,6 +1015,10 @@ const WORDS = {
   recent:        { use: "最近", avoid: [], loose: [], scope: "new", note: "選單裡「新對話」下面的清單：最近聊過的員工（最多 8 個）；只用已讀到的聊天清單，不另外讀、不編標題" },
   chatFold:      { use: "細節", avoid: [], loose: [], scope: "new", note: "聊天裡收起來的那一行（用了幾次工具・自動允許・細節）；摘要沒有金額，要你決定的卡片、錯誤、拒絕永遠不收進去" },
   whoTo:         { use: "要跟誰說", avoid: [], loose: [], scope: "new", note: "輸入框左下角的小鈕：寫現在說話的對象，按了列出員工；選取不送出任何東西" },
+
+  firstRun:      { use: "第一次使用", avoid: [], loose: [], scope: "new", note: "沒有員工的首頁一頁做完：選一家 AI、準備好、「建立 CEO，開始聊」；每一步都由使用者自己按（ADR 0017）" },
+  versionUnknown: { use: "還不認得這一版", avoid: [], loose: [], scope: "new", note: "AI 工具自己更新後 VBear 還沒有那一版的聊天資料；版本只在讀到時才寫，原句收進技術細節" },
+  oneStepLeft:   { use: "還差一步", avoid: [], loose: [], scope: "new", note: "AI 工具還不能聊天時，一行話說缺哪一步（還沒安裝、還沒登入、還沒做安全檢查、有管理員設定、版本不認得）" },
 };
 // -> [{ key, term, use }] for the words a page of that scope must not say (`avoid` only, searched literally). scope "all": the pages of
 // the normal mode; "title": the menu names and the h1 of the advanced pages (and, for a page of scope "all", nothing of this).

@@ -110,6 +110,14 @@ Never, whatever the person ticked in 「自己動手」:
      18d  the line over a fold has no money: ``chatQuietSummary`` is only counts of kinds, and nothing else writes into it (ADR 0013 point 5; P51-1, this file, with tests/frontend/p51_chat.cjs).
      15b is not changed and still passes: v0.24.0 uses no ``/api/`` path that v0.20.0 did not. tests/test_p51_docs.py checks that these files exist and carry the number of their rule.
 
+  19. (P52, ADR 0017) the first run on the home page of v0.25.0 puts the steps of the start-up page and the create-CEO page on one page; every step is still the person's own press. Three rules, tested where the thing is:
+     19a  on the home page's first-run block the chat safety check is sent only by the button of the confirm area (「確認，開始」), the same road as 16a, with no second way in
+          (P52-1, tests/frontend/p52_first_run.cjs).
+     19b  the request that makes the first CEO is sent only inside the click of 「建立 CEO，開始聊」 (and of the old create-CEO page's button); loading, choosing a card and redrawing never send it
+          (P52-1, tests/frontend/p52_first_run.cjs).
+     19c  the plain sentence for a tool whose version VBear does not know holds no version number that the program did not take from the server's data (P52-2, tests/frontend/p52_words.cjs).
+     P52-4's rule: this file, ``Guard19FilesAreThere``, checks that these files exist and carry the number of their rule.
+
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
 ``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py``, ``vbear/skillbook*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
 staff, of dispatch, of groups and of memory (the suggestions, P42-4) are held to it the day they are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
@@ -3175,6 +3183,39 @@ class Guard18FilesAreThere(unittest.TestCase):
         self.assertRegex(self.read("tests", "test_autonomy_guard.py"), r"class ChatReadsLikeTextRules")
         for rule in ("test_18a_", "test_18b_", "test_18c_", "test_18d_"):
             self.assertIn(rule, self.read("tests", "test_autonomy_guard.py"), rule)
+
+
+class Guard19FilesAreThere(unittest.TestCase):
+    """19: the three rules of v0.25.0 are kept where the description above says, and each file carries the number of its rule."""
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def read(self, *parts):
+        return self.ROOT.joinpath(*parts).read_text(encoding="utf-8")
+
+    def test_19_the_description_names_all_three_rules_and_their_files(self):
+        text = self.read("tests", "test_autonomy_guard.py")
+        for rule in "abc":
+            self.assertIn(f"     19{rule}  ", text, rule)
+        for name in ("p52_first_run.cjs", "p52_words.cjs"):
+            self.assertIn(name, text, name)
+
+    def test_19_each_file_exists_and_carries_the_number_of_its_rule(self):
+        for rule, parts in (("19a", ("tests", "frontend", "p52_first_run.cjs")), ("19b", ("tests", "frontend", "p52_first_run.cjs")),
+                            ("19c", ("tests", "frontend", "p52_words.cjs"))):
+            self.assertIn(rule, self.read(*parts), "/".join(parts))
+
+    def test_19_each_rule_has_a_bad_sample_that_it_catches(self):
+        # a rule whose judge never fires is no rule: each test file names its judge and shows it catching a made-up bad page or source
+        first = self.read("tests", "frontend", "p52_first_run.cjs")
+        words = self.read("tests", "frontend", "p52_words.cjs")
+        for needle in ("judge19a", "judge19aSource", "judge19b", "judge19bSource"):
+            self.assertIn(needle, first, needle)
+        for needle in ("judge19c", "judge19cSource"):
+            self.assertIn(needle, words, needle)
+        self.assertRegex(first, r"19a judge[^\n]*catches")
+        self.assertRegex(first, r"19b judge[^\n]*catches")
+        self.assertRegex(words, r"19c[^\n]*(catches|bad)")
 
 
 if __name__ == "__main__":
