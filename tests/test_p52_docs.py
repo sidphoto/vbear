@@ -58,7 +58,7 @@ class DocumentsTests(unittest.TestCase):
 
     def test_the_changelog_says_what_changed_what_did_not_and_what_is_not_tried(self):
         for part in ("One page for the first run", "New people are no longer sent to the start-up page", "in plain words", "Three small fixes", "Rule 19a", "19b", "19c", "15b (no new",
-                     "Money.", "Not tried on a real Mac", "Going back to v0.24.0", "`setup_done`", "「確認，開始」"):
+                     "Two things the review of v0.23.0 asked for", "the toast", "Guard rule 17 is stronger", "Money.", "Not tried on a real Mac", "Going back to v0.24.0", "`setup_done`", "「確認，開始」"):
             self.assertIn(part, self.first, part)
 
     def test_the_security_model_says_it_is_only_the_screen_and_one_press(self):

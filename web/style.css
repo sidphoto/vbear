@@ -2157,3 +2157,6 @@ input[type="checkbox"] { width: 18px; height: 18px; flex: none; accent-color: va
 .tpl-save-name { display: grid; gap: 4px; min-width: 0; }
 .tpl-save-name .input { width: 100%; }
 @media (max-width: 520px) { .tpl-dialog .modal-actions .btn { flex: 1 1 100%; justify-content: center; } }
+
+/* P53 (v0.25.0): the toast is above the phone drawer's backdrop (50), the drawer (60), the dialogs (100) and the skill tip (120): a message must be readable whatever is open (review of v0.23.0). */
+#toast { z-index: 130; }

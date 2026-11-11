@@ -2796,6 +2796,117 @@ function homeAsk(state) {
         self.assertNotEqual(home_keydown_problems(two), [], "a second keydown")
 
 
+# ---- 17, stronger (P53, from the review of v0.23.0): the same three rules, with the doors the review found left open shut ---------------------------------------------------------
+# 17a also reads the helper the fill calls (``homeAskGrow``); 17b also reads every place ``drawNavRecent`` is called from; 17c also reads every keydown handler on ``document`` or ``window``.
+
+
+def ask_grow_problems(source: str, label: str = "<app.js>") -> list[str]:
+    """17a (stronger): ``homeAskGrow``, which ``homeExampleFill`` calls, only measures and sizes the box: it reaches out to nothing, so a side effect cannot hide in it."""
+    body = js_function_body(source, "homeAskGrow")
+    if body is None:
+        return [f"{label}: homeAskGrow is not there"]
+    return [f"{label}: homeAskGrow reaches out: {hit.group(0)}" for hit in JS_REACHES_OUT.finditer(body)]
+
+
+NAV_RECENT_CALLERS = ("waitingChatsNote", "route")
+
+
+def nav_recent_call_problems(source: str, label: str = "<app.js>") -> list[str]:
+    """17b (stronger): ``drawNavRecent`` is only ever called (never handed over as a value) from the place the chat list was just read (``waitingChatsNote``) and from the page change (``route``)."""
+    code = js_without_comments(source)
+    found, called = [], False
+    for hit in re.finditer(r"\bdrawNavRecent\b", code):
+        before = code[max(0, hit.start() - 9):hit.start()]
+        if before.endswith("function "):
+            continue
+        if not code[hit.end():].startswith("("):
+            found.append(f"{label}: drawNavRecent is used as a value, not called (near: {code[max(0, hit.start() - 30):hit.end() + 20].strip()!r})")
+            continue
+        called = True
+        owner = None
+        for fn in re.finditer(r"^(?:async )?function (\w+)", code[:hit.start()], re.M):
+            owner = fn.group(1)
+        if owner not in NAV_RECENT_CALLERS:
+            found.append(f"{label}: drawNavRecent is called from {owner}, not from {' or '.join(NAV_RECENT_CALLERS)}")
+    if not called:
+        found.append(f"{label}: drawNavRecent is never called")
+    return found
+
+
+GLOBAL_KEYDOWN = re.compile(r"\b(?:document|window)\.addEventListener\(\s*[\"\']keydown[\"\']")
+HOME_SEND_WORDS = re.compile(r"(?<![\w-])send(?![\w-])|openChatWith|homeAskKeydown|ask-send|\.click\(")
+
+
+def global_keydown_problems(source: str, label: str = "<app.js>") -> list[str]:
+    """17c (stronger): no keydown handler on ``document`` or ``window`` (the whole file) sends, opens a chat or presses the home box's button, and ``homeAskKeydown`` is used only inside ``homeAsk``."""
+    code = js_without_comments(source)
+    found = []
+    for hit in GLOBAL_KEYDOWN.finditer(code):
+        start = hit.start() + hit.group(0).index("(")
+        depth, end = 0, None
+        for i in range(start, len(code)):
+            if code[i] == "(":
+                depth += 1
+            elif code[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        call = code[start:end] if end else code[start:start + 600]
+        texts = [call]
+        named = re.search(r",\s*([A-Za-z_]\w*)\s*(?:,\s*\w+\s*)?$", call)
+        if named:
+            body = js_function_body(code, named.group(1))
+            texts.append(body or "")
+        for text in texts:
+            for bad in HOME_SEND_WORDS.finditer(text):
+                found.append(f"{label}: a keydown on document or window reaches the home box's send: {bad.group(0)}")
+    ask = js_function_body(code, "homeAsk") or ""
+    key = js_function_body(code, "homeAskKeydown") or ""
+    outside = code.replace(ask, "", 1).replace(key, "", 1)
+    for hit in re.finditer(r"homeAskKeydown", outside):
+        if not code[max(0, hit.start() - 9):hit.start()].endswith("function "):
+            found.append(f"{label}: homeAskKeydown is used outside homeAsk")
+    return found
+
+
+class ChatFirstHomeRulesStronger(unittest.TestCase):
+    """17a, 17b, 17c, stronger (P53): the review of v0.23.0 asked for these; each has a made-up bad source that must fire."""
+
+    SOURCE = (Path(__file__).resolve().parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+
+    def test_17a_the_helper_the_fill_calls_reaches_out_to_nothing(self):
+        self.assertEqual(ask_grow_problems(self.SOURCE), [])
+        good = "function homeAskGrow(input) { input.style.height = \"1px\"; }\n"
+        self.assertEqual(ask_grow_problems(good), [])
+        for bad in ("openChatWith(1, {});", "api.post(\"/api/chats\", {});", "send();", "fetch(\"/x\");", "location.hash = \"#/x\";", "localStorage.setItem(\"k\", \"v\");", "button.click();"):
+            self.assertNotEqual(ask_grow_problems(good.replace("}\n", " " + bad + " }\n")), [], bad)
+        self.assertNotEqual(ask_grow_problems("function other() {}"), [], "no function")
+
+    def test_17b_drawNavRecent_is_only_called_from_the_chat_list_read_and_the_page_change(self):
+        self.assertEqual(nav_recent_call_problems(self.SOURCE), [])
+        good = ("function drawNavRecent() { return 1; }\nfunction waitingChatsNote(b) { drawNavRecent(); }\nasync function route() { drawNavRecent(); }\n")
+        self.assertEqual(nav_recent_call_problems(good), [])
+        self.assertEqual(nav_recent_call_problems(good + "// function other() { setInterval(drawNavRecent, 10); }\n"), [], "a comment is not a call")
+        for bad in ("function wireNavMenu() { setInterval(() => drawNavRecent(), 1000); }", "function other() { setTimeout(drawNavRecent, 10); }",
+                    "function viewHome() { drawNavRecent(); }", "function x() { const f = drawNavRecent; f(); }"):
+            self.assertNotEqual(nav_recent_call_problems(good + bad + "\n"), [], bad)
+        self.assertNotEqual(nav_recent_call_problems("function drawNavRecent() {}\n"), [], "never called")
+
+    def test_17c_no_keydown_on_document_or_window_sends_from_the_home_box(self):
+        self.assertEqual(global_keydown_problems(self.SOURCE), [])
+        good = ("function homeAskKeydown(e, send) { if (e.key === \"Enter\") { send(); } }\nfunction homeAsk(s) { const i = el(\"textarea\", { on: { keydown: (e) => homeAskKeydown(e, send) } }); async function send() {} }\n"
+                "function w() { document.addEventListener(\"keydown\", (e) => { if (e.key === \"Escape\") close(); }); }\n")
+        self.assertEqual(global_keydown_problems(good), [])
+        for bad in ("function w2() { document.addEventListener(\"keydown\", (e) => { if (e.key === \"Enter\" && e.metaKey) send(); }); }",
+                    "function w2() { window.addEventListener(\"keydown\", (e) => { if (e.key === \"Enter\") openChatWith(1, {}); }); }",
+                    "function w2() { document.addEventListener(\"keydown\", (e) => { askButton.click(); }); }",
+                    "function w2() { document.addEventListener('keydown', onKey); }\nfunction onKey(e) { homeSend(); send(); }",
+                    "function w2() { window.addEventListener(\"keydown\", (e) => homeAskKeydown(e, go)); }"):
+            self.assertNotEqual(global_keydown_problems(good + bad + "\n"), [], bad)
+        self.assertEqual(global_keydown_problems(good + "// document.addEventListener(\"keydown\", (e) => send());\n"), [], "a comment is not a handler")
+
+
 class Guard17FilesAreThere(unittest.TestCase):
     """17: the three rules of v0.23.0 are kept where the description above says, and each file carries the number of its rule."""
 
@@ -2817,6 +2928,7 @@ class Guard17FilesAreThere(unittest.TestCase):
         self.assertRegex(self.read("tests", "test_autonomy_guard.py"), r"class ChatFirstHomeRules")
         for rule in ("test_17a_", "test_17b_", "test_17c_"):
             self.assertIn(rule, self.read("tests", "test_autonomy_guard.py"), rule)
+        self.assertRegex(self.read("tests", "test_autonomy_guard.py"), r"class ChatFirstHomeRulesStronger")
 
 
 # ---- 18: the chat reads like text (v0.24.0, ADR 0016) ---------------------------------------------------------------------------------------------------
