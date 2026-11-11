@@ -14979,15 +14979,16 @@ function chatLine(rec, opts) {
     case "user_message": {
       const origin = chatOriginOf(rec);          // a message VBear sent for a dispatch (P40): said over it, it is not the person's own words
       const note = origin ? chatOriginNote(origin) : null;
+      // P51-1: your own words are a soft bubble; the line over them (and its time) shows on hover or focus. A message VBear sent for a dispatch always says so.
       const line = el("li", { class: "chat-msg chat-me", "data-chat": "user", "data-seq": String(rec.seq), tabindex: "0" },
-        el("div", { class: "chat-who small muted" }, `${origin ? "VBear 依分配工作送出" : "你"}・${fmtTime(rec.at)}`), note, el("div", { class: "chat-text" }, text(rec.text)),
+        el("div", { class: "chat-who small muted" + (origin ? "" : " chat-who-quiet") }, origin ? "VBear 依分配工作送出" : "你", chatTimeNode(rec.at)), note, el("div", { class: "chat-text" }, text(rec.text)),
         !origin && remember && Number.isInteger(rec.turn) && text(rec.text) ? memoryRememberRow(() => remember(rec, "you"), saveSkill ? () => saveSkill(rec, "you") : null) : null);
       if (note) { line.originNote = note; line.origin = origin; }
       return line;
     }
     case "reply":
       return el("li", { class: "chat-msg chat-them", "data-chat": "reply", "data-seq": String(rec.seq), tabindex: "0" },
-        el("div", { class: "chat-who small muted" }, `${who}・${fmtTime(rec.at)}`), el("div", { class: "chat-text" }, text(rec.text)),
+        el("div", { class: "chat-who small muted" }, who, chatTimeNode(rec.at)), el("div", { class: "chat-text" }, text(rec.text)),
         rec.truncated === true ? el("div", { class: "small muted" }, "（這則回覆太長，後面的部分沒有保存）") : null,
         remember && Number.isInteger(rec.turn) && text(rec.text) ? memoryRememberRow(() => remember(rec, "employee"), saveSkill ? () => saveSkill(rec, "employee") : null) : null);
     case "tool_call":
@@ -15696,6 +15697,63 @@ function ceoChiefHint(chief, onNo) {
 }
 // ---------- end of the hint ------------------------------------------------------------------------------------------------------
 
+// ---------- P51 the chat reads like text (v0.24, ADR 0016) -------------------------------------------------------------------------
+// The lines of the work (a tool used, its result, what VBear allowed by itself, what a turn cost, the process starting and ending) that follow one another are
+// one closed line you can open. It is only a display: every record is drawn into the page, with its own data-seq and data-chat, inside the fold. Only these
+// kinds are ever put in a fold; a card that waits, its decision, a refusal, an error, an odd message and the words said are never. A turn that was stopped, hit
+// a limit or went wrong, and a process that ended for a reason this page does not know, say so in the open (they are not "the work going well").
+const CHAT_QUIET_KINDS = ["process", "tool", "result", "auto", "cost", "process-end"];       // the data-chat of the lines that may be folded, in the order the summary says them
+function chatTimeNode(at) { return el("span", { class: "chat-time" }, `・${fmtTime(at)}`); }       // in the page for a screen reader; shown on hover, on focus, and always without a mouse
+// Whether this record's line may go into a fold.
+function chatIsQuiet(rec) {
+  if (!rec || typeof rec !== "object") return false;
+  switch (rec.kind) {
+    case "tool_call": case "tool_result": case "auto_allowed": case "process_started": return true;
+    case "turn_ended": return cardHas(CHAT_TURN_END, rec.reason) && CHAT_TURN_END[rec.reason] === "";         // only a turn that ended well
+    case "process_ended": return typeof rec.reason === "string" && cardHas(CHAT_PROCESS_END, rec.reason);     // only for a reason this page can say
+    default: return false;
+  }
+}
+// The one line over a fold: what is in it, by kind and how many. No money (ADR 0013, point 5): the amounts are inside, one line each.
+// `counts`: { tool, result, failed, auto, cost, process, "process-end" } (a kind that is not there is not said).
+function chatQuietSummary(counts) {
+  const c = counts && typeof counts === "object" ? counts : {};
+  const n = (k) => (Number.isInteger(c[k]) && c[k] > 0 ? c[k] : 0);
+  const said = [];
+  if (n("process")) said.push(`員工上線 ${n("process")} 次`);
+  if (n("tool")) said.push(`用了 ${n("tool")} 次工具`);
+  if (n("result")) said.push(`工具回了 ${n("result")} 筆結果${n("failed") ? `（${n("failed")} 筆失敗）` : ""}`);
+  if (n("auto")) said.push(`自動允許 ${n("auto")} 次`);
+  if (n("cost")) said.push(`${n("cost")} 回合結算`);
+  if (n("process-end")) said.push(`程序結束 ${n("process-end")} 次`);
+  return [...said, "細節"].join("・");
+}
+// The list of a chat's lines, with the folds. `add(line, rec)` puts the line of a record at the end: into the fold that is open at the end (its summary is
+// drawn again, the fold itself is not, so one you opened stays open) or, for a line that may be folded, into a new one. Nothing is held back or dropped.
+function chatQuietLog(log) {
+  let group = null;
+  const start = () => {
+    const summary = el("summary", { class: "chat-quiet-sum small muted", "data-chat": "quiet-summary" });
+    const list = el("ul", { class: "chat-quiet-list", "data-chat": "quiet-list" });
+    const details = el("details", { class: "chat-quiet-group", "data-chat": "quiet-group" }, summary, list);
+    const item = el("li", { class: "chat-quiet", "data-chat": "quiet-item" }, details);
+    log.append(item);
+    return { summary, list, counts: {} };
+  };
+  return {
+    add(line, rec) {
+      if (!chatIsQuiet(rec)) { group = null; log.append(line); return; }
+      if (!group) group = start();
+      const kind = line.getAttribute("data-chat");
+      group.counts[kind] = (group.counts[kind] || 0) + 1;
+      if (kind === "result" && rec.is_error === true) group.counts.failed = (group.counts.failed || 0) + 1;
+      group.list.append(line);
+      setKids(group.summary, chatQuietSummary(group.counts));
+    },
+  };
+}
+// ---------- end of P51 -----------------------------------------------------------------------------------------------------------
+
 async function viewChatDetail(token, id) {
   let all;
   try { all = await chatReadAll(id); }
@@ -15712,6 +15770,7 @@ async function viewChatDetail(token, id) {
   const edits = new Map();              // card_id -> { open, text }
   const answering = new Set();
   const transcript = el("ul", { class: "chat-log", "data-chat": "log", "aria-live": "off" });
+  const quietLog = chatQuietLog(transcript);          // P51-1: the lines of the work that follow one another go into one fold; nothing is dropped
   const liveBox = el("div", { class: "chat-live", "data-chat": "live", "aria-live": "polite" });
   const headBox = el("div", { class: "chat-head" });
   const titleBox = el("div", { class: "chat-title" });
@@ -15813,7 +15872,7 @@ async function viewChatDetail(token, id) {
       if (r.kind === "user_message" || r.kind === "reply") talkSeen.push(r);
       if (r.kind === "plan_usage") planRecord = r;
       const line = chatLine(r, { engine: engineOf(), remember: rememberLine, saveSkill: saveSkillLine, who: view.card && view.card.name });
-      if (line) { transcript.append(line); if (line.origin) chatOriginFill(line, line.origin); }
+      if (line) { quietLog.add(line, r); if (line.origin) chatOriginFill(line, line.origin); }
     }
   };
   const apply = (data) => {
@@ -16027,7 +16086,8 @@ async function viewChatDetail(token, id) {
   ].filter((x, i, arr) => x !== null || (i > 0 && arr[i - 1] !== null));
   const more = inGroup ? null : chatMoreMenu(menuItems);
   setKids(headBox, el("div", { class: "chat-head-top" }, titleBox, more ? more.node : null), lineBox, detailsBox);
-  setKids(main, crumbs([["員工", "#/employees"], [view.card && view.card.name || id]]), headBox, groupNote, chief ? chief.node : null, suggest ? suggest.node : null, skillDesk ? skillDesk.node : null, noteBox, transcript, liveBox, hintBox, composer);
+  // P51-1: the page is one centred column, 720px at most
+  setKids(main, el("div", { class: "chat-page", "data-chat": "page" }, crumbs([["員工", "#/employees"], [view.card && view.card.name || id]]), headBox, groupNote, chief ? chief.node : null, suggest ? suggest.node : null, skillDesk ? skillDesk.node : null, noteBox, transcript, liveBox, hintBox, composer));
   activeViewCleanup = () => { stopStream(); if (more) more.close(); if (chief) chief.stop(); if (suggest) suggest.stop(); if (skillDesk) skillDesk.stop(); };
   stream();
   if (opening) input.focus();
@@ -21576,6 +21636,8 @@ if (typeof module !== "undefined" && module.exports) {
     CHAT_STATE,
     CHAT_INTRO,
     chatLine,
+    chatQuietSummary,
+    chatIsQuiet,
     viewMemory,
     viewShared,
     memoryRow,

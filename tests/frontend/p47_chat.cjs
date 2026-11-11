@@ -446,8 +446,14 @@ test("15e: a turn that ended well writes no words and keeps the money and the 'e
     rec("turn_ended", { turn: 3, cost_usd: "0.2", reported: true, total_usd: 0.2, reason: "limit", subtype: "x", is_error: true })];
   setPage({ detail: detail({ records, last_seq: 4, next_after: 4 }) });
   const main = await open("#/chat/" + CID);
-  const rows = q(main, "log").children;
+  // P51-1: the lines that follow one another and went well are in a fold; a turn stopped or at its limit is said in the open. The lines are still all in the page, in order.
+  const log = q(main, "log");
+  const rows = log.findAll((x) => x.tag === "li" && x.getAttribute("data-seq") !== null);
+  assert.strictEqual(rows.length, 4);
   const [started, ok, stopped, limit] = rows;
+  const folded = (li) => { for (let p = li.parentNode; p && p !== log; p = p.parentNode) if (p.getAttribute && p.getAttribute("data-chat") === "quiet-group") return true; return false; };
+  assert(folded(started) && folded(ok), "the process starting and a turn that ended well are in the fold");
+  assert(!folded(stopped) && !folded(limit), "a stop and a limit are not folded away");
   const visible = (li) => nodeWithoutTech(li).split(text(li.find((x) => x.tag === "details"))).join("").replace("詳細資訊", "");
   assert.strictEqual(visible(ok).trim(), "", "a turn that ended well writes nothing: " + visible(ok));
   assert(visible(stopped).includes("你按了停止"), visible(stopped));

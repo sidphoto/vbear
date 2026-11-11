@@ -2051,3 +2051,37 @@ input[type="checkbox"] { width: 18px; height: 18px; flex: none; accent-color: va
 .home-page .home-step { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; padding: 12px 2px; }
 .home-page .home-step.done { border-bottom-color: var(--line); }
 .home-page .home-block { border: 0; background: transparent; box-shadow: none; }
+
+/* P51-1 (v0.24.0, ADR 0016): the chat reads like text, in one 720px column. What the employee says has no frame, no fill, no shadow; what you say is a soft --panel-2 bubble
+   at the right with no border; the card that waits keeps its frame (the one framed thing on the page). The tool, result, auto-allowed, cost and process lines that follow one
+   another are one closed line you can open (the css only draws the fold; it never hides one). The time is in the page and shows on hover, on focus and, with no mouse, always.
+   The buttons on a message keep the P47-4 rule (shown on hover or focus, still reachable by keyboard). Every colour is a token of the theme. */
+.chat-page { max-width: 720px; margin: 0 auto; }
+.chat-log { gap: 14px; margin-top: 12px; }
+.chat-msg { max-width: 100%; padding: 2px 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.chat-them { align-self: stretch; }
+.chat-me { align-self: flex-end; max-width: 85%; padding: 8px 14px; background: var(--panel-2); border-radius: 18px; }
+.chat-partial { border: 0; margin-top: 0; }
+.chat-text { line-height: 1.7; }
+.chat-who { margin-bottom: 2px; font-size: 12.5px; }
+.chat-time { opacity: 0; transition: opacity .12s; }
+.chat-who-quiet { opacity: 0; transition: opacity .12s; }
+.chat-msg:hover .chat-time, .chat-msg:focus .chat-time, .chat-msg:focus-within .chat-time,
+.chat-msg:hover .chat-who-quiet, .chat-msg:focus .chat-who-quiet, .chat-msg:focus-within .chat-who-quiet { opacity: 1; }
+@media (hover: none) {
+  .chat-time { opacity: 1; }
+  .chat-who-quiet { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) { .chat-time, .chat-who-quiet { transition: none; } }
+.chat-note { border-left: 0; padding: 2px 0; }
+.chat-sys, .chat-cost { padding: 0; }
+.chat-cost { border-top: 0; padding-top: 0; }
+.chat-quiet { padding: 0; }
+.chat-quiet-sum { display: flex; align-items: center; gap: 6px; padding: 2px 0; cursor: pointer; list-style: none; font-size: 12.5px; }
+.chat-quiet-sum::-webkit-details-marker { display: none; }
+.chat-quiet-sum::before { content: "▸"; color: var(--ink-3); transition: transform .15s; }
+.chat-quiet-group[open] > .chat-quiet-sum::before { transform: rotate(90deg); }
+.chat-quiet-sum:hover { color: var(--ink-2); }
+.chat-quiet-list { list-style: none; margin: 6px 0 2px 4px; padding: 0 0 0 12px; border-left: 2px solid var(--line); display: grid; gap: 8px; }
+.chat-quiet-list .chat-note { font-size: 13px; }
+@media (prefers-reduced-motion: reduce) { .chat-quiet-sum::before { transition: none; } }
