@@ -80,7 +80,9 @@ def _recorded(version: str) -> ChatConstants:
 # 2.1.318's, byte for byte (docs/evidence/claude-code-2.1.318-chat.md), so the same flags and the same constants are assumed;
 # a real chat recording of 2.1.319 was not made. A version here is a version VBear knows how to start, not a verified one:
 # ``cli_versions.chat_verified_versions`` (boundary_check --mode chat) decides which of them may chat.
-VERSIONS = {v: _recorded(v) for v in ("2.1.318", "2.1.319")}
+# 2.1.322 (v0.22.1): the same again. Its ``claude --help`` is identical to 2.1.319's, line for line, and the strings of its binary name
+# the same administrator sources (docs/evidence/claude-code-2.1.322-chat.md). A real stream recording of 2.1.322 was not made.
+VERSIONS = {v: _recorded(v) for v in ("2.1.318", "2.1.319", "2.1.322")}
 STREAM_EVENTS = frozenset({"message_start", "content_block_start", "content_block_delta", "content_block_stop",
                            "message_delta", "message_stop"})
 DELTAS = frozenset({"text_delta", "thinking_delta", "signature_delta", "input_json_delta"})

@@ -4,6 +4,7 @@ back, and which file changes it answers itself. Pure: replayed from the recorded
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import shutil
@@ -12,6 +13,7 @@ import unittest
 from decimal import Decimal
 
 from tests import codex_chat_fixtures as ccf
+from vbear.runtime import cli_versions
 from vbear.runtime import codex_chat_protocol as ccp
 
 THREAD = "00000000-0000-4000-8000-000000000003"
@@ -26,6 +28,18 @@ def parsed(line: bytes):
 
 
 class ConstantsTests(unittest.TestCase):
+    def test_0_167_0_has_the_same_constants_as_0_163_0(self):
+        """v0.22.1: the --help of 0.167.0 is the same as 0.163.0's for every command VBear runs, its app-server protocol schema adds to
+        0.163.0's and changes nothing VBear sends or reads (docs/evidence/codex-0.167.0-chat.md), so the settings, features, items and notifications are the same;
+        only the version differs. Not in any verified list: that needs boundary_check --mode codex-chat."""
+        new, old = ccp.VERSIONS["0.167.0"], ccp.VERSIONS["0.163.0"]
+        self.assertEqual(new.version, "0.167.0")
+        self.assertEqual(dataclasses.replace(new, version="0.163.0"), old)
+        self.assertIs(ccp.constants_for("0.167.0"), new)
+        self.assertEqual(sorted(ccp.VERSIONS), ["0.163.0", "0.167.0"])
+        self.assertNotIn("0.167.0", cli_versions.CODEX_CHAT_VERIFIED_VERSIONS)
+        self.assertEqual(ccp.argv_for(new, "/h/.vbear/chat-work/aaaa"), ccp.argv_for(old, "/h/.vbear/chat-work/aaaa"))
+
     def test_0_163_0_is_the_recorded_version(self):
         c = ccp.VERSIONS["0.163.0"]
         self.assertEqual(c.version, "0.163.0")

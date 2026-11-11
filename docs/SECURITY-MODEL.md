@@ -1191,7 +1191,7 @@ process starts until a version passes the chat check.
   and it does **not** change `passed` or the record: a failure leaves the version chat-verified and "not checked with the shared folder". The
   report names no file of the shared folder. Not yet seen on a real machine at the time of writing: whether the real Claude Code writes through
   the second `allowWrite` entry; that is what this part is for, on the person's own Mac (about US$0.03 more).
-- **Administrator policy.** For 2.1.318 and 2.1.319 (the same list) the places checked are the directory `/Library/Application Support/ClaudeCode`,
+- **Administrator policy.** For 2.1.318, 2.1.319 and 2.1.322 (the same list) the places checked are the directory `/Library/Application Support/ClaudeCode`,
   the managed preferences for `com.anthropic.claudecode`, `~/.claude/remote-settings.json` and
   `~/.claude/policy-limits.json`. Any of them present, or not establishable, means no chat starts. Nothing says what
   `policy-limits.json` can change, so it is refused whole (evidence: `docs/evidence/claude-code-2.1.318-chat.md`). A chat runs the newest version in Claude Code's `versions` folder that passed the chat
@@ -2372,3 +2372,23 @@ suggestions' spending is still not inside the chat side's daily cap (as before t
 Going back to v0.21.0: nothing is migrated, because v0.22.0 added no setting and no data a v0.21.0 needs. `spend-keep/` is not read by v0.21.0 (a meeting or proposal deleted on the same day is not counted again, as before; from
 the next day on there is no difference); `vbear-setup-pick` and `vbear-notify` are not read; the start-up page is one row per tool again and the try and the chat check are two buttons; the records of the chat safety check
 are of the same format, so a version that passed still passes; the Mac's notification permission stays but the v0.21.0 app posts none and has no Dock number.
+
+## New versions of the AI tools (v0.22.1)
+
+v0.22.1 teaches VBear two new versions that the tools updated themselves to: Claude Code 2.1.322 and Codex 0.167.0. **It touches a start-up boundary on purpose**: `vbear/admin_policy.py`
+(the administrator-source lists), `vbear/runtime/chat_protocol.py` and `vbear/runtime/codex_chat_protocol.py` (the version tables) each gained one entry. Nothing else about how a chat starts changed, no
+limit moved, and no version was added to any verified list.
+
+- **What an entry means.** A version in a table is a version VBear knows how to start, never one that is trusted. `CLAUDE_SOURCES["2.1.322"]` is the 2.1.318 list (the directory `/Library/Application Support/ClaudeCode`,
+  the managed preferences `com.anthropic.claudecode`, `~/.claude/remote-settings.json`, `~/.claude/policy-limits.json`). `CODEX_SOURCES["0.167.0"]` is the 0.160.0 / 0.163.0 list (the folder `/etc/codex` and the managed
+  preferences `com.openai.codex`). The constants of both are the previous version's, with the new version string. A chat on either still starts only after `boundary_check --mode chat` (Claude Code) or
+  `--mode codex-chat` (Codex) passed on that Mac for that very version; the person presses 「聊天安全檢查」 once. The chat check is the only thing that proves behaviour.
+- **Why these entries are allowed.** Both were compared with the previous installed version, side by side, with no login, no chat, no network and no file of the person's configuration read: `--help` of every
+  command VBear runs, the strings of the programs for the administrator sources, and, for Codex, `codex features list` and the JSON Schema that `codex app-server generate-json-schema` prints. Claude Code: `--help` identical,
+  the places identical. Codex: the places identical; the protocol adds to the previous one and changes nothing a VBear chat sends or reads (one request, one notification, optional fields, a new approval kind `humanCommand` that needs a capability VBear
+  never sends). Evidence: `docs/evidence/claude-code-2.1.322-chat.md`, `docs/evidence/codex-0.167.0-chat.md`.
+- **Residual risks.** (1) *Codex 0.167.0 can no longer switch off two features.* `realtime_conversation` and `worktrees` are now "removed" (on for good); VBear's `--disable` for them is accepted and does nothing. They
+  belong to the terminal program and to requests a client sends, which a VBear chat never does, but it is a hardening switch less, and only the chat check shows how a chat behaves. (2) *Reading names is not a run.*
+  The comparison cannot show behaviour: the files Codex makes in its own folder, the order of its messages, or what a new default-on feature does. (3) *The fixtures are the old version's.* No stream of 2.1.322 or 0.167.0 was recorded.
+- **AGY is not part of it.** AGY 1.5.5 was compared the same way and **not added**: one of AGY's own built-in skill files differs from the table of 1.5.3 (and two files that AGY generates cannot be read from the program),
+  so a folder written by 1.5.5 would be refused by the folder check. A new table needs a run of the real 1.5.5 (`docs/evidence/agy-1.5.5-not-added.md`). `AGY_SOURCES` and `agy_chat_protocol.VERSIONS` did not change.

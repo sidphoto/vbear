@@ -33,7 +33,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import ROUND_CEILING, Decimal
 
 from . import chat_protocol as cp, shared_rules
@@ -115,6 +115,13 @@ VERSIONS = {
                                     "account/chatgptAuthTokens/refresh", "attestation/generate",
                                     "applyPatchApproval", "execCommandApproval"})),
 }
+
+# 0.167.0 (v0.22.1): the same constants. Every command VBear runs prints the same --help as 0.163.0's, `codex features list` still knows
+# every feature VBear disables (two of them are now "removed": --disable still passes and no longer changes anything, see the evidence),
+# and the app-server protocol schema (`codex app-server generate-json-schema`) adds to 0.163.0's: the requests, the server requests
+# and the fields VBear uses are unchanged (docs/evidence/codex-0.167.0-chat.md). No real recording of 0.167.0 was made. A version here is
+# a version VBear knows how to start, not a verified one: ``cli_versions.codex_chat_verified_versions`` decides which may chat.
+VERSIONS["0.167.0"] = replace(VERSIONS["0.163.0"], version="0.167.0")
 
 
 def constants_for(version) -> CodexConstants | None:
