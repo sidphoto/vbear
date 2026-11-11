@@ -2453,8 +2453,14 @@ a press is.** It does not touch any start-up boundary: nothing under `vbear/` ch
   an unknown version, or unreadable) is named from the state that was read and guessed from nothing.
 - **Small layout fixes.** The usage and limits box sits above notifications in settings; the team-template dialogs keep their button bar at the bottom. These change no request.
 
-Residual risks: (1) A person who has never finished the start-up page and has no tool ready is still sent to `#/setup` first (the gate was not changed); the one-page first run serves a person who has a tool ready and no
-employee. (2) The tool state on the home page is read every 5 seconds but the chat state follows the 30-second chat read, so it may be up to about 30 seconds behind until the person presses 「重新檢查」 or the
+- **The home page no longer sends anyone to the start-up page (P52-5).** A person whose `setup_done` is not true stays on the home page after the one existing `POST /api/setup/settle`; only the app window's first-time
+  page (`#/welcome`, shown once) can still come first, and its buttons now return to the home page (if saving the mark fails, the home page does not send the person back to it in that window). **`setup_done` is written
+  by one press**: after 「建立 CEO，開始聊」 has made the card, and only if it was not already true, the page sends `POST /api/config {"setup_done": true}` once, the same request as the start-up page's leave button; a failed write does
+  not keep the person out of the conversation, and loading, choosing a card, redrawing or a refused card never writes it (guard rule 19b). Nothing new is asked of the server and the server's own settle logic did not change.
+  A person with employees whose `setup_done` is not true (older data) is not sent away either.
+
+Residual risks: (1) The server's `setup_done` stays false for a person who never makes a CEO on the home page and never leaves the start-up page; nothing breaks (the home page no longer depends on it), but the settings
+and the start-up page still read it. (2) The tool state on the home page is read every 5 seconds but the chat state follows the 30-second chat read, so it may be up to about 30 seconds behind until the person presses 「重新檢查」 or the
 confirm flow reads it. (3) `tools/qa_p47.py` still names the old home page's step selector and must be updated before it is used for a real-Mac check. (4) The pages were not looked at in a real browser or app
 here; the person tries the first run after upgrading.
 

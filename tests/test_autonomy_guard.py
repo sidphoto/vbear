@@ -113,8 +113,8 @@ Never, whatever the person ticked in 「自己動手」:
   19. (P52, ADR 0017) the first run on the home page of v0.25.0 puts the steps of the start-up page and the create-CEO page on one page; every step is still the person's own press. Three rules, tested where the thing is:
      19a  on the home page's first-run block the chat safety check is sent only by the button of the confirm area (「確認，開始」), the same road as 16a, with no second way in
           (P52-1, tests/frontend/p52_first_run.cjs).
-     19b  the request that makes the first CEO is sent only inside the click of 「建立 CEO，開始聊」 (and of the old create-CEO page's button); loading, choosing a card and redrawing never send it
-          (P52-1, tests/frontend/p52_first_run.cjs).
+     19b  the request that makes the first CEO is sent only inside the click of 「建立 CEO，開始聊」 (and of the old create-CEO page's button); loading, choosing a card and redrawing never send it;
+          after the card is made the page writes ``setup_done: true`` once (only if it was not true), never on load, pick or redraw, never without a made card (P52-1 and P52-5, tests/frontend/p52_first_run.cjs).
      19c  the plain sentence for a tool whose version VBear does not know holds no version number that the program did not take from the server's data (P52-2, tests/frontend/p52_words.cjs).
      P52-4's rule: this file, ``Guard19FilesAreThere``, checks that these files exist and carry the number of their rule.
 

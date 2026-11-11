@@ -102,7 +102,7 @@ test("the picture is drawn by the page, says it is an illustration and marks whe
   assert(main.findAll((n) => n.tag === "img").length === 0, "no picture file, no outside image");
 });
 
-test("skipping saves that it was seen and goes on to the start-up", async () => {
+test("skipping saves that it was seen and goes back to the home page (P52-5: the first run is there; before, the start-up page)", async () => {
   asApp();
   setPage({ setup_done: false, welcome_seen: false });
   const main = await open("#/welcome");
@@ -110,18 +110,18 @@ test("skipping saves that it was seen and goes on to the start-up", async () => 
   assert(skip && text(skip) === "略過");
   await click(skip);
   assert.deepStrictEqual(saved(), [{ welcome_seen: true }]);
-  assert.strictEqual(global.location.hash, "#/setup");
+  assert.strictEqual(global.location.hash, "#/");
 });
 
-test("reading it and going on saves the same mark and goes to the start-up", async () => {
+test("reading it and going on saves the same mark and goes back to the home page (P52-5)", async () => {
   asApp();
   setPage({ setup_done: false, welcome_seen: false });
   const main = await open("#/welcome");
   const next = byAttr(main, "data-welcome", "next")[0];
-  assert(next && /開始設定/.test(text(next)));
+  assert(next && text(next) === "我知道了，開始" && !/開始設定/.test(text(next)), "the button no longer says it goes to the start-up");
   await click(next);
   assert.deepStrictEqual(saved(), [{ welcome_seen: true }]);
-  assert.strictEqual(global.location.hash, "#/setup");
+  assert.strictEqual(global.location.hash, "#/");
 });
 
 test("a save that fails does not trap the person: they still go on, and are told it may come again", async () => {
@@ -130,32 +130,35 @@ test("a save that fails does not trap the person: they still go on, and are told
   const main = await open("#/welcome");
   saveFails = true;
   try { await click(byAttr(main, "data-welcome", "skip")[0]); } finally { saveFails = false; }
-  assert.strictEqual(global.location.hash, "#/setup");
+  assert.strictEqual(global.location.hash, "#/");
   assert(/下次/.test(text(h.dom().toastEl || realGetById("toast"))), "told in the toast");
+  // P52-5: the home page is where they land now, so it must not send them back to this page while the mark is still not saved (no loop)
+  await open("#/");
+  assert.strictEqual(global.location.hash, "#/", "the home page does not send a person whose save failed back to the first-time page");
 });
 
-test("after it was seen the home page goes straight to the start-up", async () => {
+test("after it was seen the home page stays (P52-5: it does the first run itself; before, it went straight to the start-up)", async () => {
   asApp();
   setPage({ setup_done: false, welcome_seen: true, onboarding_dismissed: true });
   await open("#/");
-  assert.strictEqual(global.location.hash, "#/setup");
+  assert.strictEqual(global.location.hash, "#/");
 });
 
 test("a browser never gets it, whatever the mark says", async () => {
   asBrowser();
   setPage({ setup_done: false, welcome_seen: false, onboarding_dismissed: true });
   await open("#/");
-  assert.strictEqual(global.location.hash, "#/setup");
+  assert.strictEqual(global.location.hash, "#/");
   await open("#/welcome");
-  assert.strictEqual(global.location.hash, "#/setup", "even when opened by hand");
+  assert.strictEqual(global.location.hash, "#/", "even when opened by hand: back to the home page");
   assert.deepStrictEqual(saved(), []);
 });
 
-test("the server saying nothing about the mark forces nothing (no welcome_seen key: the start-up as before)", async () => {
+test("the server saying nothing about the mark forces nothing (no welcome_seen key: the home page stays, P52-5)", async () => {
   asApp();
   setPage({ setup_done: false, onboarding_dismissed: true });
   await open("#/");
-  assert.strictEqual(global.location.hash, "#/setup");
+  assert.strictEqual(global.location.hash, "#/");
 });
 
 test("a person who finished the start-up, or who has a ready tool, is not shown it", async () => {

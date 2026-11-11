@@ -249,12 +249,14 @@ test("the route and the nav: #/setup is a page, the nav and the settings page le
   assert(!link || attr(link.find((n) => attr(n, "data-setup") === "open"), "href") === "#/setup");
 });
 
-test("home: a person who has not finished and has no ready tool is sent to the start-up", async () => {
+test("home: a person who has not finished and has no ready tool is asked (settle) and stays on the home page, which does the first run (P52-5: before, sent to the start-up)", async () => {
+  global.localStorage._store = {};
   setPage({ config: { setup_done: false, onboarding_dismissed: true } });
   const main = await open("#/");
-  assert.strictEqual(global.location.hash, "#/setup");
+  assert.strictEqual(global.location.hash, "#/");
   assert(calls.some((c) => c[1] === "/api/setup/settle" && c[0] === "POST"));
-  assert(!text(main).includes("等你決定"), "the home page was not drawn first");
+  assert(text(main).includes("首頁"), "the home page is drawn once the server has settled it");
+  assert(calls.filter((c) => c[0] === "POST" && c[1] === "/api/config").every((c) => !("setup_done" in c[2])), "nothing wrote setup_done");
 });
 
 test("home: an upgrader with a ready tool stays on the lobby and is told once", async () => {

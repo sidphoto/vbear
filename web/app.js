@@ -2445,7 +2445,8 @@ async function viewHome() {
       // v0.25 (P52-1, ADR 0017): a person with no employee does the first run here, on one page. The block keeps its own state (the pick, the typed name, an open
       // confirmation) and draws itself again only when what it shows changed, so the 5-second refresh and a late answer do not clear it.
       if (!firstRun) firstRun = homeFirstRun({ alive: () => token === seq && !authLostShown, tools: () => state.tools, setTools: (r) => { state.tools = r; },
-        chats: () => state.chats, setChats: (r) => { state.chats = r; } });
+        chats: () => state.chats, setChats: (r) => { state.chats = r; },
+        setupDone: () => !!state.conf && state.conf.setup_done === true, markSetupDone: () => { if (state.conf) state.conf.setup_done = true; } });
       paint("first", "host", () => setKids(firstHost, firstRun.node));
       firstRun.update(!ready("first"));
       return;
@@ -2508,7 +2509,9 @@ async function viewHome() {
   homeLater(HOME_SLOW_MS, () => { if (token === seq) { slow = true; update(); } });
   setup = gating ? await setupGate(configRes) : setupGateQuiet(configRes);
   if (token !== seq) return;
-  if (setup.redirect) { location.hash = welcomeWanted(configRes) ? "#/welcome" : "#/setup"; return; }
+  // v0.25 (P52-5, ADR 0017): the home page no longer sends anyone to the start-up page; a person who has not finished it stays here and does the first run on this page
+  // (the block of a person with no employee). The one place still left is the app window's first-time page, once (it comes back to this page).
+  if (setup.redirect && welcomeWanted(configRes) && !welcomeSaveFailed) { location.hash = "#/welcome"; return; }
   if (gating) drawFrame();
   update();
   homeLater(HOME_GIVE_UP_MS, () => {
@@ -3064,7 +3067,9 @@ function homeFirstRun(env) {
     if (!nm) { fail("請幫 CEO 取個名字，不能空白。"); return; }
     creating = true; go.disabled = true; fail("");
     try {
-      await ceoCreate(plan, nm, typeof plan.instructions === "string" ? plan.instructions : "");
+      // P52-5: the start-up is finished by this press, once the card is made: the same request as the start-up page's leave button; a failed write does not keep the person out
+      await ceoCreate(plan, nm, typeof plan.instructions === "string" ? plan.instructions : "",
+        env.setupDone() ? null : async () => { await api.post("/api/config", { setup_done: true }); env.markSetupDone(); });
     } catch (e) {
       fail("沒有建立成功：" + e.message);
       creating = false; go.disabled = false;
@@ -14179,6 +14184,7 @@ const WELCOME_DIAGRAM_LABEL = "示意圖：系統設定的「隱私權與安全�
 const WELCOME_DIAGRAM_NOTE = "上面是示意圖，不是你電腦的真實畫面。你的系統設定的樣子與字，會依 macOS 版本稍有不同，位置也可能不一樣；照著文字步驟找就好。";
 const WELCOME_SAVE_FAILED = "沒有存成「已看過」，下次打開 VBear 可能還會看到這一頁。";
 
+let welcomeSaveFailed = false;       // the mark could not be saved: the home page does not send the person back to this page again in this window (no loop)
 function welcomeIsApp() { return folderBridge() !== null; }
 // The home page asks this only after the start-up gate said the person is to go there.
 function welcomeWanted(configRes) {
@@ -14206,16 +14212,16 @@ async function viewWelcome() {
   const token = seq;
   const main = claim(token);
   if (token !== seq) return;
-  if (!welcomeIsApp()) { location.hash = "#/setup"; return; }       // a browser has no such page
+  if (!welcomeIsApp()) { location.hash = "#/"; return; }       // a browser has no such page; the home page is where the first run is (P52-5)
   const go = async () => {
     let saved = true;
     try { await api.post("/api/config", { welcome_seen: true }); }
-    catch (e) { saved = false; }
-    location.hash = "#/setup";
+    catch (e) { saved = false; welcomeSaveFailed = true; }
+    location.hash = "#/";
     if (!saved) toast(WELCOME_SAVE_FAILED);
   };
   const skip = el("button", { class: "btn", type: "button", "data-welcome": "skip" }, "略過");
-  const next = el("button", { class: "btn primary", type: "button", "data-welcome": "next" }, "我知道了，開始設定");
+  const next = el("button", { class: "btn primary", type: "button", "data-welcome": "next" }, "我知道了，開始");
   let busy = false;
   for (const b of [skip, next]) b.addEventListener("click", async () => {
     if (busy) return;
@@ -14991,12 +14997,13 @@ async function ceoOpenChat(profileId, opening, reuseId) {
 
 // Makes the CEO card (always in safe mode) and opens the chat with it; the opening sentence only goes into the box. The one request of the first CEO: the CEO page's
 // button and the home page's 「建立 CEO，開始聊」 both come here, and only a press of either gets here. Throws with the server's words when it fails.
-async function ceoCreate(plan, name, instructions) {
+async function ceoCreate(plan, name, instructions, afterMade) {
   const r = await api.post("/api/agent-profiles", { name, position: plan.position, instructions, launch_mode: "safe",
     model: { tool: plan.tool, model_id: "" } });
   const id = r && r.profile && typeof r.profile.id === "string" ? r.profile.id : "";
   if (!id) throw new Error("建立了，但讀不到員工的編號");
   await api.post("/api/config", { first_ceo_id: id }).catch(() => {});      // the lobby offers the chat once, if this one is left
+  if (afterMade) { try { await afterMade(); } catch (_) { /* a failed write never keeps the person out of the conversation */ } }
   await ceoOpenChat(id, typeof plan.opening === "string" ? plan.opening : "", "");
 }
 

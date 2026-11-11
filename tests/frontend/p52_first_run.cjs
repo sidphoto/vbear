@@ -266,7 +266,7 @@ function makeConsole(over = {}) {
 }
 async function firstPage(over = {}, extra = {}) {
   const F = makeConsole(over);
-  const W = world({ profiles: [], cards: [], tools: [], support: {} });
+  const W = world({ profiles: [], cards: [], tools: [], support: {}, config: extra.config, posts: extra.posts });
   const page = boot("#/", W, { ...extra, fetch: F.fetch });
   await tick(60);
   page.F = F; page.W = W;
@@ -327,10 +327,20 @@ function judge19aSource(src) {
   return bad;
 }
 // 19b: what was sent to make the CEO. `pressed`: 「建立 CEO，開始聊」 was pressed; `tool`: the one the person chose.
-function judge19b(log, { pressed, tool }) {
+// P52-5: the first run also writes `setup_done` (the same request as the start-up page's leave button), once, only after the press has made the CEO, and only if it was not already true
+// (`wasDone`: what the config said before; leave it out when that is not looked at).
+function judge19b(log, { pressed, tool, wasDone }) {
   const bad = [];
   const post = log.filter((c) => c[0] !== "GET");
   const made = post.filter((c) => c[1] === "/api/agent-profiles");
+  const done = post.filter((c) => c[1] === "/api/config" && c[2] && Object.prototype.hasOwnProperty.call(c[2], "setup_done"));
+  if (!pressed && done.length) bad.push("setup_done was written without the press");
+  if (done.some((c) => JSON.stringify(c[2]) !== JSON.stringify({ setup_done: true }))) bad.push("setup_done was written with something else than true alone");
+  if (pressed && done.length > 1) bad.push("setup_done was written more than once");
+  if (pressed && wasDone === true && done.length) bad.push("setup_done was written though it was already true");
+  if (pressed && wasDone === false && done.length !== 1) bad.push("setup_done was not written once after the press");
+  if (done.length && made.length) { const first = post.findIndex((c) => c[1] === "/api/agent-profiles"); const at = post.indexOf(done[0]); if (at < first) bad.push("setup_done was written before the CEO was made"); }
+  if (done.length && !made.length) bad.push("setup_done was written though no CEO was made");
   if (!pressed && made.length) bad.push("a CEO was made without the press");
   if (pressed) {
     if (made.length !== 1) bad.push("not exactly one card made");
@@ -349,6 +359,16 @@ function judge19bSource(src) {
   if (calls.length !== 2) bad.push(`ceoCreate is called ${calls.length} times, not twice`);
   for (const i of calls) if (!/addEventListener\("click"/.test(src.slice(Math.max(0, i - 700), i))) bad.push("a call of ceoCreate that is not inside a click handler");
   if ([...src.matchAll(/api\.post\("\/api\/agent-profiles"/g)].filter((m) => m.index > src.indexOf("async function ceoCreate(") && m.index < src.indexOf("async function viewCeo(")).length !== 1) bad.push("the card is not made in ceoCreate");
+  // P52-5: in the home block `setup_done` is written only from inside the press's click handler (never when the block is built, loaded or redrawn)
+  const from = src.indexOf("function homeFirstRun("), to = src.indexOf("function homeFirstSteps(");
+  if (from >= 0 && to > from) {
+    const part = src.slice(from, to);
+    for (const m of part.matchAll(/setup_done\s*:\s*true/g)) {
+      const before = part.slice(0, m.index);
+      const click = before.lastIndexOf('addEventListener("click"');
+      if (click < 0 || m.index - click > 1400) bad.push("setup_done is written outside the click of 「建立 CEO，開始聊」");
+    }
+  }
   return bad;
 }
 
@@ -676,6 +696,84 @@ function judge19bSource(src) {
     assert.ok(judge19aSource(mk("", `const checkOn = { ask: async () => { await api.post("/api/chat-support/verify", {}); }, confirm: async (id) => { await api.post("/api/chat-support/verify", {}); }, };\n  return { toolCard };`)).some((m) => /outside/.test(m)));
     assert.ok(judge19aSource(mk("", `const checkOn = { confirm: async (id) => { }, };\n  return { toolCard };`)).some((m) => /does not ask/.test(m)));
     assert.ok(judge19aSource("nothing").length);
+  });
+
+  await test("P52-5 gate: a person who has not finished the start-up, with no ready tool, is not sent away: the home page stays and draws the first run (only the existing settle is asked); nothing writes setup_done on load, pick or redraw", async () => {
+    const page = await firstPage({}, { config: { setup_done: false }, storage: { [PICK]: "claude" } });
+    assert.strictEqual(page.location.hash, "#/");
+    assert.ok(block(page), "the first-run block is drawn");
+    assert.deepStrictEqual(posts(page).map((c) => c[1]), ["/api/setup/settle"], "the settle of the gate is the only write, and it is the old one");
+    await page.advance(5000); await page.tickHome();
+    assert.deepStrictEqual(judge19b(page.log, { pressed: false, tool: "claude", wasDone: false }), []);
+    assert.deepStrictEqual(posts(page).map((c) => c[1]), ["/api/setup/settle"]);
+  });
+
+  await test("P52-5 gate: a person who had not finished but has a ready tool is counted as done by the server as before (settle says so) and stays on the home page", async () => {
+    const page = await firstPage({}, { config: { setup_done: false }, posts: { "POST /api/setup/settle": { body: { ok: true, setup_done: true, setup_notice: false } } } });
+    assert.strictEqual(page.location.hash, "#/");
+    assert.ok(block(page));
+    assert.deepStrictEqual(posts(page).map((c) => c[1]), ["/api/setup/settle"]);
+  });
+
+  await test("P52-5 gate: a person with employees whose setup_done is not true (older data) is not sent away either, and does not see the first run", async () => {
+    const W = world({ config: { setup_done: false } });
+    const page = await home(W);
+    assert.strictEqual(page.location.hash, "#/");
+    assert.strictEqual(block(page), null);
+    assert.ok(one(page.main, "data-home", "team"), "the home page of a person with a team is drawn");
+    assert.deepStrictEqual(posts(page).map((c) => c[1]), ["/api/setup/settle"]);
+  });
+
+  await test("P52-5 setup_done: after 「建立 CEO，開始聊」 has made the CEO, a setup_done that was not true is written once with the start-up page's own request ({setup_done: true}); before the press nothing is written", async () => {
+    const page = await firstPage(chatReady(), { config: { setup_done: false }, storage: { [PICK]: "claude" } });
+    assert.deepStrictEqual(posts(page).map((c) => c[1]), ["/api/setup/settle"], "loading and choosing wrote nothing");
+    await click(h(page, "first-ceo-create"), 80);
+    assert.deepStrictEqual(posts(page).map((c) => [c[1], c[2] && Object.keys(c[2]).join()]), [["/api/setup/settle", ""], ["/api/agent-profiles", "name,position,instructions,launch_mode,model"],
+      ["/api/config", "first_ceo_id"], ["/api/config", "setup_done"], ["/api/chats", "profile_id"]]);
+    assert.deepStrictEqual(posts(page)[3][2], { setup_done: true });
+    assert.strictEqual(page.location.hash, `#/chat/${CHAT}`);
+    assert.deepStrictEqual(judge19b(page.log, { pressed: true, tool: "claude", wasDone: false }), []);
+  });
+
+  await test("P52-5 setup_done: a person who had finished the start-up is not written to again; a write that fails does not keep the person out of the conversation", async () => {
+    const done = await firstPage(chatReady(), { config: { setup_done: true }, storage: { [PICK]: "claude" } });
+    await click(h(done, "first-ceo-create"), 80);
+    assert.deepStrictEqual(judge19b(done.log, { pressed: true, tool: "claude", wasDone: true }), []);
+    const fail = await firstPage(chatReady(), { config: { setup_done: false }, storage: { [PICK]: "claude" } });
+    fail.W.posts["POST /api/config"] = (b) => (b && b.setup_done ? { status: 500, body: { error: "寫不進去" } } : {});
+    await click(h(fail, "first-ceo-create"), 80);
+    assert.strictEqual(fail.location.hash, `#/chat/${CHAT}`, "into the conversation all the same");
+    assert.ok(posts(fail).some((c) => c[1] === "/api/config" && c[2] && c[2].setup_done === true), "it was tried");
+  });
+
+  await test("P52-5 setup_done: a CEO the server refuses writes no setup_done (it follows the made card, not the press)", async () => {
+    const page = await firstPage(chatReady({ createFail: "名字重複了" }), { config: { setup_done: false }, storage: { [PICK]: "claude" } });
+    await click(h(page, "first-ceo-create"), 60);
+    assert.ok(!posts(page).some((c) => c[1] === "/api/config" && c[2] && c[2].setup_done === true));
+    assert.deepStrictEqual(judge19b(page.log.filter((c) => c[1] !== "/api/agent-profiles"), { pressed: false, tool: "claude" }), []);
+  });
+
+  await test("P52-5 judge: the 19b judge catches a setup_done written on load, twice, with something else, before the CEO, without a CEO, though already true, or not written when it was not true", () => {
+    const made = ["POST", "/api/agent-profiles", { name: "CEO", position: "planner", launch_mode: "safe", model: { tool: "claude", model_id: "" } }];
+    const done = (b = { setup_done: true }) => ["POST", "/api/config", b];
+    assert.deepStrictEqual(judge19b([made, done()], { pressed: true, tool: "claude", wasDone: false }), []);
+    assert.deepStrictEqual(judge19b([made], { pressed: true, tool: "claude", wasDone: true }), []);
+    assert.ok(judge19b([done()], { pressed: false, tool: "claude" }).some((m) => /without the press/.test(m)), "on load");
+    assert.ok(judge19b([made, done(), done()], { pressed: true, tool: "claude", wasDone: false }).some((m) => /more than once/.test(m)));
+    assert.ok(judge19b([made, done({ setup_done: true, welcome_seen: true })], { pressed: true, tool: "claude", wasDone: false }).some((m) => /something else/.test(m)));
+    assert.ok(judge19b([done(), made], { pressed: true, tool: "claude", wasDone: false }).some((m) => /before the CEO/.test(m)));
+    assert.ok(judge19b([done()], { pressed: true, tool: "claude", wasDone: false }).some((m) => /no CEO was made/.test(m)));
+    assert.ok(judge19b([made, done()], { pressed: true, tool: "claude", wasDone: true }).some((m) => /already true/.test(m)));
+    assert.ok(judge19b([made], { pressed: true, tool: "claude", wasDone: false }).some((m) => /not written once/.test(m)));
+  });
+
+  await test("P52-5 judge (source): the real page writes setup_done only inside the press's click; a source that writes it when the block is built is caught", () => {
+    assert.deepStrictEqual(judge19bSource(SOURCE), []);
+    assert.ok(SOURCE.slice(SOURCE.indexOf("function homeFirstRun("), SOURCE.indexOf("function homeFirstSteps(")).includes("setup_done"), "the home block does write it, in its click");
+    const click = `a.addEventListener("click", async () => { await ceoCreate(plan, n, i); });\n`;
+    const shell = (inside) => `async function ceoCreate(plan, name, instructions) { await api.post("/api/agent-profiles", {}); }\nfunction homeFirstRun(env) {${inside}${click}${click}}\nfunction homeFirstSteps() {}\nasync function viewCeo() {}`;
+    assert.deepStrictEqual(judge19bSource(shell("")), []);
+    assert.ok(judge19bSource(shell("api.post('/api/config', { setup_done: true });")).some((m) => /outside the click/.test(m)));
   });
 
   await test("19b judge: it catches a card made without the press, two cards, a card not in safe mode, a card on another tool, a wrong position and a message sent", () => {

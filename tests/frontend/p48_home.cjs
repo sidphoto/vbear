@@ -372,7 +372,7 @@ function check16dPace(times, forced) {
     assert.deepStrictEqual(check16c(page.main, "loading"), []);
   });
 
-  await test("16c: a person who has not finished the start-up: only the title and one line (what is waited for) are drawn until the server has settled it; none of the blocks, no requests for them; then the start-up", async () => {
+  await test("16c: a person who has not finished the start-up: only the title and one line (what is waited for) are drawn until the server has settled it; none of the blocks, no requests for them; then the home page itself (P52-5: no longer the start-up page)", async () => {
     const W = world({ config: { setup_done: false }, posts: { "POST /api/setup/settle": { body: { setup_done: false } } } });
     const page = await home(W, "#/", { hold: ["/api/setup/settle"] });
     assert.strictEqual(text(all(page.main, (n) => n.tag === "h1")[0]), "首頁");
@@ -380,8 +380,8 @@ function check16dPace(times, forced) {
     assert.strictEqual(one(page.main, "data-home", "waiting"), null, "no block yet");
     assert.ok(!page.log.some(([, u]) => u === "/api/chats"), "the data of the blocks is not asked for before the person is known to stay");
     await page.release();
-    assert.strictEqual(page.location.hash, "#/setup");
-    assert.ok(!page.log.some(([, u]) => u === "/api/chats"));
+    assert.strictEqual(page.location.hash, "#/", "P52-5: the person stays here (before: sent to #/setup)");
+    assert.ok(one(page.main, "data-home", "waiting") || one(page.main, "data-home", "team"), "and the blocks are drawn after the settle");
   });
 
   await test("16c: leaving the page: a timer that fires after the person went elsewhere draws nothing into the new page", async () => {
