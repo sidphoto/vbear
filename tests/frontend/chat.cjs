@@ -354,7 +354,10 @@ test("a chat is drawn from its record in order, with the cost of each turn, and 
   setPage({ detail: detail({ records, last_seq: 7, next_after: 7 }) });
   const main = await open("#/chat/" + CID);
   const log = q(main, "log");
-  assert.deepStrictEqual(log.children.map((c) => c.getAttribute("data-chat")), ["user", "process", "reply", "cost"]);
+  // P51-1: the same lines in the same order; the two of the work (the process starting, the turn's cost) are inside folds, the words said are not
+  const lines = (n) => n.findAll((x) => x.tag === "li" && x.getAttribute("data-seq") !== null).map((x) => x.getAttribute("data-chat"));
+  assert.deepStrictEqual(lines(log), ["user", "process", "reply", "cost"]);
+  assert.deepStrictEqual(log.children.map((c) => c.getAttribute("data-chat")), ["user", "quiet-item", "reply", "quiet-item"]);
   const all = text(main);
   for (const w of ["虛構員工", "你好，我是虛構員工。", "帶著員工自己寫的指示", "這回合花了 US$0.0015（Claude Code 回報的估值）", "員工上線"]) assert(all.includes(w), w);
   assert.strictEqual(FETCH_LOG.filter((c) => c.method !== "GET").length, 0);
@@ -788,12 +791,15 @@ test("Codex: a chat shows its tool, the one-line plan use, the money rule and th
   setPage({ detail: codexDetail({ records, last_seq: records.length, next_after: records.length }) });
   const main = await open("#/chat/" + CODEX_CID);
   const log = q(main, "log");
-  assert.deepStrictEqual(log.children.map((c) => c.getAttribute("data-chat")), ["user", "process", "reply", "cost"], "the Codex-only records are not lines");
+  assert.deepStrictEqual(log.findAll((x) => x.tag === "li" && x.getAttribute("data-seq") !== null).map((c) => c.getAttribute("data-chat")), ["user", "process", "reply", "cost"], "the Codex-only records are not lines");
   const all = text(main);
   for (const w of ["Codex 員工", "Codex・每件事先問你・對話會送到 OpenAI", "估計 US$0.02", "不是帳單", "ChatGPT 方案：5 小時內已用 7%、本週已用 27%（Codex 回報）",
     "不擋「讀」", "每個指令都會先問你"]) assert(all.includes(w), w);
   assert.strictEqual(text(q(main, "plan-usage")).includes("已用 6%"), false, "the last report is the one shown");
-  assert(!all.includes("Claude Code"));
+  // P51-2: the closed list of whom to talk to names every employee's tool; what this chat says of itself (everything outside that list) names no Claude Code
+  const whoList = main.find((n) => n.getAttribute && n.getAttribute("data-ask") === "who-pop");
+  assert(whoList, "the list of employees is in the page");
+  assert(!all.split(text(whoList)).join("").includes("Claude Code"));
   assert(q(main, "codex-note"));
   assert.strictEqual(FETCH_LOG.filter((c) => c.method !== "GET").length, 0);
   // a Claude chat has none of it

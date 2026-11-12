@@ -196,6 +196,7 @@ test("「我登入好了」marks the tool, the row becomes ready, and the mark c
 
 test("you can leave only when a tool is ready; leaving saves the mark and goes to the lobby; the page can be come back to", async () => {
   setPage({ tools: [installed("claude"), row("codex"), row("agy"), row("grok")] });
+  global.localStorage._store = {};          // P52-2: the first line is for a page where no AI is chosen yet (once one is, its card says what is missing); an earlier test left a choice here
   let main = await open("#/setup");
   let leave = byAttr(main, "data-setup", "leave")[0];
   assert.strictEqual(leave.disabled, true);
@@ -248,12 +249,14 @@ test("the route and the nav: #/setup is a page, the nav and the settings page le
   assert(!link || attr(link.find((n) => attr(n, "data-setup") === "open"), "href") === "#/setup");
 });
 
-test("home: a person who has not finished and has no ready tool is sent to the start-up", async () => {
+test("home: a person who has not finished and has no ready tool is asked (settle) and stays on the home page, which does the first run (P52-5: before, sent to the start-up)", async () => {
+  global.localStorage._store = {};
   setPage({ config: { setup_done: false, onboarding_dismissed: true } });
   const main = await open("#/");
-  assert.strictEqual(global.location.hash, "#/setup");
+  assert.strictEqual(global.location.hash, "#/");
   assert(calls.some((c) => c[1] === "/api/setup/settle" && c[0] === "POST"));
-  assert(!text(main).includes("等你決定"), "the home page was not drawn first");
+  assert(text(main).includes("首頁"), "the home page is drawn once the server has settled it");
+  assert(calls.filter((c) => c[0] === "POST" && c[1] === "/api/config").every((c) => !("setup_done" in c[2])), "nothing wrote setup_done");
 });
 
 test("home: an upgrader with a ready tool stays on the lobby and is told once", async () => {

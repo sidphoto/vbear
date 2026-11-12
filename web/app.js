@@ -968,7 +968,7 @@ function categoryZh(label) {
 // sees, searched literally), loose (words too common to search literally, for a human to look at), scope ("all": every page of the
 // normal mode; "title": an advanced page changes only its menu name and its h1; "new": a new word, nothing to avoid), note.
 const WORDS = {
-  home:          { use: "首頁", avoid: ["冒險者大廳", "大廳"], loose: [], scope: "all", note: "" },
+  home:          { use: "首頁", avoid: ["冒險者大廳", "大廳"], loose: [], scope: "all", note: "頁面本身（#/）；v0.23 起選單的第一項叫「新對話」，頁面只剩給螢幕閱讀器的標題「首頁」" },
   employee:      { use: "員工", avoid: ["角色卡"], loose: ["角色"], scope: "all", note: "指那份設定時寫「員工設定」" },
   employeeList:  { use: "我的員工", avoid: ["角色卡池", "我的角色卡", "名冊"], loose: [], scope: "all", note: "首頁區塊；選單與頁名是「員工」；舊 #/team 在進階叫「員工詳細資料」" },
   newEmployee:   { use: "新增員工", avoid: ["新角色卡", "拿卡", "起手牌組"], loose: [], scope: "all", note: "起手牌組 = 一次新增幾位常用的員工" },
@@ -1011,6 +1011,14 @@ const WORDS = {
   advancedMode:  { use: "進階模式", avoid: [], loose: [], scope: "new", note: "設定裡的開關；打開後選單多出工程頁並顯示路徑與診斷；不改變任何權限" },
   waiting:       { use: "等你決定", avoid: [], loose: [], scope: "new", note: "首頁最上面一塊：所有要用的人決定的事" },
   limits:        { use: "用量與上限", avoid: [], loose: [], scope: "new", note: "設定裡預設收起的一塊：今天已花、花費上限（可自填）、狀態" },
+  newChat:       { use: "新對話", avoid: [], loose: [], scope: "new", note: "選單第一項（原本的首頁項目，href 與 data-nav 不變）：回到首頁、游標放進輸入框；本身不開任何對話、不發請求" },
+  recent:        { use: "最近", avoid: [], loose: [], scope: "new", note: "選單裡「新對話」下面的清單：最近聊過的員工（最多 8 個）；只用已讀到的聊天清單，不另外讀、不編標題" },
+  chatFold:      { use: "細節", avoid: [], loose: [], scope: "new", note: "聊天裡收起來的那一行（用了幾次工具・自動允許・細節）；摘要沒有金額，要你決定的卡片、錯誤、拒絕永遠不收進去" },
+  whoTo:         { use: "要跟誰說", avoid: [], loose: [], scope: "new", note: "輸入框左下角的小鈕：寫現在說話的對象，按了列出員工；選取不送出任何東西" },
+
+  firstRun:      { use: "第一次使用", avoid: [], loose: [], scope: "new", note: "沒有員工的首頁一頁做完：選一家 AI、準備好、「建立 CEO，開始聊」；每一步都由使用者自己按（ADR 0017）" },
+  versionUnknown: { use: "還不認得這一版", avoid: [], loose: [], scope: "new", note: "AI 工具自己更新後 VBear 還沒有那一版的聊天資料；版本只在讀到時才寫，原句收進技術細節" },
+  oneStepLeft:   { use: "還差一步", avoid: [], loose: [], scope: "new", note: "AI 工具還不能聊天時，一行話說缺哪一步（還沒安裝、還沒登入、還沒做安全檢查、有管理員設定、版本不認得）" },
 };
 // -> [{ key, term, use }] for the words a page of that scope must not say (`avoid` only, searched literally). scope "all": the pages of
 // the normal mode; "title": the menu names and the h1 of the advanced pages (and, for a page of scope "all", nothing of this).
@@ -1021,6 +1029,15 @@ function wordsToAvoid(scope) {
     for (const term of w.avoid) out.push({ key, term, use: w.use });
   }
   return out;
+}
+
+// What is said of a tool whose version VBear does not know (its chat support is `unsupported`, or the server's sentences that mean it). `version` is only what the server's
+// data gave: nothing is looked up here, and no number is written into this function (guard 19c). No word about going back to an older version.
+function versionUnknownWords(tool, version) {
+  const name = typeof tool === "string" && tool ? tool : "AI 工具";
+  const v = typeof version === "string" ? version.trim() : "";
+  const text = v ? `你的 ${name} 是 ${v} 版，VBear 還不認得這一版，所以先不能用它聊天。` : `你的 ${name} 的版本 VBear 還不認得，所以先不能用它聊天。`;
+  return { text, next: "等 VBear 出新版就能用。" };
 }
 
 const LIMIT_SETTINGS_HREF = "#/settings?open=limits";
@@ -1042,6 +1059,10 @@ const PLAIN_ERRORS = [
     text: "這個 AI 工具還沒做過聊天用的安全檢查，所以現在不能聊天。", next: "到這位員工的準備頁，做一次安全檢查，通過後就能聊。" },
   { key: "chat_admin_policy", re: /這台 Mac 上有管理員政策或系統設定，可能蓋過 VBear 的設定，所以不啟動聊天/,
     text: "這台電腦的 AI 工具有管理員設定，VBear 不能用它聊天。", next: "可以到「AI 工具」看看有沒有別的工具能用。" },
+  // P52-2: the tool updated itself and VBear does not know that version. The tool and the version are taken out of the server's own sentence (never looked up); `build` says it.
+  { key: "version_unknown", re: /(?:VBear 沒有 )?(Claude Code|Codex|AGY) (\d\S*) (?:的聊天模式常數|沒有聊天模式的常數|沒有管理員政策來源清單，不能啟動|不是 VBear 能聊天的版本)/,
+    build: (m) => versionUnknownWords(m[1], m[2]) },
+  { key: "version_unknown_bare", re: /沒有這個 (Claude Code|Codex|AGY) 版本的聊天模式常數|VBear 沒有這個版本的聊天模式常數/, build: (m) => versionUnknownWords(m[1] || "", "") },
   { key: "orphan", re: /孤兒翻譯/, label: true, swaps: [[/孤兒翻譯/g, "找不到原技能的翻譯"]] },
   // P48-6: the browser's own words when a request never reached the server (Chrome, WebKit in the Mac app, Firefox); the server says none of them.
   { key: "server_lost", re: /^(?:TypeError:\s*)?(?:Failed to fetch|Load failed|NetworkError when attempting to fetch resource\.?)$/i,
@@ -1062,6 +1083,7 @@ function plainWords(x) {
   const hit = PLAIN_ERRORS.find((e) => e.re.test(raw) && !(e.normalOnly && onAdvancedPage()));
   if (!hit) return none;
   if (hit.limit) return { text: LIMIT_REACHED_TEXT, next: "", detail: raw, known: true, limit: true };
+  if (hit.build) { const b = hit.build(hit.re.exec(raw)); return { text: b.text, next: b.next, detail: raw, known: true, limit: false }; }
   if (hit.swaps) {
     const swapped = hit.swaps.reduce((s, [re, to]) => s.replace(re, to), raw);
     return { text: swapped, next: hit.next || "", detail: hit.label ? "" : raw, known: true, limit: false };
@@ -2309,6 +2331,12 @@ function sectionHead(title, sub, action) {
 // routines page's own requests). The parts of the old lobby (the board, task cards, skill search, recent projects) are under 「進階」 and only in
 // the advanced mode, which decides nothing but what is shown.
 let homeTick = null;     // the refresh of the home page every 5 seconds (route() runs it); null on any other page
+let homeFocusAsk = null; // while the home page is up: puts the cursor in its box (the side bar's 「新對話」 calls it)
+// The cursor goes into the home box only when nothing else has it (the body and the main area do not count as "something": a move to another page puts the focus on
+// the main area first), and never by itself on a touch screen (the keyboard would cover the page); the person's own press of 「新對話」 on the home page always does.
+function homeNothingFocused() { const a = document.activeElement; return !a || a === document.body || a === document.documentElement || a === $main(); }
+function homeCoarsePointer() { try { return !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches); } catch (_) { return false; } }
+function homeFocusBox(input) { if (!input || typeof input.focus !== "function") return; try { input.focus({ preventScroll: true }); } catch (_) { input.focus(); } }
 // The words the progress line uses for the blocks that are still being read (the page names nothing else: it does not know more than which block waits).
 const HOME_LOADING_TEXT = "載入中…";
 const HOME_BLOCK_WORDS = { waiting: "等你決定的事", team: "你的員工", today: "今天的定時工作", first: "你的 AI 工具", advanced: "進階的區塊" };
@@ -2323,7 +2351,7 @@ function homeLater(ms, fn) {
 function homeLoadingLine(key, words) { return el("p", { class: "small muted home-loading", "data-home-loading": key }, words || HOME_LOADING_TEXT); }
 // The frame of a block whose data is not in yet: its title (so the page does not jump) and one line, never a result.
 function homeBlockLoading(key, title) {
-  return el("section", { class: "section home-block", "data-home": key }, sectionHead(title, null), homeLoadingLine(key));
+  return el("section", { class: "section home-block", "data-home": key }, title ? sectionHead(title, null) : null, homeLoadingLine(key));
 }
 
 // The page draws its frame as soon as the config is in (it decides whether the person is sent to the start-up page), then asks for everything at
@@ -2346,8 +2374,10 @@ async function viewHome() {
   let slow = false;                  // 3 seconds have passed
   let setup = { redirect: false, notice: false };
   let advancedPart = null;
+  let firstRun = null;               // the first run of a person with no employee (the home page draws it in place of the old three steps)
   let staticError = null;            // the index of skills could not be read (a failed read says so; it does not blank the page)
   let bodyKind = "";
+  let focusDone = false;             // the cursor is put in the box once, when it is first drawn
   let finish;
   const finished = new Promise((r) => { finish = r; });
 
@@ -2356,14 +2386,24 @@ async function viewHome() {
   const noteHost = el("div", { "data-home": "note-host" });
   const bodyHost = el("div", { "data-home": "body" });
   const teamHost = el("div"), todayHost = el("div"), askHost = el("div"), firstHost = el("div"), advancedHost = el("div");
+  let waitingCount = null;           // how many rows wait (null: not known yet); with the kind of the body it decides where the greeting stands
+  state.layout = (m) => { waitingCount = m.rows.length; applyLayout(); };
   const waiting = homeWaiting(state);
   const main = claim(token);
-  const head = [el("h1", null, WORDS.home.use), el("p", { class: "lede" }, "這裡看有什麼等你決定、你的員工，和今天要做的事。")];
-  const drawFrame = () => setKids(main, ...head, noticesHost, waiting.node, bodyHost, noteHost, advancedHost);
+  // The page is a greeting and one box (ADR 0015): the title is only for a screen reader, the column is 720px wide, and the advanced part (a wide grid) is outside it.
+  const title = el("h1", { class: "sr-only", "data-home": "title" }, WORDS.home.use);
+  const column = el("div", { class: "home-page", "data-home": "page", "data-home-layout": "center" }, title, noticesHost, waiting.node, bodyHost, noteHost);
+  const drawFrame = () => setKids(main, column, advancedHost);
+  // the greeting stands about a fifth of the way down while nothing waits and a CEO can be talked to; anything else starts at the top
+  function applyLayout() {
+    const centred = (bodyKind === "team" || bodyKind === "loading" || bodyKind === "") && !waitingCount;
+    column.setAttribute("data-home-layout", centred ? "center" : "top");
+  }
   // A person who has not finished the start-up may be sent there: until the server has settled that, only the title and the line saying what is being waited for are
   // drawn (the blocks of the home page are not shown to someone who is about to be sent away).
   const gating = setupGateWanted(configRes);
-  if (gating) setKids(main, head[0], homeLoadingLine("setup", "正在確認開始設定…")); else drawFrame();
+  // (the title of the waiting state is its own element: a node has one parent, and the column that is drawn after the server has settled it keeps the real title)
+  if (gating) setKids(main, el("h1", { class: "sr-only" }, WORDS.home.use), homeLoadingLine("setup", "正在確認開始設定…")); else drawFrame();
 
   // what each block needs before it can say anything; a block that waited 60 seconds is read with what there is
   const NEED = {
@@ -2396,26 +2436,38 @@ async function viewHome() {
     if (kind !== bodyKind) {
       bodyKind = kind;
       for (const k of ["team", "today", "ask", "first"]) delete painted[k];
-      setKids(bodyHost, kind === "first" ? [firstHost] : kind === "team" ? [teamHost, todayHost, askHost] : [teamHost, todayHost]);
+      setKids(bodyHost, kind === "first" ? [firstHost] : kind === "team" ? [askHost, teamHost, todayHost] : [teamHost, todayHost]);
+      applyLayout();
       if (kind === "first" && !back.has("tools")) {        // the three steps need the tools: asked only now, when there is nobody yet
         api.get("/api/setup/tools").catch(() => null).then((r) => land("tools", () => { state.tools = r; }));
       }
     }
     if (kind === "first") {
-      const loading = !ready("first");
-      paint("first", String(loading) + String(back.has("tools")) + String(back.has("chats")), () => setKids(firstHost, homeFirstSteps(state.tools, state.chats, loading)));
+      // v0.25 (P52-1, ADR 0017): a person with no employee does the first run here, on one page. The block keeps its own state (the pick, the typed name, an open
+      // confirmation) and draws itself again only when what it shows changed, so the 5-second refresh and a late answer do not clear it.
+      if (!firstRun) firstRun = homeFirstRun({ alive: () => token === seq && !authLostShown, tools: () => state.tools, setTools: (r) => { state.tools = r; },
+        chats: () => state.chats, setChats: (r) => { state.chats = r; },
+        setupDone: () => !!state.conf && state.conf.setup_done === true, markSetupDone: () => { if (state.conf) state.conf.setup_done = true; } });
+      paint("first", "host", () => setKids(firstHost, firstRun.node));
+      firstRun.update(!ready("first"));
       return;
     }
     if (kind === "loading") {
-      paint("team", "loading", () => setKids(teamHost, homeBlockLoading("team", WORDS.employeeList.use)));
+      paint("team", "loading", () => setKids(teamHost, homeBlockLoading("team", null)));
     } else if (kind === "unread") {
-      paint("team", "unread", () => setKids(teamHost, el("section", { class: "section", "data-home": "team" }, sectionHead(WORDS.employeeList.use, null),
+      paint("team", "unread", () => setKids(teamHost, el("section", { class: "section", "data-home": "team" },
         notice("warn", "讀不到員工的資料，所以先不顯示。重新整理看看；還是不行，請到「設定」看一下 VBear 的狀態。"))));
     } else {
       paint("team", "team" + back.has("chats"), () => setKids(teamHost, homeTeam(state)));
     }
-    paint("today", ready("today") ? "in" : "loading", () => setKids(todayHost, ready("today") ? homeToday(state) : homeBlockLoading("today", "今天")));
-    if (kind === "team") paint("ask", ready("ask") ? "in" : "loading", () => setKids(askHost, ready("ask") ? homeAsk(state) : homeBlockLoading("ask", "想做什麼？跟 CEO 說")));
+    paint("today", ready("today") ? "in" : "loading", () => setKids(todayHost, ready("today") ? homeToday(state) : homeBlockLoading("today", null)));
+    if (kind === "team") {
+      paint("ask", ready("ask") ? "in" : "loading", () => setKids(askHost, ready("ask") ? homeAsk(state) : homeAskLoading()));
+      if (ready("ask") && !focusDone && state.askInput) {
+        focusDone = true;
+        if (!homeCoarsePointer() && homeNothingFocused()) homeFocusBox(state.askInput);
+      }
+    }
   };
   const drawAdvanced = () => {
     if (!advanced) return;
@@ -2458,7 +2510,9 @@ async function viewHome() {
   homeLater(HOME_SLOW_MS, () => { if (token === seq) { slow = true; update(); } });
   setup = gating ? await setupGate(configRes) : setupGateQuiet(configRes);
   if (token !== seq) return;
-  if (setup.redirect) { location.hash = welcomeWanted(configRes) ? "#/welcome" : "#/setup"; return; }
+  // v0.25 (P52-5, ADR 0017): the home page no longer sends anyone to the start-up page; a person who has not finished it stays here and does the first run on this page
+  // (the block of a person with no employee). The one place still left is the app window's first-time page, once (it comes back to this page).
+  if (setup.redirect && welcomeWanted(configRes) && !welcomeSaveFailed) { location.hash = "#/welcome"; return; }
   if (gating) drawFrame();
   update();
   homeLater(HOME_GIVE_UP_MS, () => {
@@ -2500,11 +2554,12 @@ async function viewHome() {
     ticking = true;
     try {
       await state.refreshWaiting();
+      if (firstRun && bodyKind === "first") { firstRun.update(); await firstRun.tick(); }       // reads the tools quietly; the chats are the ones the line above read
       if (advancedPart) await advancedPart.refresh();
     } finally { ticking = false; }
   };
-  activeViewCleanup = () => { homeTick = null; };
-  // no auto-focus on the boxes: it would scroll the page past what waits for the person
+  homeFocusAsk = () => { if (state.askInput) homeFocusBox(state.askInput); };      // 「新對話」 pressed on the home page puts the cursor back in the box
+  activeViewCleanup = () => { homeTick = null; homeFocusAsk = null; };
   await finished;
 }
 
@@ -2615,17 +2670,6 @@ function homeCeoOf(profiles, conf) {
 function homeCardOf(chatsRes, profileId) {
   const cards = chatsRes && typeof chatsRes === "object" && Array.isArray(chatsRes.cards) ? chatsRes.cards : null;
   return cards ? cards.find((c) => c && c.id === profileId) || null : null;
-}
-function homeWhen(sec, now) {
-  const t = Number(sec);
-  if (!Number.isFinite(t) || t <= 0) return "";
-  const d = new Date(t * 1000);
-  const two = (n) => String(n).padStart(2, "0");
-  const dayStart = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const gap = Math.round((dayStart(now) - dayStart(d)) / 86400000);
-  if (gap === 0) return `${two(d.getHours())}:${two(d.getMinutes())}`;
-  if (gap === 1) return "昨天";
-  return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
 // Opens the chat with an employee, and with `opts.text` sends it, the way the chat page's 送出 does. One call = at most one POST /api/chats (when
@@ -2762,8 +2806,16 @@ function homeRowNode(row, act) {
 }
 // The block: it starts as a frame that says 載入中 and is drawn by `paint(model)` (the model of waitingFold) once its data is in. `paint` returns
 // whether something changed. `state.refreshWaiting()` (set by the page) reads again, with the same GETs as the page.
+// v0.23 (ADR 0015): with N >= 1 things waiting the block is one pill, 有 N 件事等你決定, that opens the old list where it is; with none it is hidden and says
+// nothing; a note about what could not be read stays outside the closed pill, so it is never hidden under it.
 function homeWaiting(state) {
-  const list = el("div", { class: "home-rows", "data-home": "waiting-list" }, homeLoadingLine("waiting"));
+  const loading = homeLoadingLine("waiting");
+  const notesBox = el("div", { class: "home-notes", "data-home": "waiting-notes" });
+  const pillBox = el("div", { class: "home-pill-box" });
+  const rowsBox = el("div", { class: "home-rows", id: "home-waiting-rows", "data-home": "waiting-rows" });
+  showHidden(rowsBox, true);
+  const list = el("div", { class: "home-waiting-body", "data-home": "waiting-list" }, loading);
+  const section = el("section", { class: "section home-block home-waiting", "data-home": "waiting" }, list);
   const note = (m) => notice("warn", m);
   const requests = {
     "wait-start": (id) => api.post(`/api/routines/waiting/${encodeURIComponent(id)}`, { action: "start" }),
@@ -2777,17 +2829,33 @@ function homeWaiting(state) {
     await state.refreshWaiting(true);
     refreshWaitingBar();
   };
+  let open = false;                  // the list is open: it stays so while the rows change under it
+  let pill = null;
+  const toggle = () => {
+    open = !open;
+    showHidden(rowsBox, !open);
+    if (pill) pill.setAttribute("aria-expanded", String(open));
+  };
   const paint = (m) => {
     const key = JSON.stringify([m.rows, m.notes, m.complete]);
     if (key === state.shown) return false;
     state.shown = key;
-    setKids(list,
-      m.notes.map(note),
-      m.rows.length ? el("div", { class: "home-row-list" }, m.rows.map((r) => homeRowNode(r, act)))
-        : el("p", { class: "small muted", "data-home": "waiting-none" }, m.complete ? "現在沒有要你決定的事。" : "目前讀得到的資料裡，沒有要你決定的事。"));
+    const n = m.rows.length;
+    if (!n) open = false;
+    pill = n ? el("button", { type: "button", class: "home-pill", "data-home": "waiting-pill", "aria-expanded": String(open), "aria-controls": "home-waiting-rows", on: { click: toggle } },
+      el("span", { class: "home-dot", "aria-hidden": "true" }), `有 ${n} 件事等你決定`) : null;
+    showHidden(rowsBox, !open);
+    setKids(notesBox, m.notes.map(note));
+    setKids(pillBox, pill);
+    setKids(rowsBox, n ? el("div", { class: "home-row-list" }, m.rows.map((r) => homeRowNode(r, act))) : null);
+    // nothing waits and everything was read: the block takes no room and says nothing; a partial read says so (it does not claim that nothing waits)
+    const quiet = !n && !m.notes.length && m.complete;
+    setKids(list, notesBox, pillBox, rowsBox, !n && !m.notes.length && !m.complete ? el("p", { class: "small muted", "data-home": "waiting-none" }, "目前讀得到的資料裡，沒有要你決定的事。") : null);
+    showHidden(section, quiet);
+    if (state.layout) state.layout(m);
     return true;
   };
-  return { node: el("section", { class: "section home-block", "data-home": "waiting" }, sectionHead(WORDS.waiting.use, null), list), paint };
+  return { node: section, paint };
 }
 
 // ---- 我的員工 ----
@@ -2798,24 +2866,24 @@ function homeAvatar(p, chatsRes) {
   const pos = cardPosition(p);
   const reason = off ? plainWords(card.reason || "現在不能聊天").text : "";
   const btn = el("button", { type: "button", class: `home-avatar${off ? " home-avatar-off" : ""}`, "data-employee": p.id, "data-employee-action": "chat",
-    "aria-label": `和 ${p.name || p.id} 聊天${off ? "（現在不能聊天）" : ""}`, on: { click: () => { openChatWith(p.id); } } },
+    "aria-label": `和 ${p.name || p.id} 聊天${off ? "（現在不能聊天）" : ""}`, title: pos ? CARD_POSITION_LABEL[pos] : undefined, on: { click: () => { openChatWith(p.id); } } },
     el("span", { class: "home-avatar-art", "aria-hidden": "true" }, cardAvatar(p, 3)),
-    el("span", { class: "home-avatar-name" }, p.name || p.id),
-    el("span", { class: "home-avatar-pos small muted" }, pos ? CARD_POSITION_LABEL[pos] : ""));
+    el("span", { class: "home-avatar-name" }, p.name || p.id));
   return el("div", { class: "home-person" }, btn, reason ? el("span", { class: "small muted home-avatar-why", "data-employee-note": p.id }, reason) : null);
 }
+// The last of the row: a plus (its name is for the screen reader and the tooltip).
 function homeNewEmployee(state) {
-  return el("button", { type: "button", class: "btn small", "data-employee-action": "new", on: { click: () => {
+  return el("button", { type: "button", class: "home-new", "data-employee-action": "new", "aria-label": WORDS.newEmployee.use, title: WORDS.newEmployee.use, on: { click: () => {
     if (!state.catalog) { toast("現在還不能新增員工，請稍後再試。"); return; }
     openCardWizard({ catalog: state.catalog, profiles: state.profiles || [], existing: null, onSaved: () => route() });
-  } } }, WORDS.newEmployee.use);
+  } } }, el("span", { "aria-hidden": "true" }, "＋"));
 }
+// A row of small avatars and the plus; no heading (the avatar is a button that says whom it talks to).
 function homeTeam(state) {
   const ceo = homeCeoOf(state.profiles, state.conf);
   const people = [...(ceo ? [ceo] : []), ...state.profiles.filter((p) => !ceo || p.id !== ceo.id)];
-  return el("section", { class: "section home-block", "data-home": "team" },
-    sectionHead(WORDS.employeeList.use, "點頭像就能聊", homeNewEmployee(state)),
-    el("div", { class: "home-people" }, people.map((p) => homeAvatar(p, state.chats))));
+  return el("section", { class: "section home-block home-team", "data-home": "team" },
+    el("div", { class: "home-people" }, people.map((p) => homeAvatar(p, state.chats)), homeNewEmployee(state)));
 }
 
 // ---- 今天 ----
@@ -2840,53 +2908,80 @@ function homeTodayModel(res, now) {
   }
   return { readable: true, total: res.routines.length, left, next: next ? { name: next.name, time: next.time } : null };
 }
+// One grey line under the rest: what is still to come today, with the way to the routines. With no routine, or none left today, there is no line and the block
+// takes no room; a read that failed is said (it is never shown as zero).
 function homeToday(state) {
-  const now = state.now();
-  const m = homeTodayModel(state.routines, now);
-  let line;
+  const m = homeTodayModel(state.routines, state.now());
+  let line = null;
   if (!m.readable) line = "讀不到定時工作，所以看不出今天還有什麼要做。";
-  else if (!m.total) line = "還沒有定時工作。";
-  else if (!m.left) line = "今天沒有還沒到的定時工作。";
-  else line = `今天還有 ${m.left} 件，下一件 ${m.next.time}「${m.next.name}」`;
-  const chats = state.chats && Array.isArray(state.chats.chats) ? state.chats : null;
-  const routineIds = homeRoutineChatIds(state.routines);
-  const names = new Map((state.profiles || []).map((p) => [p.id, p.name || p.id]));
-  const seen = new Set();
-  const recent = [];
-  for (const c of chats ? chats.chats.slice().sort((a, b) => (Number(b.last_at) || 0) - (Number(a.last_at) || 0)) : []) {
-    if (!c || c.problem || routineIds.has(c.id) || typeof c.routine_title === "string" || !(c.turns > 0) || seen.has(c.profile_id) || !names.has(c.profile_id)) continue;
-    seen.add(c.profile_id);
-    recent.push(`${names.get(c.profile_id)}（${homeWhen(c.last_at, now)}）`);
-    if (recent.length >= 3) break;
-  }
-  return el("section", { class: "section home-block", "data-home": "today" },
-    sectionHead("今天", null),
-    el("p", { "data-home-today": "routines" }, line, " ", el("a", { class: "btn small", href: "#/routines" }, "看定時工作")),
-    chats ? (recent.length ? el("p", { class: "small", "data-home-today": "chats" }, "最近聊過：", recent.join("、")) : el("p", { class: "small muted", "data-home-today": "chats" }, "最近還沒聊過天。"))
-      : el("p", { class: "small muted", "data-home-today": "chats" }, "讀不到最近的對話。"));
+  else if (m.left) line = `今天還有 ${m.left} 件，下一件 ${m.next.time}「${m.next.name}」`;
+  const section = el("section", { class: "section home-block home-today", "data-home": "today" },
+    line ? el("p", { class: "small muted", "data-home-today": "routines" }, line, " ", el("a", { href: "#/routines" }, "看定時工作")) : null);
+  if (!line) showHidden(section, true);
+  return section;
 }
 
-// ---- 想做什麼？跟 CEO 說 ----
+// ---- 今天想做什麼？ (the greeting and the box) ----
+const HOME_GREETING = "今天想做什麼？";
+const HOME_EXAMPLES = ["幫我整理今天的待辦", "幫我寫一篇貼文", "每天早上給我一份摘要"];     // shown only before the first chat
+const HOME_ASK_MAX_PX = 208;                                                               // the box grows with its words up to about eight lines
+function homeGreeting() { return el("p", { class: "home-greeting", "data-home": "greeting" }, HOME_GREETING); }
+// The frame of the box while its data is not in: the greeting (so the page does not jump) and one line, never a result.
+function homeAskLoading() { return el("section", { class: "section home-block home-ask", "data-home": "ask" }, homeGreeting(), homeLoadingLine("ask")); }
+function homeAskGrow(input) {
+  const h = Number(input.scrollHeight);
+  if (!Number.isFinite(h) || h <= 0) { input.style.height = ""; return; }
+  input.style.height = Math.min(h, HOME_ASK_MAX_PX) + "px";
+}
+// 17a: an example sentence only puts its words in the box (in place of what was there) and puts the cursor in it. It sends nothing and asks for nothing: the person
+// reads it, may change it, and presses 送出 (or Cmd/Ctrl + Enter) themselves.
+function homeExampleFill(input, sentence) {
+  input.value = sentence;
+  homeAskGrow(input);
+  input.focus();
+}
+// 17c: only Enter together with Cmd or Ctrl sends from the box (a plain Enter makes a new line, so a half-typed sentence is never sent, and nothing is spent by mistake).
+function homeAskKeydown(e, send) {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.isComposing) { e.preventDefault(); send(); }
+}
 function homeAsk(state) {
   const ceo = homeCeoOf(state.profiles, state.conf);
-  const head = sectionHead("想做什麼？跟 CEO 說", null);
+  const block = (...kids) => el("section", { class: "section home-block home-ask", "data-home": "ask" }, homeGreeting(), ...kids);
   if (!ceo) {
-    return el("section", { class: "section home-block", "data-home": "ask" }, head,
+    return block(
       el("p", null, "先建立一位 CEO，就能在這裡直接跟他說。"),
       el("a", { class: "btn primary", href: "#/ceo", "data-home": "ask-ceo" }, "建立 CEO"));
   }
   const card = homeCardOf(state.chats, ceo.id);
   const prep = card ? chatPrepState(card, state.chats) : null;
   if (prep && prep.kind !== "start") {         // cannot chat yet (card off, tool not checked for chat, policy...): one reason and one way to the page that prepares it
-    return el("section", { class: "section home-block", "data-home": "ask" }, head,
+    return block(
       el("p", null, `${ceo.name || "CEO"} 現在還不能聊天：${plainWords(prep.reason || "").text || "原因不明"}`),
       el("a", { class: "btn primary", href: `#/chat?profile=${encodeURIComponent(ceo.id)}`, "data-home": "ask-prepare" }, "先把聊天準備好"));
   }
   const talked = state.chats && Array.isArray(state.chats.chats) ? state.chats.chats.some((c) => c && c.turns > 0 && !c.problem) : false;
-  const input = el("textarea", { rows: "3", maxlength: "20000", "data-home": "ask-input", "aria-label": "要對 CEO 說的話", placeholder: "例如：幫我把下個月的家庭開銷整理成表（Cmd/Ctrl + Enter 送出）",
-    on: { keydown: (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } } } });
+  // P51-2: whom the box is for. It starts as the CEO on every visit (nothing is remembered); the small button at the left of the box changes it, and a pick changes only this.
+  let target = { id: ceo.id, name: ceo.name || "CEO" };
+  const isCeo = () => target.id === ceo.id;
+  const input = el("textarea", { rows: "2", maxlength: "20000", "data-home": "ask-input", "aria-label": "要對 CEO 說的話", placeholder: "跟 CEO 說一件你想做的事",
+    on: { keydown: (e) => homeAskKeydown(e, send), input: () => homeAskGrow(input) } });
+  state.askInput = input;
   const result = el("div", { "data-home": "ask-result", "aria-live": "polite" });
-  const button = el("button", { type: "button", class: "btn primary", "data-home": "ask-send", on: { click: () => send() } }, "送出");
+  const button = el("button", { type: "button", class: "btn primary home-send", "data-home": "ask-send", on: { click: () => send() } }, "送出");
+  const hint = el("p", { class: "small muted home-hint" });
+  const drawHint = () => setKids(hint, talked || !isCeo() ? null : "跟 CEO 說第一句話吧。", talked || !isCeo() ? null : " ", isCeo() ? HOME_CEO_ASK : `${target.name} 要動手前都會先問你。`, " ", "按 Cmd/Ctrl + Enter 也能送出。");
+  const picker = whoPicker({ cards: state.chats && state.chats.cards, data: state.chats, current: ceo.id, currentName: target.name, dir: "down",
+    onPick: (c) => {                          // 18b: a pick only changes whom the box is for; no request, nothing sent
+      target = { id: c.id, name: typeof c.name === "string" && c.name ? c.name : c.id };
+      picker.setCurrent(c.id);
+      input.setAttribute("aria-label", isCeo() ? "要對 CEO 說的話" : `要對 ${target.name} 說的話`);
+      input.setAttribute("placeholder", isCeo() ? "跟 CEO 說一件你想做的事" : `跟 ${target.name} 說一件你想做的事`);
+      drawHint();
+      setKids(result);
+      input.focus();
+    },
+    onLater: (c) => chatWhoLater(c.id, input.value) });
+  drawHint();
   let busy = false;
   async function send() {
     const text = input.value;
@@ -2894,22 +2989,24 @@ function homeAsk(state) {
     if (state.lamp === "red") { setKids(result, limitReachedNotice(null)); return; }       // the limit would stop it: nothing is sent
     busy = true; button.disabled = true; setKids(result);
     let r;
-    try { r = await openChatWith(ceo.id, { text }); }
+    const to = target;                                    // the one it was pressed for, whatever is picked while it waits
+    try { r = await openChatWith(to.id, { text }); }
     catch (e) { r = { ok: false, error: e }; }
     busy = false; button.disabled = false;
     if (r.error) {
       const w = plainWords(r.error);
       const limit = w.limit || HOME_LIMIT_KINDS.includes(r.error.code);
-      if (!limit && CHAT_NOT_READY_CODES.includes(r.error.code)) setKids(result, chatNotReadyNotice(r.error, ceo.id, r.prep, { scope: "home", go: "ask-prepare", keep: () => input.value }));
+      if (!limit && CHAT_NOT_READY_CODES.includes(r.error.code)) setKids(result, chatNotReadyNotice(r.error, to.id, r.prep, { scope: "home", go: "ask-prepare", keep: () => input.value }));
       else setKids(result, limit ? limitReachedNotice(r.error.message) : notice("bad", r.error.message || "沒有送出"));
-    } else if (r.kept) toast(HOME_BUSY_TEXT);
+    } else if (r.kept) toast(to.id === ceo.id ? HOME_BUSY_TEXT : HOME_BUSY_TEXT.split("CEO").join(to.name));
     else if (r.reason) setKids(result, notice("warn", plainWords(r.reason).text));
-    else if (r.ok) input.value = "";
+    else if (r.ok) { input.value = ""; homeAskGrow(input); }
   }
-  return el("section", { class: "section home-block", "data-home": "ask" }, head,
-    talked ? null : el("p", { class: "small" }, "跟 CEO 說第一句話吧。"),
-    el("div", { class: "home-ask-row" }, input, button),
-    el("p", { class: "small muted" }, HOME_CEO_ASK),
+  return block(
+    el("div", { class: "home-box" }, input, el("div", { class: "home-box-bar" }, picker ? picker.node : null, button)),
+    hint,
+    talked ? null : el("div", { class: "home-examples", "data-home": "ask-examples" },
+      HOME_EXAMPLES.map((sentence) => el("button", { type: "button", class: "home-example", "data-home": "ask-example", on: { click: () => homeExampleFill(input, sentence) } }, sentence))),
     result);
 }
 
@@ -2924,33 +3021,162 @@ function chatSupportGlance(data) {
   return [["claude", "Claude Code", sub(sup), "verified"], ["codex", "Codex", sub(sup.codex), "ready"], ["agy", "AGY", sub(sup.agy), "ready"]]
     .map(([id, name, state, good]) => ({ id, name, state, ready: state === good }));
 }
-// The line of step 1: whether a chat can start with the tools there are, in plain words. -> { done, line }
-function homeToolStep(toolReady, rows, glance) {
-  const unread = rows ? "還沒有就緒的 AI 工具。" : "讀不到 AI 工具的狀態。";
-  if (!glance) return { done: false, line: toolReady ? "AI 工具已就緒，但讀不到聊天的狀態。" : unread };
-  if (glance.some((g) => g.ready)) return { done: true, line: "已經有可以聊天的 AI 工具就緒了。" };
-  const held = glance.find((g) => g.state === "policy");
-  if (held) return { done: false, line: `這台電腦的 ${held.name} 有管理員設定，VBear 不能用它聊天。` };
-  if (glance.some((g) => g.state === "unverified")) return { done: false, line: "AI 工具已就緒，第一次聊天前要先做一次安全檢查（建立 CEO 後會帶你做）。" };
-  return { done: false, line: toolReady ? "AI 工具已就緒，但聊天現在還不能用，到「看 AI 工具」看原因。" : unread };
+// ---- the first run on the home page (v0.25, P52-1, ADR 0017) ----
+// A person with no employee picks one AI here, prepares it with the start-up page's own pieces (setupPickerNode, setupKit) and makes the CEO with the CEO page's own request
+// (ceoCreate): one page instead of three. Every step is the person's own press: nothing is chosen, checked, logged in or made by the page. The safety check is the
+// start-up page's one button (its first press only opens the confirmation with the whole cost; 「確認，開始」 sends). Reads on its own: the tools (at the 5-second refresh, quietly),
+// the daily limit and the first-CEO plan (once each); it never reads the chats itself (the home page already does).
+const FIRST_TITLE = "先選一家你有在用的 AI";
+const FIRST_TITLE_CHOSEN = "準備好就能開始";          // P55: once one is chosen the big line is about what comes next; the small line is gone
+const FIRST_SUB = "選了就能開始聊，之後隨時可以再加。";
+const FIRST_LOOKING = "正在看你的 AI 工具…";
+const FIRST_UNREAD = "讀不到你的 AI 工具的狀態。";
+const FIRST_SETUP_LINK = "到開始設定看全部 AI 工具";
+const FIRST_PLAN_UNREAD = "讀不到建立 CEO 需要的資料，請稍後再試。";
+function homeFirstRun(env) {
+  let picked = setupPickRead();
+  let loading = true;
+  let plan = null;                 // the answer of GET /api/first-ceo for the tool in `planFor` (null: not read, or it could not be)
+  let planFor = "";                // the tool the plan was asked for ("" : not asked); the answer is dropped when the person chose another since
+  let planDone = false;
+  let dailyState = "";             // "" | "asking" | "done"
+  let dailyBox = null;
+  let creating = false;
+  let nameTouched = false;
+  let lastKey = "";
+  let readyFor = "";               // P55: the tool whose checks were last drawn as "can chat" (the fold closes once when a tool turns from cannot-chat to can-chat)
+  const host = el("section", { class: "section home-block home-first-run", "data-home": "first-run" });
+  // these are made once and put back at every drawing, so what is typed, an open fold and a disabled button survive it
+  const name = el("input", { type: "text", maxlength: String(CEO_NAME_MAX), "aria-label": "CEO 的名字", autocomplete: "off", "data-home": "first-ceo-name" });
+  name.value = "CEO";
+  name.addEventListener("input", () => { nameTouched = true; });
+  const errorBox = el("div", { "data-home": "first-ceo-error", role: "alert" });
+  const go = el("button", { type: "button", class: "btn primary", "data-home": "first-ceo-create" }, "建立 CEO，開始聊");
+  const fail = (msg) => setKids(errorBox, msg ? notice("bad", msg) : null);
+  const kit = setupKit({ alive: env.alive, tools: env.tools, setTools: env.setTools, chats: env.chats, setChats: env.setChats, picked: () => picked, draw: () => draw(), quietChats: false });
+  go.addEventListener("click", async () => {
+    if (creating || !ceoStepWanted(plan) || plan.tool !== picked) return;
+    const nm = name.value.trim();
+    if (!nm) { fail("請幫 CEO 取個名字，不能空白。"); return; }
+    creating = true; go.disabled = true; fail("");
+    try {
+      // P52-5: the start-up is finished by this press, once the card is made: the same request as the start-up page's leave button; a failed write does not keep the person out
+      await ceoCreate(plan, nm, typeof plan.instructions === "string" ? plan.instructions : "",
+        env.setupDone() ? null : async () => { await api.post("/api/config", { setup_done: true }); env.markSetupDone(); });
+    } catch (e) {
+      fail("沒有建立成功：" + e.message);
+      creating = false; go.disabled = false;
+    }
+  });
+  const askPlan = () => {
+    const forTool = picked;
+    planFor = forTool; plan = null; planDone = false;
+    ceoPlan(forTool).then((p) => {
+      if (!env.alive() || planFor !== forTool) return;
+      plan = p; planDone = true;
+      if (p && typeof p.name === "string" && !nameTouched) name.value = p.name;
+      draw();
+    });
+  };
+  const askDaily = () => {
+    if (dailyState) return;
+    dailyState = "asking";
+    api.get("/api/setup/daily-limit").then((r) => r, () => null).then((r) => {
+      if (!env.alive()) return;
+      dailyBox = setupDailyBox(r && typeof r.daily_usd === "number" ? r.daily_usd : null);
+      dailyState = "done";
+      draw();
+    });
+  };
+  const choose = (id) => { setupPickWrite(id); picked = id; draw(); };
+  // made once (P55): it is the button the person may be on when the tool turns to can-chat and the fold closes, so a drawing must not replace it
+  const recheck = el("button", { class: "btn small", type: "button", "data-home": "first-recheck" }, "重新檢查");
+  recheck.addEventListener("click", () => kit.run(recheck, () => kit.refresh(false, true)));
+  const recheckBtn = () => recheck;
+  // the CEO part of a chosen tool that can chat now: the name, the mode line and the button (nothing is made before the press)
+  const ceoPart = (vendor) => {
+    if (!planDone) return el("p", { class: "small muted", "data-home": "first-ceo-loading" }, "正在準備建立 CEO 要用的資料…");
+    if (!ceoStepWanted(plan) || plan.tool !== vendor.id) {
+      const again = el("button", { class: "btn small", type: "button", "data-home": "first-ceo-retry" }, "再讀一次");
+      again.addEventListener("click", () => { planFor = ""; draw(); });
+      return el("div", { "data-home": "first-ceo" }, notice("info", plan && typeof plan.reason === "string" && plan.reason ? plan.reason : FIRST_PLAN_UNREAD), el("div", { class: "row" }, again));
+    }
+    return el("div", { class: "home-first-ceo", "data-home": "first-ceo" },
+      el("label", { class: "ceo-field" }, el("span", null, "CEO 的名字"), name),
+      el("p", { class: "small", "data-home": "first-ceo-mode" }, CEO_MODE),
+      vendor.id === "agy" ? el("p", { class: "small", "data-home": "first-ceo-agy" }, CEO_AGY_NOTE) : null,
+      el("p", { class: "small muted", "data-home": "first-ceo-cost" }, CEO_COST),
+      errorBox,
+      el("div", { class: "row" }, go));
+  };
+  // P55: made once, so what the person opened stays open through every drawing; the tool's card and the recheck button are inside it only while the tool can chat
+  const checks = el("details", { class: "small first-checks", "data-home": "first-checks" });
+  const frame = (chosen) => chosen
+    ? [el("h2", { class: "home-greeting home-first-title" }, FIRST_TITLE_CHOSEN)]
+    : [el("h2", { class: "home-greeting home-first-title" }, FIRST_TITLE), el("p", { class: "small muted home-first-sub" }, FIRST_SUB)];
+  const foot = () => el("p", { class: "small muted home-first-foot" }, el("a", { href: "#/setup", "data-home": "first-setup-link" }, FIRST_SETUP_LINK));
+  function draw() {
+    if (!env.alive()) return;
+    const keep = document.activeElement;
+    const wasIn = !!(keep && keep !== document.body && host.contains(keep));
+    const tools = env.tools(), chats = env.chats();
+    const rows = tools && typeof tools === "object" && Array.isArray(tools.tools) ? tools.tools : null;
+    let body, chosen = false, collapsed = false, nowReady = "";
+    if (loading) {
+      body = [homeLoadingLine("first-run", FIRST_LOOKING), setupPickerNode(() => null, () => {})];
+    } else if (!rows) {
+      body = [notice("warn", FIRST_UNREAD), el("div", { class: "row" }, (() => {
+        const b = el("button", { class: "btn small", type: "button", "data-home": "first-retry" }, "再讀一次");
+        b.addEventListener("click", () => kit.run(b, () => kit.refresh(false, true)));
+        return b;
+      })())];
+    } else if (!setupVendorOf(picked)) {
+      body = [el("div", { "data-home": "first-pick" }, setupPickerNode((v) => setupVendorStatus(v, tools, chats), choose))];
+    } else {
+      const vendor = setupVendorOf(picked);
+      const row = setupRowOf(tools, vendor.id);
+      const st = setupVendorStatus(vendor, tools, chats);
+      if (planFor !== picked && st.kind === "ready") askPlan();
+      chosen = true;
+      const pickedRow = el("div", { class: "setup-picked", "data-setup": "picked" },
+        el("p", { class: "setup-text" }, `你選了：${vendor.maker}（${vendor.tool}）`),
+        el("button", { class: "btn small", type: "button", "data-setup": "change-pick", on: { click: () => { picked = ""; draw(); } } }, "換一家"));
+      const toolList = el("div", { "data-home": "first-prepare" },
+        row ? el("ul", { class: "setup-list" }, kit.toolCard(row, true)) : notice("warn", `讀不到 ${vendor.maker} 這個 AI 工具的狀態。`),
+        el("div", { class: "row" }, recheckBtn()));
+      if (st.kind === "ready") {
+        // P55: it can chat, so the action is next to the choice and the list of checks is a fold, closed when the tool turns from cannot-chat to can-chat and left as the person has it after that
+        if (readyFor !== picked) { checks.open = false; collapsed = true; }
+        nowReady = picked;
+        setKids(checks, el("summary", null, `${vendor.tool} 可以用了・看檢查結果`), toolList);
+        body = [pickedRow, ceoPart(vendor), checks];
+      } else {
+        body = [pickedRow, el("div", { "data-home": "first-reason" }, el("p", { class: "small" }, setupMissingLine(vendor, st)), st.raw ? plainTechFold(st.raw) : null), toolList];
+      }
+    }
+    if (!loading && rows) askDaily();
+    readyFor = nowReady;
+    setKids(host, frame(chosen), body, !loading && rows ? dailyBox : null, foot());
+    if (wasIn && host.contains(keep)) keep.focus();
+    else if (wasIn && collapsed && checks.children[0] && checks.children[0].focus) checks.children[0].focus();      // the place the person was in is folded: the focus goes to the fold's own line, not to the name box
+  }
+  // `isLoading` (optional): whether the tools and the chats are still being read. Draws only when what the block shows changed.
+  const update = (isLoading) => {
+    if (typeof isLoading === "boolean") loading = isLoading;
+    const tools = env.tools(), chats = env.chats();
+    const key = JSON.stringify([loading, tools ? setupToolKey(tools.tools) : null, chats ? setupChatsKey(chats) : null]);
+    if (key === lastKey) return;
+    lastKey = key;
+    draw();
+  };
+  const tick = async () => {
+    if (loading || document.hidden || kit.isBusy() || creating || !env.tools()) return;
+    await kit.refresh(true);
+  };
+  update(true);
+  return { node: host, update, tick };
 }
-function homeFirstSteps(toolsRes, chatsRes, loading) {
-  const rows = toolsRes && typeof toolsRes === "object" && Array.isArray(toolsRes.tools) ? toolsRes.tools : null;
-  const ready = !!rows && rows.some((t) => t && ["claude", "codex", "agy"].includes(t.id) && t.ready === true);
-  // while the tools and the chat support are still being read, step 1 says so: it draws no conclusion before the answer
-  const toolStep = loading ? { done: false, line: null } : homeToolStep(ready, rows, chatSupportGlance(chatsRes));
-  const step = (n, cls, title, line, action) => el("li", { class: `home-step ${cls}`, "data-home-step": String(n) },
-    el("span", { class: "home-step-mark", "aria-hidden": "true" }, cls.includes("done") ? "✓" : String(n)),
-    el("div", { class: "home-step-body" }, el("strong", null, title),
-      line === null ? el("span", { class: "small muted", "data-home-loading": "first-steps" }, "正在看你的 AI 工具…") : el("span", { class: "small muted" }, line)), action || null);
-  return el("section", { class: "section home-block", "data-home": "first-steps" },
-    el("h2", null, "歡迎！三步就能開始。"),
-    el("ol", { class: "home-steps" },
-      step(1, toolStep.done ? "done" : "", "準備 AI 工具", toolStep.line,
-        el("a", { class: "btn small", href: "#/setup" }, "看 AI 工具")),
-      step(2, "", "建立 CEO", "他會先問你幾個問題，再幫你整理計畫。", el("a", { class: "btn small primary", href: "#/ceo" }, "建立 CEO")),
-      step(3, "off", "說第一句話", "建立 CEO 之後就能說。", null)));
-}
+// ---- end of the first run on the home page ----
 
 // ---- 員工 (#/employees) ----
 async function viewEmployees() {
@@ -3064,7 +3290,7 @@ const WAITING_REUSE_MS = 30000;
 // GET /api/chats makes the server run the AI tools' --version (about 2 seconds, no cache of its own), so it is read at most every 30 seconds by the
 // waiting model (the page's other reads stay at their own pace); a read the person's own press asks for (`force`) and the home page's first read go at once.
 let waitingChatsRead = null;       // { at, body }: the last whole answer
-function waitingChatsNote(body) { if (body && typeof body === "object") waitingChatsRead = { at: Date.now(), body }; }
+function waitingChatsNote(body) { if (body && typeof body === "object") { waitingChatsRead = { at: Date.now(), body }; drawNavRecent(); } }   // P50-2: the side bar's 最近 follows
 function waitingPublish(m) {
   waitingLast = { m, at: Date.now() };
   const count = m.complete ? Math.min(m.rows.length, 999) : 0;
@@ -7885,6 +8111,7 @@ async function viewSettings(params) {   // params: the address's ?key=value (P47
             el("div", null, el("div", { class: "t" }, "外觀"),
               el("select", { on: { change: (e) => setTheme(e.target.value) } },
                 [["auto", "跟隨系統"], ["light", "淺色"], ["dark", "深色"]].map(([v, t]) => el("option", { value: v, selected: store.get("theme", "auto") === v }, t)))))),
+        limits,                                                   // P52-3: 「用量與上限」 above 「通知」
         notifySettings(),
         el("div", { class: "panel pad" },
           el("h2", { style: "margin-bottom:6px" }, "使用紀錄"),
@@ -7906,7 +8133,6 @@ async function viewSettings(params) {   // params: the address's ?key=value (P47
             el("li", null, "VBear 只寫自己的資料夾", advanced ? ["：", el("span", { class: "mono" }, home(c.state_dir))] : "", "。"),
             el("li", null, "員工由 VBear 在背後啟動；指令視窗預設只看不打字，你按「接手」才會送出你打的字。"),
             el("li", null, "通知只在這台 Mac 上顯示，內容只有件數（要在「通知」打開）。"))),
-    limits,
     advanced ? el("section", { "data-settings-advanced": "" },
       translationSettings(conf, saveConf), onboardingSettings(conf, saveConf),
       el("div", { class: "panel pad" },
@@ -13618,8 +13844,8 @@ async function viewRoutines() {
 
 // ---------- router ---------------------------------------------------------
 
-// The menu is four items (首頁、員工、工作、設定); every other page belongs to one of them, and the engineering pages to the advanced part
-// that shows only when the advanced mode (a switch in the settings) is on (ADR 0013). NAV_PARENT says which `data-nav` item a page
+// The side bar (ADR 0013, 0015): 新對話 (the old home item, `data-nav="home"`), 最近, and three items (員工、工作、設定); every other page belongs to one of them,
+// and the engineering pages to the advanced part that shows only when the advanced mode (a switch in the settings) is on. NAV_PARENT says which `data-nav` item a page
 // (the first part of its address) lights. A page that is not in it lights nothing. All the old addresses still open.
 const NAV_PARENT = {
   home: "home",
@@ -13637,8 +13863,8 @@ function navOf(top) { return Object.prototype.hasOwnProperty.call(NAV_PARENT, to
 let navAdvanced = false;
 let navAdvancedKnown = false;
 let navTop = "";
-// The phone: the four items are one row at the top; with the advanced mode on, one more button (進階) opens the advanced list. The
-// button only toggles a class; the CSS does the rest, so a wide window never sees it.
+// The phone (v0.23): the bar is a drawer behind one menu button in a top bar (the advanced items are in it when the advanced mode is on). The button only toggles a
+// class and aria-expanded; the CSS does the rest, so a wide window never sees it.
 function navPageName(top) {
   const want = navOf(top) || top;
   const link = Array.from(document.querySelectorAll("[data-nav]")).find((a) => a.dataset && a.dataset.nav === want);
@@ -13652,11 +13878,19 @@ function setNavMenu(open) {
   const btn = document.getElementById("nav-toggle");
   if (side && side.classList) side.classList.toggle("nav-open", !!open);
   if (btn) btn.setAttribute("aria-expanded", String(!!open));
+  // P54: while the drawer is open the same button says 關閉 (it stays in the bar above the drawer); closed, it says 選單 and the label that names the page comes back
+  const word = document.getElementById("nav-toggle-label");
+  if (word) word.textContent = open ? "關閉" : "選單";
+  if (btn && btn.dataset) {
+    if (open && !btn.dataset.closedLabel) { btn.dataset.closedLabel = btn.getAttribute("aria-label") || "選單"; btn.setAttribute("aria-label", "關閉選單"); }
+    else if (!open && btn.dataset.closedLabel) { btn.setAttribute("aria-label", btn.dataset.closedLabel); btn.dataset.closedLabel = ""; }
+  }
 }
 function syncNavMenu(top) {
-  const label = document.getElementById("nav-toggle-label");
-  const name = ADVANCED_NAV.has(navOf(top)) ? navPageName(top) : "";
-  if (label) label.textContent = name ? `進階：${name}` : "進階";
+  const btn = document.getElementById("nav-toggle");
+  const name = navPageName(top);
+  if (btn && btn.dataset) btn.dataset.closedLabel = "";
+  if (btn) btn.setAttribute("aria-label", name ? `選單（目前在「${name}」）` : "選單");   // the button says 選單; a screen reader also hears where you are
   setNavMenu(false);   // going to a page puts the menu away
 }
 function showHidden(node, hidden) {
@@ -13711,6 +13945,11 @@ function brandMarkGuard() {
   img.addEventListener("error", retry);
   if (img.complete === true && !img.naturalWidth) retry();      // it failed before this script ran (a picture with no width of its own is asked for once more, harmlessly)
 }
+// 「新對話」: on the home page the cursor goes back into the box (a press on the link of the page one is on changes no page); from another page the move to the home
+// page does it (the home page puts the cursor in its box when nothing else has it).
+function navNewChat() {
+  if (navTop === "home" && homeFocusAsk) homeFocusAsk();
+}
 function wireNavMenu() {
   const btn = document.getElementById("nav-toggle");
   if (!btn || !btn.addEventListener) return;
@@ -13718,7 +13957,52 @@ function wireNavMenu() {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && btn.getAttribute("aria-expanded") === "true") { setNavMenu(false); if (btn.focus) btn.focus(); }
   });
+  // a press on a link puts the drawer away, also when the link leads to the page that is already open (no page change happens then)
+  document.querySelectorAll("[data-nav]").forEach((a) => a.addEventListener("click", () => {
+    setNavMenu(false);
+    if (a.dataset && a.dataset.nav === "home") navNewChat();
+  }));
+  const backdrop = document.getElementById("nav-backdrop");
+  if (backdrop && backdrop.addEventListener) backdrop.addEventListener("click", () => setNavMenu(false));
 }
+
+// ---------- the side bar's 最近 (v0.23, P50-2) ----------------------------------------------------------------------------------------
+// The employees the person talked with, newest first (at most 8), one row each: the name, a dot when a card of that employee waits, a link to the chat. It is drawn only
+// from what the page already holds: the last whole answer of GET /api/chats (waitingChatsRead, which the home page's own read and the 30-second waiting model fill).
+// This code asks for nothing and has no timer of its own (guard 17b); it is drawn again when that answer is renewed and at each move to another page. With no
+// answer (not read yet, or it failed) or nobody talked with, the whole part is hidden: it does not say "no chats", because it does not know. A row has the server's
+// facts only (a name, whether a card waits): no title of a chat and none of its words.
+const NAV_RECENT_MAX = 8;
+// -> [{ profileId, name, chatId, waiting }] from the body of GET /api/chats. An employee's row leads to the chat that waits when one does, else to the newest one.
+function navRecentRows(chatsRes) {
+  const body = chatsRes && typeof chatsRes === "object" ? chatsRes : {};
+  const list = Array.isArray(body.chats) ? body.chats : [];
+  const names = new Map((Array.isArray(body.cards) ? body.cards : []).filter((c) => c && typeof c.id === "string" && typeof c.name === "string" && c.name).map((c) => [c.id, c.name]));
+  const byProfile = new Map();
+  for (const c of list.slice().sort((a, b) => (Number(b && b.last_at) || 0) - (Number(a && a.last_at) || 0))) {
+    if (!c || typeof c !== "object" || typeof c.id !== "string" || !c.id || c.problem || typeof c.routine_title === "string" || !names.has(c.profile_id)) continue;
+    if (!(c.turns > 0) && c.waiting !== true) continue;
+    const row = byProfile.get(c.profile_id);
+    if (!row) byProfile.set(c.profile_id, { profileId: c.profile_id, name: names.get(c.profile_id), chatId: c.id, waiting: c.waiting === true });
+    else if (c.waiting === true && !row.waiting) { row.chatId = c.id; row.waiting = true; }
+  }
+  return Array.from(byProfile.values()).slice(0, NAV_RECENT_MAX);
+}
+function drawNavRecent() {
+  const box = document.getElementById("nav-recent");
+  const list = document.getElementById("nav-recent-list");
+  if (!box || !list) return;
+  const rows = waitingChatsRead ? navRecentRows(waitingChatsRead.body) : [];
+  const at = /^#\/chat\/([^/?]+)\/?(?:\?.*)?$/.exec(String(location.hash || ""));
+  let open = "";
+  try { open = at && at[1] !== "group" ? decodeURIComponent(at[1]) : ""; } catch (_) { open = ""; }
+  setKids(list, rows.map((r) => el("li", null,
+    el("a", { class: "recent-link", href: `#/chat/${encodeURIComponent(r.chatId)}`, "data-recent": r.profileId, "aria-current": r.chatId === open ? "page" : undefined, on: { click: () => setNavMenu(false) } },
+      r.waiting ? el("span", { class: "recent-dot", role: "img", "aria-label": "有事等你決定" }) : null,
+      el("span", { class: "recent-name" }, r.name)))));
+  showHidden(box, !rows.length);
+}
+// ---------- end of the side bar's 最近 ---------------------------------------------------------------------------------------------
 
 let liveTimer = null;
 let liveTick = null;
@@ -13744,6 +14028,7 @@ async function route() {
   });
   navTop = top;
   syncNavMenu(top);
+  drawNavRecent();
   syncAdvancedNote(top);
   loadAdvancedNav();   // the first page reads the advanced mode once; it only decides what the menu shows
   setupTick = null;
@@ -13897,6 +14182,7 @@ const WELCOME_DIAGRAM_LABEL = "示意圖：系統設定的「隱私權與安全�
 const WELCOME_DIAGRAM_NOTE = "上面是示意圖，不是你電腦的真實畫面。你的系統設定的樣子與字，會依 macOS 版本稍有不同，位置也可能不一樣；照著文字步驟找就好。";
 const WELCOME_SAVE_FAILED = "沒有存成「已看過」，下次打開 VBear 可能還會看到這一頁。";
 
+let welcomeSaveFailed = false;       // the mark could not be saved: the home page does not send the person back to this page again in this window (no loop)
 function welcomeIsApp() { return folderBridge() !== null; }
 // The home page asks this only after the start-up gate said the person is to go there.
 function welcomeWanted(configRes) {
@@ -13924,16 +14210,16 @@ async function viewWelcome() {
   const token = seq;
   const main = claim(token);
   if (token !== seq) return;
-  if (!welcomeIsApp()) { location.hash = "#/setup"; return; }       // a browser has no such page
+  if (!welcomeIsApp()) { location.hash = "#/"; return; }       // a browser has no such page; the home page is where the first run is (P52-5)
   const go = async () => {
     let saved = true;
     try { await api.post("/api/config", { welcome_seen: true }); }
-    catch (e) { saved = false; }
-    location.hash = "#/setup";
+    catch (e) { saved = false; welcomeSaveFailed = true; }
+    location.hash = "#/";
     if (!saved) toast(WELCOME_SAVE_FAILED);
   };
   const skip = el("button", { class: "btn", type: "button", "data-welcome": "skip" }, "略過");
-  const next = el("button", { class: "btn primary", type: "button", "data-welcome": "next" }, "我知道了，開始設定");
+  const next = el("button", { class: "btn primary", type: "button", "data-welcome": "next" }, "我知道了，開始");
   let busy = false;
   for (const b of [skip, next]) b.addEventListener("click", async () => {
     if (busy) return;
@@ -14241,7 +14527,29 @@ function setupVendorStatus(vendor, toolsRes, chats) {
   if (sup.state === "not_installed") return { kind: "not_installed", text: "還沒安裝" };
   if (sup.state === "not_logged_in") return { kind: "chat_login", text: "已登入，還要登入聊天用的 Codex" };
   if (sup.state === "unknown" || sup.state === "version_unreadable") return { kind: "unread", text: "已登入；讀不到版本，聊天的狀態不明" };
+  if (sup.state === "unsupported") {          // P52-2: the tool updated itself; the version is the server's (the chat support, else the tool's own row), the server's sentence is kept whole
+    const u = versionUnknownWords(v.tool, sup.version || (typeof row.version === "string" ? row.version : ""));
+    return { kind: "unsupported", text: u.text + u.next, raw: sup.why };
+  }
   return { kind: "blocked", text: "已登入，但現在不能聊天" };
+}
+
+// P52-2: the step that is missing for a tool that cannot chat yet, as one plain line, said from the state that was read (`st`: what setupVendorStatus said of it) and from nothing else.
+// "" when the tool is ready to chat. Used on the home page's first run and on the CEO page.
+function setupMissingLine(vendor, st) {
+  const tool = (vendor && vendor.tool) || "這個 AI 工具";
+  const s = st && typeof st === "object" ? st : { kind: "unread", text: "狀態讀不到" };
+  const t = typeof s.text === "string" ? s.text : "";
+  if (s.kind === "ready") return "";
+  if (s.kind === "not_installed") return `還差一步：安裝 ${tool}（${t}）。`;
+  if (s.kind === "not_logged_in") return `還差一步：登入 ${tool}（${t}）。`;
+  if (s.kind === "chat_login") return `還差一步：登入聊天用的 ${tool}（${t}）。`;
+  if (s.kind === "unverified") return "還差一步：做一次聊天安全檢查（每個新版本第一次聊天前都要做一次）。";
+  if (s.kind === "running") return "聊天安全檢查還在做，做完就能建立 CEO。";
+  if (s.kind === "policy") return `這台 Mac 有管理員設定，VBear 不能用 ${tool} 聊天。可以按「換一家」選別家。`;
+  if (s.kind === "unsupported") return t;
+  if (s.kind === "unread") return `現在讀不到狀態，不知道還差哪一步：${t}。按「重新檢查」再讀一次。`;
+  return `${tool} 現在不能聊天。`;
 }
 
 // The server's sentence as a plain line and, when the table knows it, the original kept for 「技術細節」.
@@ -14300,6 +14608,7 @@ function setupCheckView(id, row, chats, st) {
     } else chat = ["todo", "每個新版本第一次聊天前都要做一次。", {}];
   } else if (sup.state === "not_installed" || sup.state === "not_logged_in") chat = ["todo", "", {}];
   else if (sup.state === "unknown" || sup.state === "version_unreadable") chat = ["unknown", "讀不到版本，所以不知道這個版本通過了沒有。", {}];
+  else if (sup.state === "unsupported") { const u = versionUnknownWords(tool, sup.version || (typeof r.version === "string" ? r.version : "")); chat = ["fail", u.text + u.next, { raw: sup.why, next: SETUP_CHANGE_HINT }]; }
   else { const line = setupPlainLine(sup.why || `${tool} 現在不能聊天。`); chat = ["fail", line.text, { raw: line.raw, next: SETUP_CHANGE_HINT }]; }
   add("chat", chatLabel, chat[0], chat[1], chat[2]);
   const working = s.phase === "trying" || s.phase === "verifying";
@@ -14333,6 +14642,7 @@ function setupPickerNode(status, onPick) {
       el("p", { class: "small muted setup-text" }, v.account),
       st ? el("p", { class: "setup-text setup-pick-state", "data-setup-status": st.kind }, "這台 Mac：" + st.text)
         : el("p", { class: "setup-text setup-pick-state", "data-setup": "loading" }, "這台 Mac：" + SETUP_LOOKING),
+      st && st.raw ? plainTechFold(st.raw) : null,
     ];
     if (st) body.push(el("button", { class: "btn small primary", type: "button", "data-setup-pick-go": v.id, on: { click: () => onPick(v.id) } }, "選這個"));
     return el("div", { class: "setup-pick", "data-setup-pick": v.id }, body);
@@ -14374,54 +14684,37 @@ function setupCheckNode(id, row, chats, st, on) {
 const setupCheck = new Map();          // tool id -> { phase, try, verifyError, version }
 // ---------- end of the setup picker -------------------------------------------------------------------------------------
 
-async function viewSetup() {
-  const token = seq;
-  setupTry.clear();
-  setupCheck.clear();
-  let picked = setupPickRead();
-  const first = claim(token);
-  if (token !== seq) return;
-  // The frame first: the title, the sentence and the cards (or the chosen tool) are drawn before any answer is back; what is still being read says so.
-  const frame = () => {
-    const vendor = setupVendorOf(picked);
-    return vendor
-      ? el("div", { "data-setup": "page" }, el("p", { class: "setup-text", "data-setup": "picked" }, `你選了：${vendor.maker}（${vendor.tool}）`),
-        el("p", { class: "small muted", "data-setup": "loading" }, SETUP_LOOKING))
-      : el("div", { "data-setup": "page" }, setupPickerNode(() => null, () => {}));
-  };
-  setKids(first, el("h1", null, SETUP_TITLE), el("p", { class: "lede" }, SETUP_LEDE), frame());
-  const got = (p) => p.then((value) => ({ value }), (error) => ({ error }));
-  const [toolsGot, chatsGot, dailyGot] = await Promise.all([got(api.get("/api/setup/tools?force=1")), got(api.get("/api/chats")), got(api.get("/api/setup/daily-limit"))]);
-  const main = claim(token);
-  if (token !== seq) return;
-  if (toolsGot.error) {          // coming in is a fresh look; a tool list that cannot be read is said so
-    setKids(main, el("h1", null, SETUP_TITLE), notice("bad", "讀不到 AI 工具的狀態：" + toolsGot.error.message));
-    return;
-  }
-  let shown = toolsGot.value;
-  let chats = chatsGot.error ? null : chatsGot.value;          // null: the chat state could not be read
-  let dailyNow = !dailyGot.error && typeof dailyGot.value.daily_usd === "number" ? dailyGot.value.daily_usd : null;      // the daily limit in force, or null when it could not be read
+// ---------- setup kit (v0.25, P52-1) ------------------------------------------------------------------------------------
+// The part of the start-up page that prepares ONE chosen tool (its card with the install and login buttons, the list of checks and the one button with its
+// confirmation) is a function of its own, so the home page of a person with no employee uses the same pieces and sends the same requests (ADR 0017). The page that
+// makes it says how it reads and writes what it shows. ctx: { alive(): this page is still the one shown, tools() / setTools(res): the answer of
+// GET /api/setup/tools, chats() / setChats(res): the answer of GET /api/chats (null: not read), picked(): the tool id the person chose, draw(): draw the page again,
+// quietChats: false when a quiet refresh must not read the chats (the home page already reads them) }.
+function setupChatsKey(c) {
+  return JSON.stringify(SETUP_VENDORS.map((v) => { const s = setupSupportOf(v.id, c); return s ? [s.state, s.version, s.running, s.result, s.resultMessage, s.resultVersion] : null; }));
+}
+function setupKit(ctx) {
   let busy = false;
-  const host = el("div", { "data-setup": "page" });
-  const chatsKey = (c) => JSON.stringify(SETUP_VENDORS.map((v) => { const s = setupSupportOf(v.id, c); return s ? [s.state, s.version, s.running, s.result, s.resultMessage, s.resultVersion] : null; }));
-  const checkRunning = () => { const s = picked ? setupSupportOf(picked, chats) : null; return !!s && s.running; };
+  const draw = () => ctx.draw();
+  const checkRunning = () => { const id = ctx.picked(); const s = id ? setupSupportOf(id, ctx.chats()) : null; return !!s && s.running; };
   const readChats = async () => {
     let next = null;
     try { next = await api.get("/api/chats"); } catch (e) { next = null; }
-    if (token !== seq) return false;
-    const changed = chatsKey(next) !== chatsKey(chats);
-    chats = next;
+    if (!ctx.alive()) return false;
+    const changed = setupChatsKey(next) !== setupChatsKey(ctx.chats());
+    ctx.setChats(next);
     return changed;
   };
   const refresh = async (quiet, force) => {
     try {
       const next = await api.get(force ? "/api/setup/tools?force=1" : "/api/setup/tools");
-      if (token !== seq) return;
+      if (!ctx.alive()) return;
+      const shown = ctx.tools() || {};
       const toolsChanged = setupToolKey(next.tools) !== setupToolKey(shown.tools) || next.setup_done !== shown.setup_done;
-      shown = next;
+      ctx.setTools(next);
       // the chat state is read again when the person asked, when a tool changed, and while a safety check runs (reads only)
-      const chatsChanged = (!quiet || force || toolsChanged || checkRunning()) ? await readChats() : false;
-      if (token !== seq) return;
+      const chatsChanged = (!quiet || force || (ctx.quietChats !== false && (toolsChanged || checkRunning()))) ? await readChats() : false;
+      if (!ctx.alive()) return;
       if (toolsChanged || chatsChanged || !quiet) draw();
       if (!quiet) toast("已重新檢查");
     } catch (e) { if (!quiet) toast("重新檢查失敗：" + e.message); }
@@ -14456,7 +14749,7 @@ async function viewSetup() {
       el("p", { class: "setup-text", "data-setup": "blurb" }, row.blurb || ""),
       v.note ? el("p", { class: "small muted setup-text", "data-setup": "note" }, v.note) : null,
       buttons.length ? el("div", { class: "setup-actions" }, buttons) : null,
-      el("div", { "data-setup-slot": "try" }, isPicked ? setupCheckNode(row.id, row, chats, setupCheck.get(row.id), checkOn) : tryBox(row)));
+      el("div", { "data-setup-slot": "try" }, isPicked ? setupCheckNode(row.id, row, ctx.chats(), setupCheck.get(row.id), checkOn) : tryBox(row)));
   };
   const tryBox = (row) => {
     const v = setupTryView(row, setupTry.get(row.id));
@@ -14496,7 +14789,7 @@ async function viewSetup() {
     confirm: async (id) => {
       if (busy) return;
       busy = true;
-      const before = setupSupportOf(id, chats);
+      const before = setupSupportOf(id, ctx.chats());
       const st = { phase: "trying", version: before ? before.version : "", try: null, verifyError: "" };
       setupCheck.set(id, st);
       draw();
@@ -14505,30 +14798,69 @@ async function viewSetup() {
           const r = await api.post(`/api/setup/tools/${encodeURIComponent(id)}/try`, { confirmed: true });
           st.try = { success: r.success === true, message: String(r.message || "") };
         } catch (e) { st.try = { success: false, message: e.message }; }
-        if (token === seq && st.try.success) {
+        if (ctx.alive() && st.try.success) {
           st.phase = "verifying";
           draw();
           await readChats();
-          const now = setupSupportOf(id, chats);
-          if (token === seq && now && now.state === "unverified" && !now.running) {
+          const now = setupSupportOf(id, ctx.chats());
+          if (ctx.alive() && now && now.state === "unverified" && !now.running) {
             try { await api.post("/api/chat-support/verify", { engine: id, version: st.version || undefined }); }
             catch (e) { st.verifyError = e.message; }
           }
         }
       } finally { st.phase = "done"; busy = false; }
-      if (token !== seq) return;
+      if (!ctx.alive()) return;
       await refresh(true, true);
       draw();
     },
   };
-  const dailySummary = el("summary");
-  const updateDailySummary = () => { dailySummary.textContent = dailyNow === null
+  return { toolCard, run, refresh, readChats, isBusy: () => busy };
+}
+
+// The daily spending limit as a folded box, as the start-up page has always had it: `current` is the limit in force, or null when it could not be read.
+function setupDailyBox(current) {
+  const summary = el("summary");
+  const update = (now) => { summary.textContent = now === null
     ? "每天最多花多少（目前的值：未知；預設 US$3）"
-    : `每天最多花 ${setupUsd(dailyNow)}${dailyNow === SETUP_DAILY_DEFAULT ? "（預設，可以不用動）" : ""}`; };
-  updateDailySummary();
-  const dailyBox = el("details", { class: "section setup-daily", "data-setup-slot": "daily-limit" }, dailySummary,
+    : `每天最多花 ${setupUsd(now)}${now === SETUP_DAILY_DEFAULT ? "（預設，可以不用動）" : ""}`; };
+  update(current);
+  return el("details", { class: "section setup-daily", "data-setup-slot": "daily-limit" }, summary,
     el("p", { class: "small muted" }, "之後可以在『設定』的『用量與上限』改。"),
-    dailyLimitEditor({ current: dailyNow, onSaved: (res) => { dailyNow = res.daily_usd; updateDailySummary(); } }));
+    dailyLimitEditor({ current, onSaved: (res) => update(res.daily_usd) }));
+}
+// ---------- end of the setup kit ----------------------------------------------------------------------------------------
+
+async function viewSetup() {
+  const token = seq;
+  setupTry.clear();
+  setupCheck.clear();
+  let picked = setupPickRead();
+  const first = claim(token);
+  if (token !== seq) return;
+  // The frame first: the title, the sentence and the cards (or the chosen tool) are drawn before any answer is back; what is still being read says so.
+  const frame = () => {
+    const vendor = setupVendorOf(picked);
+    return vendor
+      ? el("div", { "data-setup": "page" }, el("p", { class: "setup-text", "data-setup": "picked" }, `你選了：${vendor.maker}（${vendor.tool}）`),
+        el("p", { class: "small muted", "data-setup": "loading" }, SETUP_LOOKING))
+      : el("div", { "data-setup": "page" }, setupPickerNode(() => null, () => {}));
+  };
+  setKids(first, el("h1", null, SETUP_TITLE), el("p", { class: "lede" }, SETUP_LEDE), frame());
+  const got = (p) => p.then((value) => ({ value }), (error) => ({ error }));
+  const [toolsGot, chatsGot, dailyGot] = await Promise.all([got(api.get("/api/setup/tools?force=1")), got(api.get("/api/chats")), got(api.get("/api/setup/daily-limit"))]);
+  const main = claim(token);
+  if (token !== seq) return;
+  if (toolsGot.error) {          // coming in is a fresh look; a tool list that cannot be read is said so
+    setKids(main, el("h1", null, SETUP_TITLE), notice("bad", "讀不到 AI 工具的狀態：" + toolsGot.error.message));
+    return;
+  }
+  let shown = toolsGot.value;
+  let chats = chatsGot.error ? null : chatsGot.value;          // null: the chat state could not be read
+  const dailyNow = !dailyGot.error && typeof dailyGot.value.daily_usd === "number" ? dailyGot.value.daily_usd : null;      // the daily limit in force, or null when it could not be read
+  const host = el("div", { "data-setup": "page" });
+  const kit = setupKit({ alive: () => token === seq, tools: () => shown, setTools: (v) => { shown = v; }, chats: () => chats, setChats: (v) => { chats = v; },
+    picked: () => picked, draw: () => draw() });
+  const dailyBox = setupDailyBox(dailyNow);
   const dailySection = () => dailyBox;
   const choose = (id) => { setupPickWrite(id); picked = id; draw(); };
   const draw = () => {
@@ -14536,27 +14868,27 @@ async function viewSetup() {
     const anyReady = rows.some((r) => r && r.ready === true);
     const canLeave = anyReady || shown.setup_done === true;
     const leave = el("button", { class: "btn primary", type: "button", "data-setup": "leave", disabled: !canLeave }, SETUP_LEAVE_LABEL);
-    leave.addEventListener("click", () => run(leave, async () => {
+    leave.addEventListener("click", () => kit.run(leave, async () => {
       if (shown.setup_done !== true) await api.post("/api/config", { setup_done: true });
       location.hash = ceoStepShown(await ceoPlan()) ? "#/ceo" : "#/";          // P38-8: no card to chat with yet: make the first CEO (P48-3: also when the picked AI is not ready, so the page says why)
     }));
     const recheck = el("button", { class: "btn", type: "button", "data-setup": "recheck" }, "重新檢查");
-    recheck.addEventListener("click", () => run(recheck, () => refresh(false, true)));
+    recheck.addEventListener("click", () => kit.run(recheck, () => kit.refresh(false, true)));
     const vendor = setupVendorOf(picked);
     const pickedRow = vendor ? setupRowOf(shown, vendor.id) : null;
     const top = vendor
       ? [el("div", { class: "setup-picked", "data-setup": "picked" },
           el("p", { class: "setup-text" }, `你選了：${vendor.maker}（${vendor.tool}）`),
           el("button", { class: "btn small", type: "button", "data-setup": "change-pick", on: { click: () => { picked = ""; draw(); } } }, "換一家")),
-        pickedRow ? el("ul", { class: "setup-list" }, toolCard(pickedRow, true)) : notice("warn", `讀不到 ${vendor.maker} 這個 AI 工具的狀態。`)]
+        pickedRow ? el("ul", { class: "setup-list" }, kit.toolCard(pickedRow, true)) : notice("warn", `讀不到 ${vendor.maker} 這個 AI 工具的狀態。`)]
       : [setupPickerNode((v) => setupVendorStatus(v, shown, chats), choose)];
     const others = vendor ? rows.filter((r) => r && r.id !== vendor.id) : [];
     setKids(host,
-      anyReady ? null : notice("info", SETUP_NONE_READY),
+      anyReady || vendor ? null : notice("info", SETUP_NONE_READY),          // P52-2: once a tool is chosen its card says what is missing; this line would only repeat it
       top,
       dailySection(),
       others.length ? el("details", { class: "section setup-others", "data-setup": "others" }, el("summary", null, SETUP_OTHERS_TITLE),
-        el("ul", { class: "setup-list" }, others.map((r) => toolCard(r, false)))) : null,
+        el("ul", { class: "setup-list" }, others.map((r) => kit.toolCard(r, false)))) : null,
       el("section", { class: "section setup-foot" },
         el("div", { class: "row" }, leave, recheck),
         canLeave ? el("p", { class: "small muted" }, "之後隨時可以從「設定」的「AI 工具」回到這一頁，加其他 AI 工具。")
@@ -14564,7 +14896,7 @@ async function viewSetup() {
   };
   setKids(main, el("h1", null, SETUP_TITLE), el("p", { class: "lede" }, SETUP_LEDE), host);
   draw();
-  setupTick = () => (document.hidden || busy ? Promise.resolve() : refresh(true));
+  setupTick = () => (document.hidden || kit.isBusy() ? Promise.resolve() : kit.refresh(true));
 }
 
 // ---------- the first CEO (P38-8) ---------------------------------------------------------------------------------------------
@@ -14608,9 +14940,9 @@ function ceoPickedTool() {
     return typeof v === "string" && CEO_PICKS.includes(v) ? v : "";
   } catch (_) { return ""; }
 }
-async function ceoPlan() {
+async function ceoPlan(tool) {
   try {
-    const pick = ceoPickedTool();
+    const pick = CEO_PICKS.includes(tool) ? tool : ceoPickedTool();        // v0.25: the home page passes the tool the person chose just now
     const r = await api.get(pick ? `/api/first-ceo?tool=${encodeURIComponent(pick)}` : "/api/first-ceo");       // the same path with the pick as a query (ADR 0014; 15b lists it)
     return r && typeof r === "object" ? r : null;
   } catch (_) { return null; }
@@ -14661,17 +14993,36 @@ async function ceoOpenChat(profileId, opening, reuseId) {
   return true;
 }
 
+// Makes the CEO card (always in safe mode) and opens the chat with it; the opening sentence only goes into the box. The one request of the first CEO: the CEO page's
+// button and the home page's 「建立 CEO，開始聊」 both come here, and only a press of either gets here. Throws with the server's words when it fails.
+async function ceoCreate(plan, name, instructions, afterMade) {
+  const r = await api.post("/api/agent-profiles", { name, position: plan.position, instructions, launch_mode: "safe",
+    model: { tool: plan.tool, model_id: "" } });
+  const id = r && r.profile && typeof r.profile.id === "string" ? r.profile.id : "";
+  if (!id) throw new Error("建立了，但讀不到員工的編號");
+  await api.post("/api/config", { first_ceo_id: id }).catch(() => {});      // the lobby offers the chat once, if this one is left
+  if (afterMade) { try { await afterMade(); } catch (_) { /* a failed write never keeps the person out of the conversation */ } }
+  await ceoOpenChat(id, typeof plan.opening === "string" ? plan.opening : "", "");
+}
+
 async function viewCeo() {
   const token = seq;
   const plan = await ceoPlan();
   const chatsRes = plan && plan.needed === true ? await api.get("/api/chats").catch(() => null) : null;       // only to say whether a chat can start with the tool
+  // P52-2: a plan that cannot be made on the AI the person chose says which step is missing; that needs the tools' own state (the path the start-up page reads)
+  const missingFor = plan && plan.needed === true && !ceoStepWanted(plan) ? setupVendorOf(ceoPickedTool()) : null;
+  const toolsRes = missingFor ? await api.get("/api/setup/tools").catch(() => null) : null;
   const main = claim(token);
   if (token !== seq) return;
   const head = el("h1", null, CEO_TITLE);
   if (!plan) { setKids(main, head, notice("bad", "讀不到建立 CEO 需要的資料，請稍後再試。")); return; }
   if (plan.needed !== true) { setKids(main, head); location.hash = "#/"; return; }       // a person who has a card to chat with is not shown the step
   if (!ceoStepWanted(plan)) {
+    const st = missingFor ? setupVendorStatus(missingFor, toolsRes, chatsRes) : null;
+    const missing = st ? setupMissingLine(missingFor, st) : "";
     setKids(main, head, notice("info", typeof plan.reason === "string" && plan.reason ? plan.reason : "目前沒有可以用的 AI 工具。"),
+      missing ? el("p", { "data-ceo": "missing" }, missing) : null,
+      st && st.raw ? plainTechFold(st.raw) : null,
       el("p", null, el("a", { class: "btn primary", href: "#/setup", "data-ceo": "setup-go" }, "到開始設定")));
     return;
   }
@@ -14690,12 +15041,7 @@ async function viewCeo() {
     if (!nm) { fail("請幫 CEO 取個名字，不能空白。"); return; }
     busy = true; go.disabled = true; fail("");
     try {
-      const r = await api.post("/api/agent-profiles", { name: nm, position: plan.position, instructions: about.value, launch_mode: "safe",
-        model: { tool: plan.tool, model_id: "" } });
-      const id = r && r.profile && typeof r.profile.id === "string" ? r.profile.id : "";
-      if (!id) throw new Error("建立了，但讀不到員工的編號");
-      await api.post("/api/config", { first_ceo_id: id }).catch(() => {});      // the lobby offers the chat once, if this one is left
-      await ceoOpenChat(id, typeof plan.opening === "string" ? plan.opening : "", "");
+      await ceoCreate(plan, nm, about.value);
     } catch (e) {
       fail("沒有建立成功：" + e.message);
       busy = false; go.disabled = false;
@@ -14707,7 +15053,11 @@ async function viewCeo() {
   const sup = chatsRes && chatsRes.support && typeof chatsRes.support === "object" ? chatsRes.support : null;
   const part = sup ? (plan.tool === "claude" ? sup : sup[plan.tool]) : null;
   const checking = !!part && typeof part === "object" && part.verify && part.verify.running === true;
+  // P52-2: the tool updated itself and VBear does not know that version: the same plain sentence as everywhere, the server's own behind 「技術細節」
+  const unknown = mine && mine.state === "unsupported" ? versionUnknownWords(plan.tool_name || plan.tool, part && typeof part === "object" ? (part.detected || part.version) : "") : null;
+  const unknownRaw = unknown && part && typeof part === "object" ? (typeof part.message === "string" && part.message ? part.message : typeof part.why === "string" ? part.why : "") : "";
   const toolState = !mine ? "（聊天的狀態讀不到）" : mine.ready ? "（可以聊天了）" : mine.state === "policy" ? "（這台電腦有管理員設定，VBear 不能用它聊天）"
+    : unknown ? `（${unknown.text}${unknown.next}）`
     : mine.state === "unverified" && checking ? "（聊天安全檢查還在做，通常要幾分鐘；你可以先建立 CEO，做完才能開始聊）"
     : mine.state === "unverified" ? "（第一次聊天前要先做一次安全檢查，建立後會帶你做）" : "（聊天現在還不能用，建立後會告訴你原因）";
   const toolLine = el("p", { "data-ceo": "tool" }, el("strong", null, "用哪個 AI 工具："), `${plan.tool_name || plan.tool}${toolState}`);
@@ -14721,6 +15071,7 @@ async function viewCeo() {
     el("section", { class: "panel pad ceo-form", "data-ceo": "form" },
       el("label", { class: "ceo-field" }, el("span", null, "名字"), name),
       toolLine,
+      unknownRaw ? plainTechFold(unknownRaw) : null,
       el("p", { class: "small", "data-ceo": "mode" }, CEO_MODE),
       plan.tool === "agy" ? el("p", { class: "small", "data-ceo": "agy-note" }, CEO_AGY_NOTE) : null,
       more,
@@ -14879,15 +15230,16 @@ function chatLine(rec, opts) {
     case "user_message": {
       const origin = chatOriginOf(rec);          // a message VBear sent for a dispatch (P40): said over it, it is not the person's own words
       const note = origin ? chatOriginNote(origin) : null;
+      // P51-1: your own words are a soft bubble; the line over them (and its time) shows on hover or focus. A message VBear sent for a dispatch always says so.
       const line = el("li", { class: "chat-msg chat-me", "data-chat": "user", "data-seq": String(rec.seq), tabindex: "0" },
-        el("div", { class: "chat-who small muted" }, `${origin ? "VBear 依分配工作送出" : "你"}・${fmtTime(rec.at)}`), note, el("div", { class: "chat-text" }, text(rec.text)),
+        el("div", { class: "chat-who small muted" + (origin ? "" : " chat-who-quiet") }, origin ? "VBear 依分配工作送出" : "你", chatTimeNode(rec.at)), note, el("div", { class: "chat-text" }, text(rec.text)),
         !origin && remember && Number.isInteger(rec.turn) && text(rec.text) ? memoryRememberRow(() => remember(rec, "you"), saveSkill ? () => saveSkill(rec, "you") : null) : null);
       if (note) { line.originNote = note; line.origin = origin; }
       return line;
     }
     case "reply":
       return el("li", { class: "chat-msg chat-them", "data-chat": "reply", "data-seq": String(rec.seq), tabindex: "0" },
-        el("div", { class: "chat-who small muted" }, `${who}・${fmtTime(rec.at)}`), el("div", { class: "chat-text" }, text(rec.text)),
+        el("div", { class: "chat-who small muted" }, who, chatTimeNode(rec.at)), el("div", { class: "chat-text" }, text(rec.text)),
         rec.truncated === true ? el("div", { class: "small muted" }, "（這則回覆太長，後面的部分沒有保存）") : null,
         remember && Number.isInteger(rec.turn) && text(rec.text) ? memoryRememberRow(() => remember(rec, "employee"), saveSkill ? () => saveSkill(rec, "employee") : null) : null);
     case "tool_call":
@@ -15156,6 +15508,11 @@ function chatPrepState(card, data) {
   if (state === "policy") {            // not something to verify: the administrator's settings on this computer hold the tool back
     return linkSetup("到 AI 工具看看", `這台電腦的 ${tool} 有管理員設定，VBear 不能用它聊天。可以到「AI 工具」看看有沒有別的工具能用。`);
   }
+  if (state === "unsupported") {       // P52-2: the tool updated itself; the server's sentence goes behind 「技術細節」 (`raw`)
+    const u = versionUnknownWords(tool, version);
+    const raw = part && typeof part.message === "string" && part.message ? part.message : part && typeof part.why === "string" ? part.why : "";
+    return { ...linkSetup("到 AI 工具看看", u.text + u.next), raw };
+  }
   const why = `${tool} ${word}，先處理這一步才能和 ${name} 聊天。`;
   // P48-3 (D10): the safety check was started elsewhere (the start-up page) and is still going: nothing to press, the chat opens by itself when it passes
   if (state === "unverified" && part && part.verify && typeof part.verify === "object" && part.verify.running === true) {
@@ -15205,7 +15562,9 @@ function chatRow(c) {
     return el("li", { class: "mt-row card", "data-chat": "row" }, el("strong", null, `無法讀取的聊天 ${c.id}`), badge("無法讀取", "b-bad"),
       el("span", { class: "small muted" }, c.problem || "這個聊天的紀錄讀不出來，已留在清單裡，沒有被刪掉。"));
   }
-  return el("li", { class: "mt-row card", "data-chat": "row", "data-chat-id": c.id },
+  // P51-3: a plain row (no card frame): a dot when a card waits for you, the name, the last time; the words and the link are the same
+  return el("li", { class: "mt-row chat-row", "data-chat": "row", "data-chat-id": c.id },
+    c.waiting ? el("span", { class: "chat-wait-dot", "aria-hidden": "true" }) : null,
     el("a", { class: "mt-row-title", href: `#/chat/${encodeURIComponent(c.id)}`, "data-chat": typeof c.routine_title === "string" ? "routine-title" : null }, typeof c.routine_title === "string" ? c.routine_title : (c.name || c.profile_id)),
     el("span", { class: "tag", "data-chat": "tool" }, chatToolName(c.engine)),
     c.waiting ? badge("等你回覆卡片", "b-warn") : c.open ? badge("回覆中", "b-info") : null,
@@ -15221,8 +15580,8 @@ async function viewChat(id, params) {
   try { data = await api.get("/api/chats"); }
   catch (e) {
     const want = typeof (params && params.profile) === "string" ? params.profile : "";
-    if (want) { setKids(claim(token), chatUnreadPage(want, "")); return; }       // sent here to prepare a chat: say that the state could not be read, and offer to read it again
-    setKids(claim(token), el("h1", null, "對話紀錄"), notice("bad", "讀不到對話紀錄：" + e.message)); return;
+    if (want) { setKids(claim(token), chatColumn(chatUnreadPage(want, ""))); return; }       // sent here to prepare a chat: say that the state could not be read, and offer to read it again
+    setKids(claim(token), chatColumn(el("h1", null, "對話紀錄"), notice("bad", "讀不到對話紀錄：" + e.message))); return;
   }
   const readGroups = async () => {
     try { const r = await api.get("/api/groups"); return Array.isArray(r.groups) ? r.groups : []; } catch (_) { return []; }
@@ -15241,7 +15600,7 @@ async function viewChat(id, params) {
   const pick = typeof (params && params.profile) === "string" ? params.profile : "";
   let chosen = pick;
   const chosenCard = () => (Array.isArray(cur.cards) ? cur.cards.find((c) => c && c.id === chosen) : null) || null;
-  if (pick && !chosenCard()) { setKids(main, chatUnreadPage(pick, "")); return; }           // an employee that is not in the list: nothing to prepare, nothing is opened
+  if (pick && !chosenCard()) { setKids(main, chatColumn(chatUnreadPage(pick, ""))); return; }           // an employee that is not in the list: nothing to prepare, nothing is opened
   // The notice for the chosen card's AI tool; with no card chosen, Claude Code's (unless it is not there and Codex is) and
   // Codex's once Codex is installed.
   const drawSupport = () => {
@@ -15411,6 +15770,7 @@ async function viewChat(id, params) {
     } else if (st) action = el("a", { class: "btn primary", href: st.href, "data-chat": "prep-action" }, st.label);
     setKids(prepBox,
       el("p", { class: "lede", "data-chat": "prep-reason" }, st ? st.reason : "找不到這位員工。"),
+      st && st.raw ? plainTechFold(st.raw) : null,
       lampRed ? limitReachedNotice(null, { text: "今天的用量到你設的上限了，所以現在不能開始聊天（沒有花錢）。明天 0 點會重新算；要現在繼續，可以調高上限。" }) : null,
       action,
       !running && status && typeof status.message === "string" && status.message && st && st.kind !== "start"
@@ -15424,21 +15784,21 @@ async function viewChat(id, params) {
   const intro = chatIntroNode();
   if (prepMode) {
     const c = chosenCard();
-    setKids(main, el("h1", null, `準備和 ${c.name || "這位員工"} 聊天`), prepBox,
+    setKids(main, chatColumn(el("h1", null, `準備和 ${c.name || "這位員工"} 聊天`), prepBox,
       el("details", { class: "fold section chat-more-info", "data-chat": "prep-more" }, el("summary", null, "了解更多"), supportBox, ledgerBox, intro,
-        el("p", { class: "small" }, el("a", { href: "#/chat" }, "看所有對話紀錄"))));
+        el("p", { class: "small" }, el("a", { href: "#/chat" }, "看所有對話紀錄")))));
     chatTick = refresh;
     activeViewCleanup = () => { chatTick = null; };
     return;
   }
   const moreInfo = el("details", { class: "fold section chat-more-info", "data-chat": "more-info" }, el("summary", null, "了解更多"), ledgerBox, intro);
-  setKids(main, el("h1", null, "對話紀錄"),
+  setKids(main, chatColumn(el("h1", null, "對話紀錄"),
     el("p", { class: "lede" }, "和一位員工一對一對話。員工想動手時，會先問你。"),
     needsClaudeSlot(token, "對話需要 Claude Code、Codex 或 AGY：工具是 Claude Code 的員工用 Claude Code，工具是 Codex 的員工用 Codex（Codex 要先在「開始設定」登入聊天用的那一份），工具是 AGY 的員工用 AGY（AGY 要先通過聊天驗證）。",
       (res) => !codexChatReady(res) && !agyChatReady(res)),
     supportBox, formBox,
     el("section", { class: "section" }, sectionHead("對話紀錄", "每 5 秒更新"), listBox),
-    moreInfo);
+    moreInfo));
   chatTick = refresh;
   activeViewCleanup = () => { chatTick = null; };
 }
@@ -15558,9 +15918,10 @@ function ceoOpeningChoices(input, opts) {
     const key = `${shown()}|${noteText()}`;
     if (key === last) return;
     last = key;
-    setKids(node, shown() ? CEO_CHOICES.map((c) => el("button", { type: "button", class: "btn small", "data-chat": "opening-choice", "data-choice": c.key,
+    setKids(node, shown() ? CEO_CHOICES.map((c) => el("button", { type: "button", class: "home-example", "data-chat": "opening-choice", "data-choice": c.key,
       on: { click: () => {
         input.value = c.text;
+        homeAskGrow(input);
         input.focus();
         if (typeof input.setSelectionRange === "function") input.setSelectionRange(c.text.length, c.text.length);
         last = null; sync();
@@ -15596,11 +15957,181 @@ function ceoChiefHint(chief, onNo) {
 }
 // ---------- end of the hint ------------------------------------------------------------------------------------------------------
 
+// ---------- P51 the chat reads like text (v0.24, ADR 0016) -------------------------------------------------------------------------
+// The lines of the work (a tool used, its result, what VBear allowed by itself, what a turn cost, the process starting and ending) that follow one another are
+// one closed line you can open. It is only a display: every record is drawn into the page, with its own data-seq and data-chat, inside the fold. Only these
+// kinds are ever put in a fold; a card that waits, its decision, a refusal, an error, an odd message and the words said are never. A turn that was stopped, hit
+// a limit or went wrong, and a process that ended for a reason this page does not know, say so in the open (they are not "the work going well").
+const CHAT_QUIET_KINDS = ["process", "tool", "result", "auto", "cost", "process-end"];       // the data-chat of the lines that may be folded, in the order the summary says them
+// The one centred column of every page of the chat (the list, the page that prepares a chat, one chat): 720px at most.
+function chatColumn(...kids) { return el("div", { class: "chat-page", "data-chat": "page" }, ...kids); }
+function chatTimeNode(at) { return el("span", { class: "chat-time" }, `・${fmtTime(at)}`); }       // in the page for a screen reader; shown on hover, on focus, and always without a mouse
+// Whether this record's line may go into a fold.
+function chatIsQuiet(rec) {
+  if (!rec || typeof rec !== "object") return false;
+  switch (rec.kind) {
+    case "tool_call": case "tool_result": case "auto_allowed": case "process_started": return true;
+    case "turn_ended": return cardHas(CHAT_TURN_END, rec.reason) && CHAT_TURN_END[rec.reason] === "";         // only a turn that ended well
+    case "process_ended": return typeof rec.reason === "string" && cardHas(CHAT_PROCESS_END, rec.reason);     // only for a reason this page can say
+    default: return false;
+  }
+}
+// The one line over a fold: what is in it, by kind and how many. No money (ADR 0013, point 5): the amounts are inside, one line each.
+// `counts`: { tool, result, failed, auto, cost, process, "process-end" } (a kind that is not there is not said).
+function chatQuietSummary(counts) {
+  const c = counts && typeof counts === "object" ? counts : {};
+  const n = (k) => (Number.isInteger(c[k]) && c[k] > 0 ? c[k] : 0);
+  const said = [];
+  if (n("process")) said.push(`員工上線 ${n("process")} 次`);
+  if (n("tool")) said.push(`用了 ${n("tool")} 次工具`);
+  if (n("result")) said.push(`工具回了 ${n("result")} 筆結果${n("failed") ? `（${n("failed")} 筆失敗）` : ""}`);
+  if (n("auto")) said.push(`自動允許 ${n("auto")} 次`);
+  if (n("cost")) said.push(`${n("cost")} 回合結算`);
+  if (n("process-end")) said.push(`程序結束 ${n("process-end")} 次`);
+  return [...said, "細節"].join("・");
+}
+// The list of a chat's lines, with the folds. `add(line, rec)` puts the line of a record at the end: into the fold that is open at the end (its summary is
+// drawn again, the fold itself is not, so one you opened stays open) or, for a line that may be folded, into a new one. Nothing is held back or dropped.
+function chatQuietLog(log) {
+  let group = null;
+  const start = () => {
+    const summary = el("summary", { class: "chat-quiet-sum small muted", "data-chat": "quiet-summary" });
+    const list = el("ul", { class: "chat-quiet-list", "data-chat": "quiet-list" });
+    const details = el("details", { class: "chat-quiet-group", "data-chat": "quiet-group" }, summary, list);
+    const item = el("li", { class: "chat-quiet", "data-chat": "quiet-item" }, details);
+    log.append(item);
+    return { summary, list, counts: {} };
+  };
+  return {
+    add(line, rec) {
+      if (!chatIsQuiet(rec)) { group = null; log.append(line); return; }
+      if (!group) group = start();
+      const kind = line.getAttribute("data-chat");
+      group.counts[kind] = (group.counts[kind] || 0) + 1;
+      if (kind === "result" && rec.is_error === true) group.counts.failed = (group.counts.failed || 0) + 1;
+      group.list.append(line);
+      setKids(group.summary, chatQuietSummary(group.counts));
+    },
+  };
+}
+// ---------- end of P51 -----------------------------------------------------------------------------------------------------------
+
+// ---------- P51 who is talked to (v0.24, ADR 0016) --------------------------------------------------------------------------------
+// The small button at the left of the box says whom the words go to, and opens a list to change it. The list is drawn only from data the page already has (the
+// answer of GET /api/chats it was given): opening it, and choosing from it, ask for nothing. An employee who can chat is an option; one who cannot is below, grey,
+// with one sentence why and a link to the page that prepares them (a press there selects nothing). Choosing never sends a message and never writes anything:
+// on the home page it only changes whom the send button is for; on a chat page it goes to that employee's page and the words not yet sent go along (18b).
+// opts: { cards, data (that answer), current (an employee id), dir ("up" or "down"), onPick(card), onLater(card) } -> { node, button, close, setCurrent(id) }, or null with no card.
+function whoPicker(opts) {
+  const cards = (Array.isArray(opts && opts.cards) ? opts.cards : []).filter((c) => c && typeof c === "object" && typeof c.id === "string" && c.id);
+  if (!cards.length) return null;
+  const nameOf = (c) => (typeof c.name === "string" && c.name ? c.name : c.id);
+  const metaOf = (c) => [cardHas(CARD_POSITION_LABEL, c.position) ? CARD_POSITION_LABEL[c.position] : "", c.tool ? chatToolName(c.tool) : ""].filter(Boolean).join("・");
+  let current = typeof opts.current === "string" ? opts.current : "";
+  let label = (cards.find((c) => c.id === current) || { name: opts.currentName }).name || opts.currentName || "員工";
+  const labelNode = el("span", { class: "who-label" }, label);
+  const button = el("button", { type: "button", class: "who-btn", "data-ask": "who", "aria-haspopup": "listbox", "aria-expanded": "false" }, labelNode, el("span", { class: "who-caret", "aria-hidden": "true" }, "▾"));
+  const listbox = el("div", { class: "who-list", role: "listbox", "aria-label": "要跟誰說" });
+  const laterBox = el("div", { class: "who-later-box", role: "group", "aria-label": "還不能聊的員工" });
+  const pop = el("div", { class: "who-pop", "data-ask": "who-pop", "data-dir": opts.dir === "down" ? "down" : "up" }, listbox, laterBox);
+  const wrap = el("div", { class: "who-pick" }, button, pop);
+  pop.hidden = true;
+  let isOpen = false;
+  let entries = [];
+  const fill = () => {
+    entries = [];
+    const ready = [], later = [];
+    for (const c of cards) {
+      const prep = chatPrepState(c, opts.data);
+      if (!prep) continue;
+      (prep.kind === "start" ? ready : later).push([c, prep]);
+    }
+    setKids(listbox, ready.map(([c]) => {
+      const node = el("button", { type: "button", class: "who-opt", role: "option", "data-ask": "who-option", "data-profile-id": c.id, "aria-selected": String(c.id === current),
+        on: { click: () => choose(c) } },
+        el("span", { class: "who-name" }, nameOf(c)), el("span", { class: "who-meta small muted" }, metaOf(c)), c.id === current ? el("span", { class: "who-now small" }, "目前") : null);
+      entries.push(node);
+      return node;
+    }));
+    setKids(laterBox, later.length ? el("p", { class: "who-cap small muted" }, "還不能聊") : null, later.map(([c, prep]) => {
+      const node = el("a", { class: "who-opt who-later", href: `#/chat?profile=${encodeURIComponent(c.id)}`, "data-ask": "who-later", "data-profile-id": c.id,
+        on: { click: () => { close(false); if (typeof opts.onLater === "function") opts.onLater(c); } } },
+        el("span", { class: "who-name" }, nameOf(c)), el("span", { class: "who-meta small muted" }, metaOf(c)),
+        el("span", { class: "who-why small" }, plainWords(prep.reason || "").text || "原因不明"));
+      entries.push(node);
+      return node;
+    }));
+  };
+  const away = (e) => { if (isOpen && e && e.target && !wrap.contains(e.target)) close(false); };
+  const focusAt = (i) => { if (entries.length) { const n = entries[(i + entries.length) % entries.length]; if (n.focus) n.focus(); } };
+  function open() {
+    if (isOpen) return;
+    isOpen = true;
+    pop.hidden = false;
+    button.setAttribute("aria-expanded", "true");
+    if (document.addEventListener) document.addEventListener("click", away);
+    const at = entries.findIndex((n) => n.getAttribute("data-profile-id") === current && n.getAttribute("data-ask") === "who-option");
+    focusAt(at < 0 ? 0 : at);
+  }
+  function close(giveFocusBack) {
+    if (!isOpen) return;
+    isOpen = false;
+    pop.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+    if (document.removeEventListener) document.removeEventListener("click", away);
+    if (giveFocusBack !== false && button.focus) button.focus();
+  }
+  function choose(c) {
+    close(false);
+    if (c.id === current) { if (button.focus) button.focus(); return; }          // the one you already talk to: nothing changes
+    if (typeof opts.onPick === "function") opts.onPick(c);
+  }
+  const setCurrent = (id) => {
+    current = typeof id === "string" ? id : "";
+    const c = cards.find((x) => x.id === current);
+    if (c) { label = nameOf(c); setKids(labelNode, label); }
+    button.setAttribute("aria-label", `現在對 ${label} 說話，按了可以換人`);
+    fill();
+  };
+  button.addEventListener("click", () => (isOpen ? close(true) : open()));
+  pop.addEventListener("keydown", (e) => {
+    const at = entries.indexOf(document.activeElement);
+    if (e.key === "Escape") { if (e.preventDefault) e.preventDefault(); close(true); }
+    else if (e.key === "ArrowDown") { if (e.preventDefault) e.preventDefault(); focusAt(at < 0 ? 0 : at + 1); }
+    else if (e.key === "ArrowUp") { if (e.preventDefault) e.preventDefault(); focusAt(at < 0 ? -1 : at - 1); }
+    else if (e.key === "Home") { if (e.preventDefault) e.preventDefault(); focusAt(0); }
+    else if (e.key === "End") { if (e.preventDefault) e.preventDefault(); focusAt(-1); }
+    else if (e.key === "Tab") close(false);
+  });
+  button.setAttribute("aria-label", `現在對 ${label} 說話，按了可以換人`);
+  fill();
+  return { node: wrap, button, close: () => close(false), setCurrent };
+}
+// 18b: a pick on a chat page. It only goes to a page: that employee's last chat when the answer already read has one (a chat a routine opened is not one), else the page that
+// opens a chat with them (opening is the person's press there). The words not yet sent wait for the box of that page and are sent only by its send button. No request,
+// no send, and the list of chats is not read again: `chatsRes` is the answer the page already has.
+function chatWhoGo(profileId, words, chatsRes) {
+  const t = typeof words === "string" ? words : "";
+  const chat = homeChatsOf(chatsRes, null, profileId)[0] || null;
+  if (chat) {
+    if (t.trim()) ceoDrafts.set(chat.id, t);
+    location.hash = `#/chat/${encodeURIComponent(chat.id)}`;
+    return;
+  }
+  if (t.trim()) ceoDrafts.set(profileId, t);
+  location.hash = `#/chat?profile=${encodeURIComponent(profileId)}`;
+}
+// A press on someone who cannot chat yet: the link goes to the page that prepares them; the words wait there under their id (as the notice of a refused send keeps them).
+function chatWhoLater(profileId, words) {
+  if (typeof words === "string" && words.trim()) ceoDrafts.set(profileId, words);
+}
+// ---------- end of P51 who ---------------------------------------------------------------------------------------------------------
+
 async function viewChatDetail(token, id) {
   let all;
   try { all = await chatReadAll(id); }
   catch (e) {
-    setKids(claim(token), crumbs([["對話紀錄", "#/chat"], ["找不到"]]), notice("bad", e.status === 404 ? e.message : "讀不到這段對話：" + e.message));
+    setKids(claim(token), chatColumn(crumbs([["對話紀錄", "#/chat"], ["找不到"]]), notice("bad", e.status === 404 ? e.message : "讀不到這段對話：" + e.message)));
     return;
   }
   const main = claim(token);
@@ -15612,6 +16143,7 @@ async function viewChatDetail(token, id) {
   const edits = new Map();              // card_id -> { open, text }
   const answering = new Set();
   const transcript = el("ul", { class: "chat-log", "data-chat": "log", "aria-live": "off" });
+  const quietLog = chatQuietLog(transcript);          // P51-1: the lines of the work that follow one another go into one fold; nothing is dropped
   const liveBox = el("div", { class: "chat-live", "data-chat": "live", "aria-live": "polite" });
   const headBox = el("div", { class: "chat-head" });
   const titleBox = el("div", { class: "chat-title" });
@@ -15619,13 +16151,13 @@ async function viewChatDetail(token, id) {
   const detailsBody = el("div", { class: "chat-details-body" });
   const detailsBox = el("details", { class: "fold chat-details small", "data-chat": "details" }, el("summary", null, "詳細資訊"), detailsBody);
   const noteBox = el("div", { class: "chat-notes" });
-  const input = el("textarea", { rows: "3", "data-chat": "input", "aria-label": "要對員工說的話", maxlength: "20000", placeholder: "要對員工說什麼？（Cmd/Ctrl + Enter 送出）",
-    on: { keydown: (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } } } });
+  const input = el("textarea", { rows: "2", "data-chat": "input", "aria-label": "要對員工說的話", maxlength: "20000", placeholder: "要對員工說什麼？（Cmd/Ctrl + Enter 送出）",
+    on: { keydown: (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.isComposing) { e.preventDefault(); send(); } }, input: () => homeAskGrow(input) } });
   // v0.21.0: words kept under the employee's id (the 「到準備頁」 link, a refused first send) come back to this chat when it has none of its own
   const ownerId = (all && all.card && typeof all.card.id === "string" && all.card.id) || (all && all.chat && all.chat.profile_id) || "";
   if (ownerId) { if (ceoDrafts.has(id)) ceoDrafts.delete(ownerId); else ceoMoveDraft(ownerId, id); }   // one set of words per chat, the newest; never pasted twice
   const opening = ceoTakeDraft(id);        // P38-8: the first CEO's opening sentence: put in the box, sent only by the send button
-  if (opening) input.value = opening;
+  if (opening) { input.value = opening; homeAskGrow(input); }
   // P48-3: only a CEO's conversation nobody has spoken in has the two opening choices; the line under the box says whose words are in it
   let sentNow = 0;                          // messages the person sent from this page (the records may come a moment later)
   const talkSeen = [];                      // the records that are words said (the person's and the reply), oldest first
@@ -15643,8 +16175,8 @@ async function viewChatDetail(token, id) {
     if (!hintWanted()) { if (hintNode) { hintNode = null; setKids(hintBox, null); } return; }
     if (!hintNode) { hintNode = ceoChiefHint(chiefRef, () => { hintDismissed = true; syncHint(); }); setKids(hintBox, hintNode); }
   };
-  const sendBtn = el("button", { type: "button", class: "btn primary", "data-chat": "send", on: { click: () => send() } }, "送出");
-  const stopBtn = el("button", { type: "button", class: "btn", "data-chat": "stop", on: { click: () => stop() } }, "停止這一回合");
+  const sendBtn = el("button", { type: "button", class: "btn primary home-send", "data-chat": "send", on: { click: () => send() } }, "送出");
+  const stopBtn = el("button", { type: "button", class: "btn home-stop", "data-chat": "stop", on: { click: () => stop() } }, "停止這一回合");
   const sendNote = el("p", { class: "small muted", "data-chat": "send-note" });
   const limitBox = el("div", { "data-chat": "limit-box", "aria-live": "polite" });       // the day's limit stopped a send: said in plain words, with the way to the settings
   let noteText = "";                      // the server's last refusal, kept until the person acts again
@@ -15664,8 +16196,9 @@ async function viewChatDetail(token, id) {
     const live = view.live && typeof view.live === "object" ? view.live : null;
     const state = live ? live.state : "idle";
     const word = cardHas(CHAT_STATE, state) ? CHAT_STATE[state] : ["狀態不明", "b-mute"];
-    setKids(titleBox, el("h1", null, typeof view.routine_title === "string" ? view.routine_title : (view.card && view.card.name ? view.card.name : "對話")));
-    setKids(lineBox, live ? badge(word[0], word[1]) : null, live ? " " : null, chatHeadLine(view.card, engineOf() || (view.card && view.card.tool)));
+    // P51-3: one row: the name, the state word (and 「⋯」); the line under it is only the facts that say what is asked and where the words go
+    setKids(titleBox, el("h1", null, typeof view.routine_title === "string" ? view.routine_title : (view.card && view.card.name ? view.card.name : "對話")), live ? badge(word[0], word[1]) : null);
+    setKids(lineBox, chatHeadLine(view.card, engineOf() || (view.card && view.card.tool)));
     setKids(detailsBody,
       el("p", { class: "small muted", "data-chat": "limits" }, chatLimitsText(limits, ledger)),
       isAgy() ? el("p", { class: "small muted", "data-chat": "agy-note" }, CHAT_AGY_NOTE)
@@ -15713,7 +16246,7 @@ async function viewChatDetail(token, id) {
       if (r.kind === "user_message" || r.kind === "reply") talkSeen.push(r);
       if (r.kind === "plan_usage") planRecord = r;
       const line = chatLine(r, { engine: engineOf(), remember: rememberLine, saveSkill: saveSkillLine, who: view.card && view.card.name });
-      if (line) { transcript.append(line); if (line.origin) chatOriginFill(line, line.origin); }
+      if (line) { quietLog.add(line, r); if (line.origin) chatOriginFill(line, line.origin); }
     }
   };
   const apply = (data) => {
@@ -15811,6 +16344,7 @@ async function viewChatDetail(token, id) {
     try {
       await api.post(`/api/chats/${encodeURIComponent(id)}/messages`, { text });
       input.value = "";
+      homeAskGrow(input);
       sentNow += 1;
       openers.sync();
       await pollOnce();
@@ -15898,8 +16432,17 @@ async function viewChatDetail(token, id) {
   const groupNote = inGroup ? el("p", { class: "small", "data-chat": "group-note" },
     `這是群組「${typeof inGroup.name === "string" ? inGroup.name : ""}」裡的對話，要說話請到群組裡。 `,
     el("a", { href: `#/chat/group/${encodeURIComponent(inGroup.id)}` }, "回到群組")) : null;
-  const composer = inGroup ? null : el("div", { class: "chat-composer" }, input, openers.node,
-    el("div", { class: "row" }, sendBtn, stopBtn, skillUseButton(input)), sendNote, limitBox, openers.note);
+  // P51-2: the box is the home page's box: the words above, whom you talk to and 「用常用做法」 at the left, stop and send at the right. A chat a routine opened has no
+  // one to change to. The list is drawn from the answer of GET /api/chats read when this page was opened; with none, there is no button.
+  const picker = inGroup || typeof all.routine_title === "string" || !ownerId ? null
+    : whoPicker({ cards: info && info.cards, data: info, current: ownerId, currentName: all.card && all.card.name, dir: "up",
+      onPick: (c) => chatWhoGo(c.id, input.value, info), onLater: (c) => chatWhoLater(c.id, input.value) });
+  const composer = inGroup ? null : el("div", { class: "chat-composer" }, openers.node,
+    el("div", { class: "home-box chat-box", "data-chat": "box" }, input,
+      el("div", { class: "home-box-bar chat-box-bar row" },
+        el("div", { class: "chat-box-left" }, picker ? picker.node : null, skillUseButton(input)),
+        el("div", { class: "chat-box-right" }, stopBtn, sendBtn))),
+    sendNote, limitBox, openers.note);
   const isCeo = !inGroup && !!all.card && all.card.position === "planner";        // P40: only a CEO's chat has 「請幕僚長安排」
   const chief = isCeo ? chiefDesk(id, all.card) : null;
   chiefRef = chief;
@@ -15927,7 +16470,8 @@ async function viewChatDetail(token, id) {
   ].filter((x, i, arr) => x !== null || (i > 0 && arr[i - 1] !== null));
   const more = inGroup ? null : chatMoreMenu(menuItems);
   setKids(headBox, el("div", { class: "chat-head-top" }, titleBox, more ? more.node : null), lineBox, detailsBox);
-  setKids(main, crumbs([["員工", "#/employees"], [view.card && view.card.name || id]]), headBox, groupNote, chief ? chief.node : null, suggest ? suggest.node : null, skillDesk ? skillDesk.node : null, noteBox, transcript, liveBox, hintBox, composer);
+  // P51-1: the page is one centred column, 720px at most
+  setKids(main, chatColumn(crumbs([["員工", "#/employees"], [view.card && view.card.name || id]]), headBox, groupNote, chief ? chief.node : null, suggest ? suggest.node : null, skillDesk ? skillDesk.node : null, noteBox, transcript, liveBox, hintBox, composer));
   activeViewCleanup = () => { stopStream(); if (more) more.close(); if (chief) chief.stop(); if (suggest) suggest.stop(); if (skillDesk) skillDesk.stop(); };
   stream();
   if (opening) input.focus();
@@ -20773,11 +21317,11 @@ function openTemplatesSave(ctx) {
   const per = limits.per_template || { cards: 12, skills: 24, routines: 12 };
   const state = { confirm: false, error: "", warn: null, done: null, busy: false };
   const titleId = "tpl-save-title";
-  const input = el("input", { type: "text", maxlength: String(limits.max_name || 40), "data-tpl-save": "name", "aria-label": "團隊範本的名稱", placeholder: "取一個名字" });
+  const input = el("input", { type: "text", class: "input", maxlength: String(limits.max_name || 40), "data-tpl-save": "name", "aria-label": "團隊範本的名稱", placeholder: "取一個名字" });
   const bodyBox = el("div", { "data-templates": "save-body" });
   const foot = el("div", { class: "modal-actions", "data-templates": "save-foot" });
   const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-templates": "save" },
-    el("div", { class: "modal-box", style: "max-width: 680px; max-height: 88vh; overflow-y: auto;" },
+    el("div", { class: "modal-box tpl-dialog", style: "max-width: 680px; max-height: 88vh; overflow-y: auto;" },
       el("h2", { id: titleId, tabindex: "-1" }, "存成團隊範本"), bodyBox, foot));
   document.body.append(modal);
   const close = withModalA11y(modal, () => modal.remove());
@@ -20821,7 +21365,7 @@ function openTemplatesSave(ctx) {
       return;
     }
     const kids = [
-      el("label", { class: "small" }, "名稱（1 到 40 個字）　", input),
+      el("label", { class: "small tpl-save-name" }, "名稱（1 到 40 個字）", input),
       el("p", { class: "small", "data-templates": "save-summary" },
         `這次會存：${items.cards.length} 位員工、${items.skills.length} 個常用做法、${items.routines.length} 件定時工作。` +
         `最多存 ${limits.max_mine || 20} 個團隊範本，一個最多 ${per.cards} 位員工、${per.skills} 個常用做法、${per.routines} 件定時工作。`),
@@ -20927,7 +21471,7 @@ function openTemplatesUndo(ctx, apply) {
   const bodyBox = el("div", { "data-templates": "undo-body" });
   const foot = el("div", { class: "modal-actions", "data-templates": "undo-foot" });
   const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-templates": "undo" },
-    el("div", { class: "modal-box", style: "max-width: 680px; max-height: 88vh; overflow-y: auto;" },
+    el("div", { class: "modal-box tpl-dialog", style: "max-width: 680px; max-height: 88vh; overflow-y: auto;" },
       el("h2", { id: titleId, tabindex: "-1" }, "復原這次套用"), bodyBox, foot));
   document.body.append(modal);
   const close = withModalA11y(modal, () => modal.remove());
@@ -21020,7 +21564,7 @@ function openTemplatesPreview(ctx) {
   const bodyBox = el("div", { "data-templates": "preview-body" });
   const foot = el("div", { class: "modal-actions", "data-templates": "preview-foot" });
   const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-templates": "preview" },
-    el("div", { class: "modal-box", style: "max-width: 720px; max-height: 88vh; overflow-y: auto;" },
+    el("div", { class: "modal-box tpl-dialog", style: "max-width: 720px; max-height: 88vh; overflow-y: auto;" },
       el("h2", { id: titleId, tabindex: "-1" }, "預覽這次套用"), bodyBox, foot));
   document.body.append(modal);
   const close = withModalA11y(modal, () => modal.remove());
@@ -21207,7 +21751,7 @@ if (typeof module !== "undefined" && module.exports) {
     NAV_PARENT,
     syncAdvancedNav,
     PLAIN_ERRORS,
-    plainWords,
+    plainWords, versionUnknownWords, setupMissingLine,
     plainNotice,
     plainLine,
     limitReachedNotice,
@@ -21476,6 +22020,12 @@ if (typeof module !== "undefined" && module.exports) {
     CHAT_STATE,
     CHAT_INTRO,
     chatLine,
+    chatQuietSummary,
+    whoPicker,
+    chatWhoGo,
+    chatWhoLater,
+    homeAsk,
+    chatIsQuiet,
     viewMemory,
     viewShared,
     memoryRow,

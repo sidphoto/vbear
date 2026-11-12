@@ -204,12 +204,12 @@ function check15c(log, phase, typed, messages) {
   });
 
   // ---- the home page, normal mode ----------------------------------------------------------------------------------------
-  await test("home: title 首頁; waiting, team, today and ask are there, in this order; the old lobby is not; drawing sends nothing; no amount of money", async () => {
+  await test("home: title 首頁 (hidden, for the screen reader); waiting, ask, team and today are there, in this order (P50-1: the box comes before the team); the old lobby is not; drawing sends nothing; no amount of money", async () => {
     const W = world({ chats: [chatRow("c1", "p-ceo")] });
     const page = await home(W);
     assert.strictEqual(text(all(page.main, (n) => n.tag === "h1")[0]), "首頁");
     const order = all(page.main, (n) => n.getAttribute && ["waiting", "team", "today", "ask"].includes(n.getAttribute("data-home"))).filter((n) => n.tag === "section").map((n) => n.getAttribute("data-home"));
-    assert.deepStrictEqual(order, ["waiting", "team", "today", "ask"]);
+    assert.deepStrictEqual(order, ["waiting", "ask", "team", "today"]);
     const t = text(page.main);
     assert.ok(!/US\$|\$|金額|花了|花費/.test(t), "no money on the home page: " + t.match(/US\$[^ ]*|花[^，。]{0,6}/));
     assert.ok(!t.includes("冒險者大廳") && !t.includes("任務告示板") && !t.includes("新手第一局"));
@@ -217,9 +217,10 @@ function check15c(log, phase, typed, messages) {
     assert.deepStrictEqual(check15c(page.log, "draw"), []);
   });
 
-  await test("home: with nobody waiting the waiting block says so, in words", async () => {
+  await test("home: with nobody waiting (everything read) the waiting block takes no room and says nothing (P50-1: no 現在沒有要你決定的事 line any more); it is not claimed in words either", async () => {
     const page = await home(world());
-    assert.ok(text(one(page.main, "data-home", "waiting")).includes("現在沒有要你決定的事。"));
+    assert.ok(one(page.main, "data-home", "waiting").getAttribute("hidden") !== null, "hidden");
+    assert.ok(!text(page.main).includes("沒有要你決定的事"));
     assert.strictEqual(rows(page.main).length, 0);
   });
 
@@ -227,7 +228,7 @@ function check15c(log, phase, typed, messages) {
     const W = world({ chats: [chatRow("c-old", "p-acc")], cards: [cardOf(CEO), cardOf(ACCOUNTANT, { can_chat: false, reason: "這張卡的 AI 工具還沒準備好" })] });
     const page = await home(W);
     const ceoBtn = one(page.main, "data-employee", "p-ceo");
-    assert.ok(ceoBtn && text(ceoBtn).includes("小執") && text(ceoBtn).includes("CEO"));
+    assert.ok(ceoBtn && text(ceoBtn).includes("小執") && ceoBtn.getAttribute("title") === "CEO", "the name on the avatar, the position as its tooltip (P50-1)");
     const accBtn = one(page.main, "data-employee", "p-acc");
     assert.ok(text(page.main).includes("這張卡的 AI 工具還沒準備好"), "the reason is under the grey one");
     assert.ok(accBtn.className.includes("home-avatar-off") || accBtn.getAttribute("aria-disabled") === "true", "grey");
@@ -454,24 +455,27 @@ function check15c(log, phase, typed, messages) {
     assert.strictEqual(p2.location.hash, "#/chat/c-new");
   });
 
-  await test("fix47 three steps: step 1 is ticked and says 'can chat' only when a chat can start; a policy or an unchecked tool is said as it is", async () => {
-    const step = async (support) => { const page = await home(world({ profiles: [], cards: [], support })); return one(one(page.main, "data-home", "first-steps"), "data-home-step", "1"); };
-    const ok = await step({ state: "verified", detected: "2.1.318" });
-    assert.ok(ok.className.includes("done") && text(ok).includes("可以聊天"));
-    const held = await step({ state: "policy", detected: "2.1.318" });
-    assert.ok(!held.className.includes("done") && !text(held).includes("可以聊天") && text(held).includes("管理員設定"), text(held));
-    const unchecked = await step({ state: "unverified", detected: "2.1.318" });
-    assert.ok(!unchecked.className.includes("done") && !text(unchecked).includes("可以聊天") && text(unchecked).includes("安全檢查"), text(unchecked));
-    const codex = await step({ state: "unknown", codex: { state: "ready" } });
-    assert.ok(codex.className.includes("done"), "any tool that can chat ticks it");
-    assert.ok(all(held, (n) => n.tag === "a" && n.getAttribute("href") === "#/setup").length === 1, "still the way to look at the tools");
+  await test("fix47 first run: a tool's card says 'can chat' only when a chat can start; a policy or an unchecked tool is said as it is (P52-1: the card of the picker, in place of step 1)", async () => {
+    const READY = (id, over = {}) => ({ id, ready: true, state: "ready", installed: true, version: "1.2.3", login: "logged_in", ...over });
+    const card = async (support, tools, id = "claude") => { const page = await home(world({ profiles: [], cards: [], support, tools: tools || [READY("claude")] })); return { page, node: one(one(page.main, "data-home", "first-run"), "data-setup-pick", id) }; };
+    const ok = await card({ state: "verified", detected: "2.1.318" });
+    assert.ok(text(ok.node).includes("可以聊天"));
+    const held = await card({ state: "policy", detected: "2.1.318" });
+    assert.ok(!text(held.node).includes("可以聊天") && text(held.node).includes("管理員設定"), text(held.node));
+    const unchecked = await card({ state: "unverified", detected: "2.1.318" });
+    assert.ok(!text(unchecked.node).includes("可以聊天") && text(unchecked.node).includes("安全檢查"), text(unchecked.node));
+    const codex = await card({ state: "unknown", codex: { state: "ready" } }, [READY("codex", { chat_login: { state: "logged_in", problem: "" } })], "codex");
+    assert.ok(text(codex.node).includes("可以聊天"), "any tool that can chat says so");
+    assert.ok(all(held.page.main, (n) => n.tag === "a" && n.getAttribute("href") === "#/setup" && n.getAttribute("data-home") === "first-setup-link").length === 1, "still the way to look at all the tools");
   });
 
-  await test("fix47 look: the home box and the settings' own limit box have the other boxes' style (border, panel colour, the page's font), not the browser's grey box", () => {
-    for (const sel of [".home-ask-row textarea", "input[data-limit-input]"]) {
-      const rule = CSS.split("}").filter((r) => r.split("{")[0].split(",").some((s) => s.trim() === sel)).join(";");
-      assert.ok(/border:\s*1px solid var\(--line-2\)/.test(rule) && /background:\s*var\(--panel\)/.test(rule) && /font:\s*inherit/.test(rule), `${sel}: ${rule}`);
-    }
+  await test("fix47 look: the home box (now the rounded .home-box of P50-1) and the settings' own limit box have the other boxes' style (border, panel colour, the page's font), not the browser's grey box", () => {
+    const ruleOf = (sel) => CSS.split("}").filter((r) => r.split("{")[0].split(",").some((x) => x.trim() === sel)).join(";");
+    const box = ruleOf(".home-box");
+    assert.ok(/border:\s*1px solid var\(--line-2\)/.test(box) && /background:\s*var\(--panel\)/.test(box), `.home-box: ${box}`);
+    assert.ok(/font:\s*inherit/.test(ruleOf(".home-box textarea")), "the textarea in it has the page's font");
+    const limit = ruleOf("input[data-limit-input]");
+    assert.ok(/border:\s*1px solid var\(--line-2\)/.test(limit) && /background:\s*var\(--panel\)/.test(limit) && /font:\s*inherit/.test(limit), `input[data-limit-input]: ${limit}`);
   });
 
   await test("ask: the CEO is the first CEO of the config when that card is there, else the first employee whose position is CEO", async () => {
@@ -482,26 +486,24 @@ function check15c(log, phase, typed, messages) {
   });
 
   // ---- the three first steps -----------------------------------------------------------------------------------------------
-  await test("no employees: the three steps (the tool, the CEO, the first words) and nothing else; the third is grey; GET only", async () => {
+  await test("no employees: the first-run block (the big line, the three cards) and nothing else; nothing is chosen; GET only (P52-1: in place of the three steps)", async () => {
     const page = await home(world({ profiles: [], cards: [] }));
-    const steps = one(page.main, "data-home", "first-steps");
-    assert.ok(steps);
-    assert.deepStrictEqual(all(steps, (n) => n.getAttribute && n.getAttribute("data-home-step")).map((n) => n.getAttribute("data-home-step")), ["1", "2", "3"]);
-    assert.ok(one(steps, "data-home-step", "1").className.includes("done"), "a ready tool ticks step 1");
-    assert.ok(all(one(steps, "data-home-step", "1"), (n) => n.tag === "a" && n.getAttribute("href") === "#/setup").length === 1);
-    assert.ok(all(one(steps, "data-home-step", "2"), (n) => n.tag === "a" && n.getAttribute("href") === "#/ceo").length === 1);
-    const third = one(steps, "data-home-step", "3");
-    assert.ok(third.className.includes("off") && all(third, (n) => n.tag === "a").length === 0);
+    const first = one(page.main, "data-home", "first-run");
+    assert.ok(first);
+    assert.ok(text(first).includes("先選一家你有在用的 AI"));
+    assert.deepStrictEqual(all(first, (n) => n.getAttribute && n.getAttribute("data-setup-pick")).map((n) => n.getAttribute("data-setup-pick")), ["claude", "codex", "agy"]);
+    assert.strictEqual(one(page.main, "data-home", "first-steps"), null, "the old three steps are not drawn");
+    assert.strictEqual(all(page.main, (n) => n.tag === "a" && n.getAttribute("href") === "#/ceo").length, 0);
     assert.ok(!one(page.main, "data-home", "ask") && !one(page.main, "data-home", "team"));
     assert.deepStrictEqual(check15c(page.log, "draw"), []);
     const none = await home(world({ profiles: [], cards: [], tools: [{ id: "claude", ready: false, state: "not_installed" }], support: { state: "unknown", detected: null } }));
-    assert.ok(!one(one(none.main, "data-home", "first-steps"), "data-home-step", "1").className.includes("done"), "no ready tool: not ticked");
+    assert.ok(!text(one(one(none.main, "data-home", "first-run"), "data-setup-pick", "claude")).includes("可以聊天"), "no ready tool: not said");
   });
 
-  await test("no employees: what waits for the person is still listed above the three steps", async () => {
+  await test("no employees: what waits for the person is still listed above the first-run block", async () => {
     const page = await home(world({ profiles: [], cards: [], waiting: [{ kind: "routine_due", run_id: "run1", routine_id: "r1", name: "晨間整理", slot: "2026-11-10T08:00" }] }));
     const order = all(page.main, (n) => n.tag === "section" && n.getAttribute("data-home")).map((n) => n.getAttribute("data-home"));
-    assert.deepStrictEqual(order, ["waiting", "first-steps"]);
+    assert.deepStrictEqual(order, ["waiting", "first-run"]);
     assert.strictEqual(rows(page.main).length, 1);
   });
 
@@ -616,12 +618,13 @@ function check15c(log, phase, typed, messages) {
   });
 
   // ---- today -----------------------------------------------------------------------------------------------------------------
-  await test("today: how many routines are still to come today and the next one; the last chats; no amounts; a read that failed is said, not 0", async () => {
+  await test("today: how many routines are still to come today and the next one (one grey line, P50-1: the last chats moved to the side bar); no amounts; a read that failed is said, not 0; none to say: no room", async () => {
     const now = new Date(2026, 10, 10, 12, 0, 0);   // Tuesday, 12:00 (the page's clock is passed in)
     const day = (now.getDay() + 6) % 7;
     const rs = [{ id: "r1", name: "記帳提醒", enabled: true, days: [day], times: ["18:00", "07:00"], runs: [], next: { slot: "x", at: now.getTime() / 1000 + 6 * 3600 } },
       { id: "r2", name: "關著的", enabled: false, days: [day], times: ["19:00"], runs: [] }, { id: "r3", name: "別天", enabled: true, days: [(day + 1) % 7], times: ["20:00"], runs: [] }];
-    const page = await home(world({ routines: rs, chats: [chatRow("c1", "p-ceo", { last_at: now.getTime() / 1000 - 600 }), chatRow("c2", "p-acc", { last_at: now.getTime() / 1000 - 86400 * 3 })] }));
+    const late = { id: "r9", name: "收工整理", enabled: true, days: [0, 1, 2, 3, 4, 5, 6], times: ["23:59"], runs: [] };   // still to come at any time of the day the test runs
+    const page = await home(world({ routines: [late], chats: [chatRow("c1", "p-ceo", { last_at: now.getTime() / 1000 - 600 }), chatRow("c2", "p-acc", { last_at: now.getTime() / 1000 - 86400 * 3 })] }));
     const m = evalIn(page, "typeof homeTodayModel");
     assert.strictEqual(m, "function");
     const model = page.ctx.homeTodayModel(JSON.parse(JSON.stringify({ routines: rs, readable: true })), now);
@@ -629,19 +632,20 @@ function check15c(log, phase, typed, messages) {
     assert.strictEqual(model.next.name, "記帳提醒");
     assert.strictEqual(model.next.time, "18:00");
     const t = text(one(page.main, "data-home", "today"));
-    assert.ok(t.includes("定時工作") && t.includes("小執"), t);
+    assert.ok(t.includes("今天還有 1 件，下一件 23:59「收工整理」") && t.includes("看定時工作"), t);
+    assert.ok(!t.includes("小執") && !t.includes("最近聊過"), "the last chats are not on the home page any more");
     assert.ok(!/US\$/.test(t));
     const bad = await home(world({ fail: { "GET /api/routines": { status: 500, body: { error: "讀不到" } } } }));
     const bt = text(one(bad.main, "data-home", "today"));
     assert.ok(bt.includes("讀不到定時工作") && !/今天(還有|沒有)\s*0/.test(bt), bt);
     const none = await home(world());
-    assert.ok(text(one(none.main, "data-home", "today")).includes("還沒有定時工作"));
+    assert.ok(one(none.main, "data-home", "today").getAttribute("hidden") !== null && !text(one(none.main, "data-home", "today")), "no routine: the block takes no room");
   });
 
   await test("team: a list that could not be read says so (not an empty team); a chats list that could not be read does not make anyone grey", async () => {
     const bad = await home(world({ fail: { "GET /api/agent-profiles": { status: 500, body: { error: "壞了" } } } }));
     assert.ok(text(one(bad.main, "data-home", "team")).includes("讀不到員工"));
-    assert.ok(!one(bad.main, "data-home", "first-steps"), "not the three steps for a team nobody could read");
+    assert.ok(!one(bad.main, "data-home", "first-run"), "not the first run for a team nobody could read");
     const nochat = await home(world({ fail: { "GET /api/chats": { status: 500, body: { error: "壞了" } } } }));
     assert.ok(all(nochat.main, (n) => n.getAttribute && n.getAttribute("data-employee") && n.className.includes("home-avatar-off")).length === 0);
   });
@@ -656,17 +660,17 @@ function check15c(log, phase, typed, messages) {
     const heads = all(sec, (n) => n.tag === "h2").map(text);
     for (const h of ["找技能", "最近的專案"]) assert.ok(heads.includes(h), h);
     const order = all(adv.main, (n) => n.tag === "section" && n.getAttribute("data-home")).map((n) => n.getAttribute("data-home"));
-    assert.deepStrictEqual(order, ["waiting", "team", "today", "ask", "advanced"]);
+    assert.deepStrictEqual(order, ["waiting", "ask", "team", "today", "advanced"]);
     assert.ok(t.includes("首頁"));
     const normal = await home(world({ config: { advanced_mode: false } }));
     assert.ok(!one(normal.main, "data-home", "advanced") && !one(normal.main, "id", "h-board") && !one(normal.main, "id", "h-tasks"));
     assert.deepStrictEqual(check15c(adv.log, "draw"), []);
   });
 
-  await test("advanced mode: with no employees the first game is under 進階, the three steps stay on top", async () => {
+  await test("advanced mode: with no employees the first game is under 進階, the first-run block stays on top", async () => {
     const page = await home(world({ profiles: [], cards: [], config: { advanced_mode: true, onboarding_dismissed: false } }));
     const order = all(page.main, (n) => n.tag === "section" && n.getAttribute("data-home")).map((n) => n.getAttribute("data-home"));
-    assert.deepStrictEqual(order, ["waiting", "first-steps", "advanced"]);
+    assert.deepStrictEqual(order, ["waiting", "first-run", "advanced"]);
     assert.ok(text(one(page.main, "data-home", "advanced")).includes("新手第一局") || byData(page.main, "id", "h-onboarding").length === 1);
     const normal = await home(world({ profiles: [], cards: [], config: { advanced_mode: false, onboarding_dismissed: false } }));
     assert.ok(!text(normal.main).includes("新手第一局"));
@@ -737,9 +741,9 @@ function check15c(log, phase, typed, messages) {
     assert.ok(!/innerHTML|insertAdjacentHTML|outerHTML/.test(src));
     assert.ok(!/\p{Extended_Pictographic}/u.test(src));
     assert.ok(!/https?:\/\//.test(src));
-    for (const f of ["viewEmployees", "viewWork", "openChatWith", "homeWaiting", "homeToday", "homeAsk", "homeFirstSteps"]) assert.ok(new RegExp(`function ${f}\\b`).test(src), f);
+    for (const f of ["viewEmployees", "viewWork", "openChatWith", "homeWaiting", "homeToday", "homeAsk", "homeFirstRun"]) assert.ok(new RegExp(`function ${f}\\b`).test(src), f);
     assert.ok(!/US\$/.test(src), "the home page and the employees' page show no amount");
-    for (const k of ["waiting", "team", "today", "ask", "ask-input", "ask-send", "first-steps", "limit-reached"]) assert.ok(src.includes(`"${k}"`), k);
+    for (const k of ["waiting", "team", "today", "ask", "ask-input", "ask-send", "first-run", "limit-reached"]) assert.ok(src.includes(`"${k}"`), k);
     assert.ok(/\.home-avatar/.test(CSS) && /P47-2 home/.test(CSS), "the CSS has its own marked part");
   });
 

@@ -611,14 +611,14 @@ writing the user's defaults. `macos/test_browser_mode.sh` exercises the Swift la
 v0.21.0 (ADR 0013) changes what the page shows and nothing on the server: Python changed only in the Chinese wording of `vbear/autonomy.py` and
 `vbear/first_ceo.py`, and there is no new route, setting, data file or kind of chat event (guard rule 15b).
 
-- **Menu.** `web/index.html` has four static items (首頁, 員工, 工作, 設定) and an 進階 block whose `li` carry `data-advanced` and `hidden`.
+- **Menu.** `web/index.html` has four static items (首頁, 員工, 工作, 設定; since v0.23 the first is 「新對話」 and 員工, 工作, 設定 sit at the foot of the bar, see "Chat-first home" below) and an 進階 block whose `li` carry `data-advanced` and `hidden`.
   `syncAdvancedNav(on)` shows or hides that block: it reads `advanced_mode` from `/api/config` once at start, and the switch in the settings page calls it
   when it changes. `advanced_mode` is a display flag only (rule 15a). `NAV_PARENT` maps the first part of an address to the menu item that is lit
   (`employees`, `chat`, `ceo`, `memory`, `shared`, `templates`, `office` → 員工; `work`, `dispatch`, `routines`, `meetings`, `actions`, `my-skills` → 工作;
   `settings`, `setup`, `welcome` → 設定; the rest → 進階); every route of v0.20.0 still draws, and an advanced page opened while advanced mode is off gets one
-  line saying so. `navPageName` and `wireNavMenu` keep the phone's row of four items and the 進階 button.
+  line saying so. `navPageName` and `wireNavMenu` keep the phone's menu button (a row of four items and a 進階 button until v0.22; since v0.23 the whole bar is a drawer behind the button).
 - **Pages.** `viewHome` draws 等你決定 (`homeWaiting`, the same entries in both modes), 我的員工 (`homeTeam`), 今天 (`homeToday`) and the box 「想做什麼？跟 CEO 說」
-  (`homeAsk`), or the three steps (`homeFirstSteps`) when there is no employee; in advanced mode the old home's sections are drawn below, by the same functions.
+  (`homeAsk`), or the first run on one page (`homeFirstRun`, v0.25) when there is no employee; in advanced mode the old home's sections are drawn below, by the same functions.
   `viewEmployees` (`#/employees`) and `viewWork` (`#/work`) read only existing GET routes. `openChatWith(profileId, { text })` finds or opens the one-to-one chat of
   an employee and, from the home box, makes the one `POST …/messages` of the person's press; if the employee is busy, has a card waiting or cannot chat yet it
   sends nothing and leaves the words in that chat's box (rule 15c).
@@ -690,3 +690,51 @@ live view with `fetch` and a stream reader (the header cannot be set on `EventSo
 - `tests/frontend/*.cjs` run the UI logic in Node against a minimal synthetic DOM. They are not browser tests.
 - Some runtime tests measure timing, such as stream latency and an 8 s version probe, and can fail
   occasionally on a heavily loaded machine.
+
+## Chat-first home — `web/index.html`, `web/app.js`, `web/style.css` (v0.23)
+
+v0.23.0 (ADR 0015) changes what the page shows and nothing on the server: `vbear/` changed only in the version number, there is no new route or request (guard rule 15b still passes), and no new `localStorage` key.
+
+- **Home.** `viewHome` draws one column (`div.home-page[data-home="page"]`, at most 720px; `data-home-layout="center"` puts about 22vh above it when nothing waits): a visually hidden `h1` 「首頁」, `homeWaiting` (a pill
+  `button.home-pill`, `aria-expanded` / `aria-controls="home-waiting-rows"`, that opens the old list in place; the block is hidden when the data is complete and nothing waits, and says 「載入中」 while it is not here),
+  `homeGreeting` 「今天想做什麼？」, `homeAsk` (the box: `div.home-box`, a `textarea` that grows by `homeAskGrow` up to 208px, the 送出 button at its foot, `HOME_CEO_ASK` in small print under it;
+  `homeAskKeydown` sends only on Enter with Cmd or Ctrl), the three example buttons (`HOME_EXAMPLES`, `data-home="ask-example"`, only before the first conversation, handler `homeExampleFill`: writes the value, grows, focuses),
+  `homeTeam` (small avatars with names and a last 「＋」 button, `aria-label` 「新增員工」) and `homeToday` (one grey line). The cursor goes into the box when nothing else has the focus (`homeNothingFocused`, not on a touch screen).
+- **Side bar.** `web/index.html`: brand and `#nav-toggle` (`.side-top`), then `#side-panel` with 「新對話」 (`href="#/"`, `data-nav="home"`), the 最近 section (`#nav-recent`), `#nav-list` (員工, 工作, 設定 and the 進階 block) and `#scan-status`,
+  then `#nav-backdrop`. `navRecentRows(chatsRes)` and `drawNavRecent()` (marked in the source by `// ---------- the side bar's 最近`) draw at most 8 employees from the result of `GET /api/chats` that the home page already read
+  (`waitingChatsRead`, filled by the 30-second waiting model); they call no `api` and set no timer (guard rule 17b). A dot with `aria-label` 「有事等你決定」 marks a row whose chat has a card waiting.
+  On a phone (720px and narrower) `#side-panel` is a drawer: `.side.nav-open` shows it, `wireNavMenu` closes it on a link, Escape or the backdrop, and `syncNavMenu` puts the page's name in the button's `aria-label`.
+- **Look.** The base colours in `:root` and the two dark blocks are neutral greys with a `--side-bg` one step off the page; the P50-2 and P50-3 parts at the end of `web/style.css` hold the bar, the drawer (no animation under
+  `prefers-reduced-motion`), pill buttons and card frames without shadow.
+- **Tests.** `tests/frontend/p50_home.cjs`, `p50_nav.cjs`, `p50_theme.cjs`; `tests/test_autonomy_guard.py` (17a, 17b, 17c; 15b unchanged); `tests/test_p50_docs.py` checks the documents.
+
+## Chat reads like text — `web/app.js`, `web/style.css` (v0.24)
+
+v0.24.0 (ADR 0016) changes what the chat pages show and nothing on the server: `vbear/` changed only in the version number, there is no new route or request (guard rule 15b still passes), and no new `localStorage` key.
+
+- **Page and lines.** `chatColumn(...)` is the one centred column (`div.chat-page[data-chat="page"]`, 720px at most) of the list, the page that prepares a chat and a chat. `chatLine(rec, opts)` still makes the `<li>` of each record (same `data-chat`, `data-seq`);
+  the person's and the employee's lines have `.chat-who` (the name) and `.chat-time` (`chatTimeNode`, shown on hover, focus and with no hover), and the person's own line `.chat-who-quiet` unless VBear sent it for a dispatch.
+- **Folds.** `chatIsQuiet(rec)` says whether a record's line may be folded; `chatQuietLog(log).add(line, rec)` appends a line to the log or to the fold that is open at the end (`li[data-chat="quiet-item"] > details[data-chat="quiet-group"]`, its
+  `summary[data-chat="quiet-summary"]` written only by `chatQuietSummary(counts)`, its `ul[data-chat="quiet-list"]` holding the original lines); `CHAT_QUIET_KINDS` lists the six `data-chat` values. Guard rules 18a and 18d scan these.
+- **The box and whom you talk to.** In `viewChatDetail` the box is `div.home-box.chat-box` (`textarea` grown by `homeAskGrow`, `.home-box-bar.chat-box-bar` with `.chat-box-left` (the picker and 「用常用做法」) and `.chat-box-right` (stop, send)); its one keydown is the rule 18c's.
+  `whoPicker(opts)` makes the button (`data-ask="who"`) and the pop-up (`.who-pop`, `role="listbox"` for the options and a group of links for those who cannot chat yet; options are `data-ask="who-option"`, links `data-ask="who-later"`);
+  `chatWhoGo(profileId, words, chatsRes)` and `chatWhoLater(profileId, words)` are the chat page's handlers; `homeAsk` keeps `target` (whom the box is for, the CEO on every visit). Guard rule 18b scans them.
+- **Head, preparation page, list.** `.chat-head-top` holds `.chat-title` (the `h1` and the state badge) and the 「⋯」 menu; `chatHeadLine` still makes the line under it. `chatRow` is a plain row (`.chat-row`, a `.chat-wait-dot` when a card waits).
+- **Look.** The P51-1, P51-2 and P51-3 parts at the end of `web/style.css` (the earlier rules, including P47-4's, are kept and overridden there); `.home-box`, `.home-box-bar`, `.home-send` and `.home-example` of P50-1 are shared, not copied.
+- **Tests.** `tests/frontend/p51_chat.cjs`, `p51_who.cjs`, `p51_head.cjs`; `tests/test_autonomy_guard.py` (18a, 18b, 18c, 18d; 15b unchanged); `tests/test_p51_docs.py` checks the documents.
+
+## First run on one page — `web/app.js`, `web/style.css` (v0.25)
+
+v0.25.0 (ADR 0017) changes what the home page, the start-up page's pieces and the words for a tool that cannot be used show, and nothing on the server: `vbear/` changed only in the version number and there is no new route or request (guard rule 15b still passes).
+
+- **The block.** `homeFirstRun(env)` (the part marked `// ---- the first run on the home page (v0.25, P52-1, ADR 0017) ----` up to `// ---- end of the first run on the home page ----`) is drawn by `viewHome` in place of the old three steps (`homeFirstSteps`, removed) when there is no employee. It returns `{node, update(isLoading), tick()}`: `node` is `section[data-home="first-run"]` in the home page's 720px column, its big line has the greeting's class (`.home-greeting.home-first-title`), the picker is `setupPickerNode` (`data-home="first-pick"`), the chosen tool's steps are `kit.toolCard` (`data-home="first-prepare"`), and the CEO part (`first-ceo`, `first-ceo-name`, `first-ceo-create`) appears only when the chosen tool can chat. From P55 the CEO part comes right under the choice and the tool's card sits in a `details[data-home="first-checks"]` made once (closed when the tool turns from cannot-chat to can-chat, left as the person has it after that); a tool that cannot chat yet has `first-reason` above an open list, and the big line after a choice is `FIRST_TITLE_CHOSEN`. `update` draws again only when what the block shows changed (a key of the tools and the chats), so the 5-second refresh keeps the pick, the typed name, an open confirm area and the focus; `tick` is the quiet `GET /api/setup/tools` that `homeTick` adds.
+- **Shared with the start-up page and the CEO page.** `setupKit(ctx)` (marked `// ---------- setup kit (v0.25, P52-1)`) holds what `viewSetup` and the home block both draw and send: `toolCard`, `tryBox`, `checkOn` (`ask`, `cancel`, `confirm`), `run`, `refresh`; `setupDailyBox` is the daily-limit fold. `ceoCreate(plan, name, instructions, afterMade)` makes the CEO card (`viewCeo`'s button and the home block's button both call it; the optional `afterMade` is where the home block writes `setup_done` once, guard rule 19b).
+- **The gate.** `viewHome` no longer redirects a person whose `setup_done` is not true to `#/setup`: after the server's `POST /api/setup/settle` it stays and draws; only `welcomeWanted(configRes)` (the app window, first-time page not seen, and the save of that mark has not failed in this window: `welcomeSaveFailed`) still goes to `#/welcome`, whose buttons now return to `#/`.
+- **Plain words.** `versionUnknownWords(tool, version)` (no version literal in it; guard rule 19c) is the one sentence for a tool whose version VBear does not know; `PLAIN_ERRORS` rules with a `build` function take the tool and the version out of the server's sentence (the server's sentence stays whole as the 「技術細節」); `setupVendorStatus` has the kind `unsupported` (with `raw`), `setupMissingLine(vendor, status)` says which step is missing on the home page and the CEO page, and `chatPrepState` and `drawPrep` carry the same for the page that prepares a chat.
+- **Small things.** In `viewSettings` `limits` stands above `notifySettings()`; the three team-template dialogs have `.modal-box.tpl-dialog` (the bar `.tpl-dialog .modal-actions` is sticky, wraps and the box has no bottom padding of its own); the save dialog's name box has `.input`.
+- **Look.** The P52-1, P52-2 and P52-3 parts at the end of `web/style.css`; the first-run block is frameless in the column like the rest of the home page (cards without a fill, pill buttons), and the old `.home-step` rules are gone.
+- **Tests.** `tests/frontend/p52_first_run.cjs`, `p52_words.cjs`, `p52_small.cjs`; `tests/test_autonomy_guard.py` (19a, 19b, 19c; 15b unchanged); `tests/test_p52_docs.py` checks the documents.
+
+### Looking at the pages — `tools/shots_stub.py` (P54)
+
+A developer tool, not part of the product: a stub console (`127.0.0.1` only, a port from `--port` that is not 7788, 7789 or 7795 to 7803; it serves `web/` and answers the `GET /api/...` the pages read with invented JSON; every POST, PUT, PATCH and DELETE is answered 409 and its path is listed in the result, which should be empty) and, through `qa_p47.py`'s `Browser` and `Page` (a headless Chrome over a pipe), screenshots of about 19 scenes at 1280x800 light, 1280x800 dark and 400x800 light. It imports nothing of `vbear/` and reads no state folder; `tests/test_shots_stub.py` tests its pure parts and `tests/frontend/p54_look.cjs` keeps the fixes that the pictures led to (the phone bar's height, the drawer, the single focus ring of the box, the room of the hidden buttons, the fold line).

@@ -197,9 +197,12 @@ class SecurityModelTests(unittest.TestCase):
             self.assertIn(word, self.section, word)
 
     def test_the_sentences_it_quotes_are_the_pages(self):
-        for words in ("允許這一次", "改內容再允許", "拒絕", "技術細節", "保護範圍（沙盒）", "用量與上限", "想做什麼？跟 CEO 說"):
+        for words in ("允許這一次", "改內容再允許", "拒絕", "技術細節", "保護範圍（沙盒）", "用量與上限"):
             self.assertTrue(words in self.app, words)
             self.assertTrue(words in self.section, words)
+        # P50-1: the box under 「想做什麼？跟 CEO 說」 became the greeting 「今天想做什麼？」 (the v0.21 section keeps quoting the old words as that version's)
+        self.assertTrue("想做什麼？跟 CEO 說" in self.section)
+        self.assertTrue("今天想做什麼？" in self.app)
         self.assertTrue("到設定調高" in self.app)
 
     def test_the_old_words_are_no_longer_quoted_as_the_page_says_them(self):
@@ -226,8 +229,9 @@ class ReadmeAndReferenceTests(unittest.TestCase):
         for name, text in (("en", self.en), ("zh", self.zh)):
             for word in ("首頁", "員工", "工作", "設定", "進階模式", "用量與上限", "GLOSSARY.md", "指令視窗", "AI 工具的外掛清單", "員工詳細資料"):
                 self.assertIn(word, text, (name, word))
-        self.assertIn("The menu on the left has 首頁, 員工, 工作 and 設定", self.en)
-        self.assertIn("左邊選單有「首頁」「員工」「工作」「設定」", self.zh)
+        # P50-4 (v0.23): the bar's first item is 新對話 and the three others are a size smaller (the words of the four items are all still in the text above)
+        self.assertIn("The bar on the left has 新對話 (back to the box on the home page), 最近 (the employees you talked with lately) and, smaller, 員工, 工作 and 設定", self.en)
+        self.assertIn("左邊選單有「新對話」「最近」，以及小一級的「員工」「工作」「設定」", self.zh)
 
     def test_the_old_menu_sentences_are_gone(self):
         self.assertNotIn("The menu on the left has 冒險者大廳", self.en)
@@ -253,7 +257,7 @@ class ReadmeAndReferenceTests(unittest.TestCase):
     def test_the_architecture_has_the_section_and_names_things_the_page_has(self):
         self.assertIn("## Plain navigation — `web/index.html`, `web/app.js` (v0.21)", self.arch)
         part = section(self.arch, "## Plain navigation — `web/index.html`, `web/app.js` (v0.21)", "## Easy start 2 — `web/app.js`, `macos/VBear/main.swift`, `vbear/spend_keep.py`, `vbear/first_ceo.py` (v0.22)")
-        for name in ("syncAdvancedNav", "NAV_PARENT", "viewHome", "homeWaiting", "homeTeam", "homeToday", "homeAsk", "homeFirstSteps", "viewEmployees", "viewWork",
+        for name in ("syncAdvancedNav", "NAV_PARENT", "viewHome", "homeWaiting", "homeTeam", "homeToday", "homeAsk", "homeFirstRun", "viewEmployees", "viewWork",
                      "openChatWith", "plainWords", "plainNotice", "limitReachedNotice", "dailyLimitEditor", "chatPrepState", "navPageName", "wireNavMenu"):
             self.assertIn(name, part, name)
             self.assertRegex(self.app, rf"(function|const) {name}\b", f"web/app.js has {name}")
@@ -262,7 +266,8 @@ class ReadmeAndReferenceTests(unittest.TestCase):
         self.assertEqual(problems(part, "ARCHITECTURE v0.21"), [])
 
     def test_the_menu_words_the_documents_quote_are_the_pages(self):
-        for word in ("首頁", "員工", "工作", "設定", "進階", "指令視窗", "工作台", "流程", "專案資料夾", "AI 工具的外掛清單", "員工詳細資料", "你的 AI 員工"):
+        # P50-2: the first item of the menu is 「新對話」 (the page itself, #/, is still called 首頁 in the documents)
+        for word in ("新對話", "員工", "工作", "設定", "進階", "指令視窗", "工作台", "流程", "專案資料夾", "AI 工具的外掛清單", "員工詳細資料", "你的 AI 員工"):
             self.assertIn(word, self.index, word)
 
 

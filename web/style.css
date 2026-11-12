@@ -1,12 +1,14 @@
 :root {
-  --bg: #f4f1ea;
-  --panel: #fffdf8;
-  --panel-2: #f8f4ec;
-  --ink: #1f2522;
-  --ink-2: #4a524d;
-  --ink-3: #737b75;
-  --line: #e2dccf;
-  --line-2: #d3cbbb;
+  /* Neutral greys (v0.23, see the P50-3 part at the end; no green, no beige); the side bar is one step off the page (--side-bg); the green accent is only for the main actions and the item you are on */
+  --bg: #ffffff;
+  --panel: #ffffff;
+  --panel-2: #f5f5f4;
+  --side-bg: #f7f7f6;
+  --ink: #17191a;
+  --ink-2: #4b5052;
+  --ink-3: #686e70;
+  --line: #e6e6e3;
+  --line-2: #d6d6d2;
   --accent: #2f5d50;
   --accent-ink: #f3efe4;
   --accent-soft: #e2ece7;
@@ -15,8 +17,8 @@
   --warn: #9a6a00;     --warn-soft: #fbf0d4;
   --bad: #b3372b;      --bad-soft: #f8e2de;
   --info: #2f5f8f;     --info-soft: #e1ebf5;
-  --mute: #6b6f6c;     --mute-soft: #ebe8e1;
-  --shadow: 0 1px 2px rgba(40, 35, 25, .06), 0 4px 14px rgba(40, 35, 25, .05);
+  --mute: #6b6f6c;     --mute-soft: #f0f0ee;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .06), 0 4px 14px rgba(0, 0, 0, .05);
   /* the home board's cards (design lobby v1.2): the frame and bar of a card that waits for you, and badge ink
      dark enough for 4.5:1 on the soft backgrounds */
   --quest-edge: #8a5a00; --quest-bar: #8a5a00;
@@ -41,12 +43,12 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #151917; --panel: #1c211f; --panel-2: #222826; --ink: #e9ece8; --ink-2: #bcc3be;
-    --ink-3: #8c948f; --line: #2d3431; --line-2: #3a423e; --accent: #7fb8a4; --accent-ink: #10201a;
+    --bg: #111213; --panel: #17191a; --panel-2: #1e2021; --side-bg: #0c0d0e; --ink: #ecedeb; --ink-2: #bfc3c2;
+    --ink-3: #8d9394; --line: #26282a; --line-2: #34373a; --accent: #7fb8a4; --accent-ink: #10201a;
     --accent-soft: #23332d; --gold: #e0b25c;
     --ok: #74c793; --ok-soft: #1d3326; --warn: #e4b54f; --warn-soft: #3a2f14;
     --bad: #f08a7d; --bad-soft: #3d201c; --info: #86b4e3; --info-soft: #1c2b3b;
-    --mute: #9aa09c; --mute-soft: #2a2f2d;
+    --mute: #9aa09c; --mute-soft: #242628;
     --quest-edge: #e4b54f; --quest-bar: #e4b54f; --quest-ok: #74c793; --quest-warn: #e4b54f; --quest-mute: #9aa09c;
     --vn-red: #DA251D; --vn-on-red: #ffffff; --vn-red-ink: #ff8f85;
     --vn-red-deep: #d9776b; --vn-gold: #ffcd00;
@@ -59,12 +61,12 @@
   }
 }
 :root[data-theme="dark"] {
-  --bg: #151917; --panel: #1c211f; --panel-2: #222826; --ink: #e9ece8; --ink-2: #bcc3be;
-  --ink-3: #8c948f; --line: #2d3431; --line-2: #3a423e; --accent: #7fb8a4; --accent-ink: #10201a;
+  --bg: #111213; --panel: #17191a; --panel-2: #1e2021; --side-bg: #0c0d0e; --ink: #ecedeb; --ink-2: #bfc3c2;
+  --ink-3: #8d9394; --line: #26282a; --line-2: #34373a; --accent: #7fb8a4; --accent-ink: #10201a;
   --accent-soft: #23332d; --gold: #e0b25c;
   --ok: #74c793; --ok-soft: #1d3326; --warn: #e4b54f; --warn-soft: #3a2f14;
   --bad: #f08a7d; --bad-soft: #3d201c; --info: #86b4e3; --info-soft: #1c2b3b;
-  --mute: #9aa09c; --mute-soft: #2a2f2d;
+  --mute: #9aa09c; --mute-soft: #242628;
   --quest-edge: #e4b54f; --quest-bar: #e4b54f; --quest-ok: #74c793; --quest-warn: #e4b54f; --quest-mute: #9aa09c;
   --vn-red: #DA251D; --vn-on-red: #ffffff; --vn-red-ink: #ff8f85;
   --vn-red-deep: #d9776b; --vn-gold: #ffcd00;
@@ -86,7 +88,7 @@ button, input, select { font: inherit; color: inherit; }
 .skip:focus { left: 8px; }
 
 .shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 100vh; }
-.side { position: sticky; top: 0; height: 100vh; padding: 20px 14px; border-right: 1px solid var(--line); background: var(--panel-2); display: flex; flex-direction: column; gap: 18px; }
+.side { position: sticky; top: 0; height: 100vh; padding: 20px 14px; border-right: 1px solid var(--line); background: var(--side-bg); display: flex; flex-direction: column; gap: 18px; }
 .brand { display: flex; gap: 10px; align-items: center; padding: 4px 8px; }
 .brand-mark { display: grid; place-items: center; width: 36px; height: 36px; }
 .brand-mark img { display: block; width: 32px; height: 32px; filter: var(--brand-mark-filter); }  /* 32 x 32 grid at 32 px: one pixel per cell */
@@ -96,7 +98,7 @@ button, input, select { font: inherit; color: inherit; }
 .nav a { display: flex; gap: 10px; align-items: center; padding: 9px 10px; border-radius: 9px; color: var(--ink-2); text-decoration: none; }
 .nav a span { width: 18px; text-align: center; color: var(--ink-3); }
 .nav a:hover { background: var(--mute-soft); color: var(--ink); }
-.nav a[aria-current="page"] { background: var(--accent-soft); color: var(--ink); font-weight: 600; }
+.nav a[aria-current="page"] { background: var(--mute-soft); color: var(--accent); font-weight: 600; }
 .nav a[aria-current="page"] span { color: var(--accent); }
 /* P47-1 nav: the advanced part of the menu shows only when the advanced mode is on (the page takes the hidden attribute off) */
 .nav [hidden] { display: none; }
@@ -122,15 +124,6 @@ button, input, select { font: inherit; color: inherit; }
 .home-avatar-off { opacity: .6; }
 .home-avatar-name { font-weight: 650; overflow-wrap: anywhere; text-align: center; }
 .home-avatar-why { text-align: center; overflow-wrap: anywhere; }
-.home-ask-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
-.home-ask-row textarea { flex: 1 1 320px; min-width: 0; }
-.home-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
-.home-step { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
-.home-step.done { border-color: var(--ok); }
-.home-step.off { opacity: .6; }
-.home-step-mark { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 700; flex: none; }
-.home-step.done .home-step-mark { background: var(--ok-soft); color: var(--ok); }
-.home-step-body { flex: 1 1 auto; display: grid; gap: 2px; min-width: 0; }
 .home-advanced { margin-top: 36px; padding-top: 12px; border-top: 1px solid var(--line); }
 .home-employee .card-top { align-items: center; justify-content: flex-start; gap: 12px; }
 .work-links { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 8px; }
@@ -138,7 +131,6 @@ button, input, select { font: inherit; color: inherit; }
 .work-link-name { font-weight: 650; min-width: 9em; }
 @media (max-width: 720px) {
   .home-person { width: 96px; }
-  .home-step { flex-wrap: wrap; }
 }
 
 .stage { min-width: 0; }
@@ -286,12 +278,6 @@ details.fold > .fold-body { padding: 0 14px 14px; }
 #toast.show { opacity: 1; transform: none; }
 
 @media (max-width: 820px) {
-  .shell { grid-template-columns: minmax(0, 1fr); }   /* a long nav scrolls instead of widening the page */
-  .side { min-width: 0; position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; padding: 10px 12px; gap: 8px; border-right: 0; border-bottom: 1px solid var(--line); }
-  .brand-text small { display: none; }
-  .nav { display: flex; overflow-x: auto; gap: 2px; width: 100%; }
-  .nav a { white-space: nowrap; padding: 7px 10px; }
-  .side-foot { display: none; }
   main { padding: 18px 16px 48px; }
   .kv { grid-template-columns: 1fr; gap: 2px 0; }
   .kv dt { margin-top: 8px; }
@@ -1665,24 +1651,6 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 /* the phone menu (design card-play 3.9, #11): one button that names the page; the list opens under it */
 .nav-toggle { display: none; align-items: center; gap: 10px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--panel); color: var(--ink); font: inherit; cursor: pointer; }
 .nav-toggle-bars { width: 16px; height: 2px; background: currentColor; box-shadow: 0 -5px 0 currentColor, 0 5px 0 currentColor; }
-/* P47-1 phone menu (ADR 0013): the four items are one row at the top, not folded. With the advanced mode on, the 進階 button at the end of
-   that row opens the advanced list under it. */
-@media (max-width: 720px) {
-  .nav-toggle { display: none; }
-  .side .brand { flex: 0 0 100%; }
-  .side .nav { order: 1; flex: 1 1 0; min-width: 0; width: auto; flex-wrap: wrap; overflow: visible; }
-  .side .nav a { padding: 10px 8px; gap: 6px; }
-  .side .nav li[data-advanced] { display: none; }
-  .side.nav-open .nav li[data-advanced]:not([hidden]) { display: block; }
-  .side.nav-open .nav li.nav-sep[data-advanced]:not([hidden]) { display: none; }
-  .side.adv-on .nav-toggle { order: 2; display: inline-flex; flex: 0 0 auto; margin-left: auto; max-width: 9em; min-width: 0; padding: 8px 10px; align-self: flex-start; }
-  .nav-toggle-bars { display: none; }
-  #nav-toggle-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-}
-@media (max-width: 820px) {
-  .nav .nav-sep { display: none; }
-}
-
 /* the translation bar folds away (design card-play 3.4): a finished job leaves, a failed one becomes a dot */
 .translation-activity .btn { min-height: 32px; }
 .translation-dot { position: fixed; right: 16px; bottom: 64px; width: 36px; height: 36px; padding: 0; border-radius: 50%; border: 2px solid var(--warn); background: var(--panel); justify-content: center; box-shadow: var(--shadow); }
@@ -1931,7 +1899,7 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 /* fix47 (after the real-Mac check of v0.21.0): a button the page hides (the stop button of a chat with no turn running) is really hidden, and the home
    page's box for the CEO and the settings' own limit look like the other boxes (the browser's grey box and monospace placeholder are gone). */
 .btn[hidden] { display: none; }
-.home-ask-row textarea, input[data-limit-input] { padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); font: inherit; resize: vertical; }
+input[data-limit-input] { padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); font: inherit; resize: vertical; }
 input[data-limit-input] { width: 100%; box-sizing: border-box; resize: none; }
 
 /* P48-1: the start-up page asks first which AI to use (three cards), opens only the chosen tool, and lists its checks item by item. */
@@ -1981,3 +1949,247 @@ input[type="checkbox"] { width: 18px; height: 18px; flex: none; accent-color: va
 .home-loading { margin: 6px 0 0; }
 [data-home="loading-note"] { margin-top: 18px; }
 .brand-mark[data-brand="text"] { font-weight: 700; font-size: 15px; letter-spacing: 0; color: var(--ink); }
+
+/* P50-1 (v0.23.0, ADR 0015): the home page is a greeting and one box. One 720px column; the title is only for a screen reader; 等你決定 is a pill that opens the
+   old list where it is; my employees are a row of small avatars; today is one grey line. Every colour is a token of the theme. */
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
+.home-page { max-width: 720px; margin: 0 auto; }
+.home-page[data-home-layout="center"] { padding-top: min(22vh, 220px); }
+.home-page .home-block { margin-top: 18px; }
+.home-page .home-block[hidden] { display: none; }
+.home-waiting { margin-top: 0; }
+.home-waiting-body { display: grid; justify-items: center; gap: 10px; }
+.home-notes { display: grid; gap: 8px; width: 100%; }
+.home-notes:empty { display: none; }
+.home-pill-box { display: flex; justify-content: center; }
+.home-pill-box:empty { display: none; }
+.home-pill { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 5px 16px; border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--line)); border-radius: 999px; background: var(--warn-soft); color: var(--ink); font-size: 13.5px; cursor: pointer; }
+.home-pill:hover { border-color: var(--warn); }
+.home-waiting .home-rows { width: 100%; }
+.home-waiting .home-rows[hidden] { display: none; }
+.home-greeting { margin: 0 0 20px; text-align: center; font-size: clamp(26px, 4.6vw, 32px); font-weight: 650; letter-spacing: -.015em; line-height: 1.25; overflow-wrap: anywhere; }
+.home-ask { margin-top: 0; }
+.home-box { display: flex; flex-direction: column; gap: 4px; padding: 14px 14px 10px 20px; border: 1px solid var(--line-2); border-radius: 26px; background: var(--panel); }
+.home-box:focus-within { border-color: var(--ink-3); outline: 2px solid var(--gold); outline-offset: 2px; }
+.home-box textarea { display: block; width: 100%; min-height: 52px; max-height: 208px; padding: 4px 0; border: 0; border-radius: 0; background: transparent; color: inherit; font: inherit; font-size: 16px; line-height: 1.55; resize: none; }
+.home-box textarea:focus, .home-box textarea:focus-visible { outline: none; }
+.home-box-bar { display: flex; justify-content: flex-end; }
+.home-send { border-radius: 999px; padding: 6px 20px; font-size: 14px; }
+.home-hint { margin: 10px 8px 0; text-align: center; }
+.home-examples { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 16px; }
+.home-example { min-height: 36px; padding: 6px 14px; border: 1px solid var(--line-2); border-radius: 999px; background: transparent; color: var(--ink-2); font: inherit; font-size: 13.5px; cursor: pointer; }
+.home-example:hover { background: var(--mute-soft); color: var(--ink); }
+.home-team { margin-top: 28px; }
+.home-people { justify-content: center; align-items: flex-start; gap: 6px 10px; }
+.home-person { width: auto; max-width: 112px; }
+.home-avatar { min-width: 0; padding: 6px 8px; border: 1px solid transparent; border-radius: 12px; background: transparent; gap: 2px; }
+.home-avatar:hover, .home-avatar:focus-visible { border-color: var(--line-2); background: var(--mute-soft); }
+.home-avatar-name { font-size: 13px; font-weight: 600; }
+.home-new { display: inline-grid; place-items: center; width: 44px; height: 44px; margin-top: 4px; border: 1px dashed var(--line-2); border-radius: 50%; background: transparent; color: var(--ink-2); font: inherit; font-size: 20px; line-height: 1; cursor: pointer; }
+.home-new:hover { background: var(--mute-soft); color: var(--ink); }
+.home-today { margin-top: 18px; text-align: center; }
+.home-today p { margin: 0; }
+
+/* P50-2 (v0.23.0, ADR 0015): the side bar is the record of conversations. Brand, 新對話, 最近 (grows), then 員工 / 工作 / 設定 (one step smaller) at the foot and the
+   advanced items. On a phone (720px and narrower) it is a drawer behind the menu button of a top bar. Every colour is a token of the theme. */
+.shell { grid-template-columns: 220px minmax(0, 1fr); }
+.side { padding: 16px 10px; gap: 12px; }
+.side-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.side-panel { display: flex; flex-direction: column; gap: 10px; flex: 1 1 auto; min-height: 0; }
+.nav-backdrop { display: none; }
+.new-chat { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border: 1px solid var(--line-2); border-radius: 999px; color: var(--ink); text-decoration: none; font-weight: 600; }
+.new-chat:hover { background: var(--mute-soft); }
+.new-chat[aria-current="page"] { color: var(--accent); }
+.new-chat span { width: 16px; text-align: center; }
+.recent { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.recent[hidden] { display: none; }
+.nav-cap { margin: 8px 10px 4px; font-size: 12px; font-weight: 500; color: var(--ink-3); }
+.recent-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
+.recent-link { display: flex; align-items: center; gap: 7px; padding: 6px 10px; border-radius: 8px; color: var(--ink-2); text-decoration: none; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.recent-link:hover { background: var(--mute-soft); color: var(--ink); }
+.recent-link[aria-current="page"] { background: var(--mute-soft); color: var(--ink); font-weight: 600; }
+.recent-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.recent-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); flex: none; }
+.side-panel .nav { margin-top: auto; }
+.side-panel .nav a { padding: 7px 10px; font-size: 13px; }
+.side-panel .nav a:hover { background: var(--mute-soft); }
+.side-panel .nav a[aria-current="page"] { background: var(--mute-soft); color: var(--accent); }
+.side-panel .nav a[aria-current="page"] span { color: var(--accent); }
+.side-panel .side-foot { margin-top: 0; }
+@media (max-width: 720px) {
+  .shell { grid-template-columns: minmax(0, 1fr); }
+  .side { height: auto; min-width: 0; padding: 0; gap: 0; z-index: 40; border-right: 0; border-bottom: 1px solid var(--line); }
+  .side-top { padding: 6px 12px; min-height: 56px; }
+  .brand-text small { display: none; }
+  .nav-toggle { display: inline-flex; }
+  .side-panel { position: fixed; top: 0; left: 0; bottom: 0; z-index: 60; width: min(300px, 86vw); padding: 16px 12px; overflow-y: auto; background: var(--panel-2); border-right: 1px solid var(--line);
+    transform: translateX(-100%); visibility: hidden; transition: transform .2s ease, visibility 0s linear .2s; }
+  .side.nav-open .side-panel { transform: none; visibility: visible; transition-delay: 0s; }
+  .nav-backdrop { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, .4); }
+  .side.nav-open .nav-backdrop { display: block; }
+  .recent { flex: 0 1 auto; }
+  .waiting-bar { top: 57px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .side-panel { transition: none; }
+}
+
+/* P50-3 (v0.23.0, ADR 0015): the look. The colours are the neutral tokens at the top of this file (the values changed there, not here). What is here: buttons are pills,
+   a card keeps its frame and loses its shadow, the home page has no card frames or fills, and the green accent
+   is only the main action and the item you are on. The status colours, the office, the cards of the game and the faction frames are not touched. */
+.btn { border-radius: 999px; }
+.card { box-shadow: none; }
+.home-page .home-block { border: 0; background: transparent; box-shadow: none; }
+
+/* P51-1 (v0.24.0, ADR 0016): the chat reads like text, in one 720px column. What the employee says has no frame, no fill, no shadow; what you say is a soft --panel-2 bubble
+   at the right with no border; the card that waits keeps its frame (the one framed thing on the page). The tool, result, auto-allowed, cost and process lines that follow one
+   another are one closed line you can open (the css only draws the fold; it never hides one). The time is in the page and shows on hover, on focus and, with no mouse, always.
+   The buttons on a message keep the P47-4 rule (shown on hover or focus, still reachable by keyboard). Every colour is a token of the theme. */
+.chat-page { max-width: 720px; margin: 0 auto; }
+.chat-log { gap: 14px; margin-top: 12px; }
+.chat-msg { max-width: 100%; padding: 2px 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.chat-them { align-self: stretch; }
+.chat-me { align-self: flex-end; max-width: 85%; padding: 8px 14px; background: var(--panel-2); border-radius: 18px; }
+.chat-partial { border: 0; margin-top: 0; }
+.chat-text { line-height: 1.7; }
+.chat-who { margin-bottom: 2px; font-size: 12.5px; }
+.chat-time { opacity: 0; transition: opacity .12s; }
+.chat-who-quiet { opacity: 0; transition: opacity .12s; }
+.chat-msg:hover .chat-time, .chat-msg:focus .chat-time, .chat-msg:focus-within .chat-time,
+.chat-msg:hover .chat-who-quiet, .chat-msg:focus .chat-who-quiet, .chat-msg:focus-within .chat-who-quiet { opacity: 1; }
+@media (hover: none) {
+  .chat-time { opacity: 1; }
+  .chat-who-quiet { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) { .chat-time, .chat-who-quiet { transition: none; } }
+.chat-note { border-left: 0; padding: 2px 0; }
+.chat-sys, .chat-cost { padding: 0; }
+.chat-cost { border-top: 0; padding-top: 0; }
+.chat-quiet { padding: 0; }
+.chat-quiet-sum { display: flex; align-items: center; gap: 6px; padding: 2px 0; cursor: pointer; list-style: none; font-size: 12.5px; }
+.chat-quiet-sum::-webkit-details-marker { display: none; }
+.chat-quiet-sum::before { content: "▸"; color: var(--ink-3); transition: transform .15s; }
+.chat-quiet-group[open] > .chat-quiet-sum::before { transform: rotate(90deg); }
+.chat-quiet-sum:hover { color: var(--ink-2); }
+.chat-quiet-list { list-style: none; margin: 6px 0 2px 4px; padding: 0 0 0 12px; border-left: 2px solid var(--line); display: grid; gap: 8px; }
+.chat-quiet-list .chat-note { font-size: 13px; }
+@media (prefers-reduced-motion: reduce) { .chat-quiet-sum::before { transition: none; } }
+
+/* P51-2 (v0.24.0, ADR 0016): the box of the chat page is the home page's rounded box (.home-box, .home-box-bar and .home-send of P50-1 are shared, not copied; what is here only
+   extends them): the words above, whom you talk to and 「用常用做法」 at the left, stop and send at the right, still sticky at the bottom. The button that says whom you talk to opens a
+   small list (the one you talk to is marked; those who cannot chat yet are below, grey, with why). The two opening choices are the home page's small pills (.home-example). */
+.chat-composer { border-top: 0; padding-top: 8px; }
+.chat-composer .home-box textarea { border: 0; border-radius: 0; background: transparent; resize: none; }
+.chat-composer .chat-choices { margin-bottom: 8px; }
+.chat-box-bar { justify-content: space-between; align-items: center; gap: 8px; }
+.chat-box-left { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; min-width: 0; }
+.chat-box-right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.chat-box-left .btn { padding: 4px 10px; border-color: transparent; background: transparent; color: var(--ink-2); font-size: 13px; }
+.chat-box-left .btn:hover { background: var(--mute-soft); color: var(--ink); }
+.home-stop { padding: 6px 14px; font-size: 13px; }
+.home-box-bar .who-pick { margin-right: auto; }
+.who-pick { position: relative; min-width: 0; }
+.who-btn { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; max-width: 14rem; padding: 4px 12px; border: 1px solid var(--line-2); border-radius: 999px; background: transparent; color: var(--ink-2); font: inherit; font-size: 13px; cursor: pointer; }
+.who-btn:hover { background: var(--mute-soft); color: var(--ink); }
+.who-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.who-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.who-pop { position: absolute; left: 0; z-index: 30; width: min(320px, 82vw); max-height: min(360px, 55vh); overflow-y: auto; padding: 6px; background: var(--panel); border: 1px solid var(--line-2); border-radius: 14px; box-shadow: var(--shadow); }
+.who-pop[data-dir="up"] { bottom: calc(100% + 8px); }
+.who-pop[data-dir="down"] { top: calc(100% + 8px); }
+.who-pop[hidden] { display: none; }
+.who-list, .who-later-box { display: grid; gap: 1px; }
+.who-opt { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 10px; align-items: baseline; width: 100%; padding: 8px 10px; border: 0; border-radius: 10px; background: transparent; color: var(--ink); font: inherit; font-size: 14px; text-align: left; text-decoration: none; cursor: pointer; }
+.who-opt:hover { background: var(--mute-soft); }
+.who-opt:focus-visible { background: var(--mute-soft); outline: none; box-shadow: 0 0 0 2px var(--accent); }
+.who-opt[aria-selected="true"] { background: var(--mute-soft); }
+.who-name { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.who-meta { grid-column: 1; }
+.who-now { grid-row: 1; grid-column: 2; color: var(--accent); }
+.who-later .who-name { font-weight: 500; color: var(--ink-2); }
+.who-why { grid-column: 1 / -1; color: var(--ink-3); overflow-wrap: anywhere; }
+.who-cap { margin: 8px 10px 2px; }
+
+/* P51-3 (v0.24.0, ADR 0016): the head of a chat is one row (the name, the state word, 「⋯」) and the line under it (the work, the AI tool, that everything asks first, which company
+   the words go to) is one step smaller and grey, kept because it says where the words go. The page that prepares a chat and the list of chats are the same 720px column; the list is
+   plain rows with a line between them (no card frame) and a dot in front of a chat that waits for you. Every colour is a token of the theme. */
+.chat-head h1 { margin: 0; font-size: 20px; line-height: 1.35; }
+.chat-head-top { align-items: center; }
+.chat-title { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; }
+.chat-line { margin: 2px 0 6px; font-size: 12.5px; color: var(--ink-3); }
+.chat-details > summary { font-size: 12.5px; color: var(--ink-3); }
+.chat-hint { border: 0; background: var(--panel-2); }
+.chat-list-box .mt-list { gap: 0; }
+.chat-list-box .mt-row { display: flex; padding: 12px 2px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; box-shadow: none; }
+.chat-list-box .mt-row:last-child { border-bottom: 0; }
+.chat-wait-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--warn); }
+
+/* P52-1 (v0.25.0): the first run of a person with no employee is one block of the home page (ADR 0017), in the same 720px column as the greeting and the box (v0.23.0): the big line has
+   the greeting's own look (.home-greeting), the picker and the chosen tool's steps are the start-up page's pieces but frameless like the rest of the home page (a line, no fill), the buttons are the
+   pills of the theme, and the name box is the CEO page's own. Only the theme's own variables. */
+.home-first-run { margin-top: 0; }
+.home-page[data-home-layout="top"] .home-first-run { padding-top: min(8vh, 72px); }
+.home-first-title { margin-bottom: 8px; }
+.home-first-sub { margin: 0 0 22px; text-align: center; }
+.home-first-run .setup-picker { margin-top: 0; }
+.home-first-run .setup-pick, .home-first-run .setup-tool { background: transparent; }
+.home-first-run .setup-pick[data-state="ready"], .home-first-run .setup-tool[data-state="ready"] { border-color: var(--line-2); }
+.home-first-run .setup-check-confirm { background: transparent; }
+.home-first-run .setup-daily-choice { background: transparent; }
+.home-first-run .setup-picked { justify-content: center; gap: 6px 14px; }
+.home-first-ceo { display: grid; gap: 8px; margin-top: 12px; }
+.home-first-ceo p { margin: 0; overflow-wrap: anywhere; }
+.home-first-ceo .row { flex-wrap: wrap; justify-content: center; }
+.home-first-foot { margin-top: 22px; text-align: center; }
+@media (max-width: 720px) { .home-first-run .setup-picker { grid-template-columns: 1fr; } }
+@media (max-width: 520px) { .home-first-ceo .btn { flex: 1 1 100%; justify-content: center; } }
+
+/* P52-2 (v0.25.0): a tool whose version VBear does not know is said like the other states that hold a tool back (the theme's own colours); its folded technical details sit under the card's line. */
+.setup-pick-state[data-setup-status="unsupported"] { color: var(--bad); }
+.setup-pick .plain-tech { margin: 0; }
+
+/* P52-3 (v0.25.0): the team-template dialogs (save, preview, undo). The box scrolls and its button bar stays at the bottom: the bar is sticky and the box has no
+   bottom padding of its own (that padding is what showed the content under the bar), so the bar carries it. On a narrow screen the buttons wrap and never
+   run wider than the box; the name box of 存成團隊範本 is on its own line in the site's input style. */
+.modal-box.tpl-dialog { padding-bottom: 0; }
+.tpl-dialog .modal-actions { flex-wrap: wrap; position: sticky; bottom: 0; background: var(--panel); padding-block: 10px 16px; margin-top: 0; z-index: 1; }
+.tpl-dialog .modal-actions .btn { max-width: 100%; }
+.modal-box [data-templates="save-foot"], .modal-box [data-templates="undo-foot"] { position: sticky; bottom: 0; background: var(--panel); flex-wrap: wrap; padding-block: 10px 16px; margin-top: 0; z-index: 1; }
+.tpl-save-name { display: grid; gap: 4px; min-width: 0; }
+.tpl-save-name .input { width: 100%; }
+@media (max-width: 520px) { .tpl-dialog .modal-actions .btn { flex: 1 1 100%; justify-content: center; } }
+
+/* P53 (v0.25.0): the toast is above the phone drawer's backdrop (50), the drawer (60), the dialogs (100) and the skill tip (120): a message must be readable whatever is open (review of v0.23.0). */
+#toast { z-index: 130; }
+
+/* P54 (v0.25.0): what the first real look at the pages (stub console screenshots, tools/shots_stub.py) found. Only the screen is changed here.
+   1. On a phone the top bar was 82 to 200px high, not 57px: the page's grid has two rows that were both `auto`, so the free height of a short page was shared between the bar and
+      the page. The bar is now its own height and the page takes the rest.
+   2. The open drawer covered the brand and left the person no clear way out; now the bar stays above the drawer (the brand is seen, the button says 關閉) and the drawer starts under it.
+   3. The home box showed two rings when it had the focus (its border and an outline 2px away); now it is one ring.
+   4. A message of yours was twice as high as its words and a reply had an empty band under it: the line with your name and time (shown on hover) and the buttons 記住 and
+      存成常用做法 (shown on hover or focus) kept their room while hidden. They now sit over the space between messages (still in the page, still reached by keyboard).
+   5. The line over a fold: a bigger arrow that stays on the first line, and a line under the words when you point at it, so it is seen that it opens.
+   6. A plain select (a drop-down) in a page was the browser's square one; it has the pills' look now (a rule of low weight: a select that has its own rule keeps it). */
+@media (max-width: 720px) {
+  .shell { grid-template-rows: auto minmax(0, 1fr); }
+  .side-panel { top: 57px; padding: 12px 12px 16px; }
+  .side.nav-open .side-top { position: relative; z-index: 70; background: var(--side-bg); box-shadow: 0 1px 0 var(--line); }
+}
+.home-box:focus-within { border-color: transparent; outline: 2px solid var(--gold); outline-offset: -1px; }
+.chat-msg { position: relative; }
+.chat-me .chat-who-quiet { position: absolute; right: 6px; bottom: 100%; margin: 0 0 1px; white-space: nowrap; }
+.chat-me .chat-who:not(.chat-who-quiet) { margin-bottom: 4px; }
+.chat-msg .chat-remember { position: absolute; top: 100%; right: 0; z-index: 5; margin: -6px 0 0; padding: 2px; background: var(--bg); border-radius: 999px; pointer-events: none; }
+.chat-msg:hover .chat-remember, .chat-msg:focus .chat-remember, .chat-msg:focus-within .chat-remember { pointer-events: auto; }
+.chat-me .chat-remember { right: 8px; }
+.chat-quiet-sum { align-items: flex-start; line-height: 1.5; }
+.chat-quiet-sum::before { flex: none; width: 1em; font-size: 13px; text-align: center; }
+.chat-quiet-sum:hover { text-decoration: underline; text-underline-offset: 3px; }
+.chat-quiet-sum:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+main select { min-height: 36px; padding: 6px 10px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--panel); color: var(--ink); }
+
+/* P55 (v0.25.0): a tool that can chat puts the CEO's name and the button right under the choice; its list of checks is a closed fold under them. */
+.home-first-run .first-checks { margin-top: 14px; }
+.home-first-run .first-checks > summary { cursor: pointer; color: var(--muted); padding: 4px 0; }
+.home-first-run .first-checks > summary:hover { color: var(--ink); text-decoration: underline; }
+.home-first-run .first-checks[open] > summary { margin-bottom: 8px; }

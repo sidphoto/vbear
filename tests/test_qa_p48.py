@@ -248,6 +248,11 @@ def site(label):
         pages["#/setup#picked"] = {qa.CHECK_LIST: {"top": 400}, qa.CHANGE_PICK: {"top": 380}, qa.CHECK_CHAT: {"top": 420, "attrs": {"data-result": "fail"}},
                                    qa.CHECK_ITEMS: {"top": 430, "count": 4}, qa.LEAVE: {"top": 500, "at": 20}, "_text": "你選了：Anthropic Claude"}
         links = {("#/setup", qa.PICK_CLAUDE): "#/setup#picked", ("#/setup#picked", qa.LEAVE): "#/ceo"}
+        # v0.25: the home page of a person with no employee does the first run itself: the pick opens the checklist in place, and its button makes the CEO
+        pages["#/"][qa.PICK_CLAUDE] = {"top": 300, "at": 450}
+        pages["#/#picked"] = {**nav, qa.CHECK_LIST: {"top": 400}, qa.CHANGE_PICK: {"top": 380}, qa.CHECK_CHAT: {"top": 420, "attrs": {"data-result": "fail"}},
+                              qa.CHECK_ITEMS: {"top": 430, "count": 4}, q47.HOME_CEO_GO: {"top": 500, "at": 20}, "_text": "你選了：Anthropic Claude"}
+        links.update({("#/", qa.PICK_CLAUDE): "#/#picked", ("#/#picked", q47.HOME_CEO_GO): "#/chat?profile=prof-1"})
     links.update({("#/ceo", qa.CEO_GO): "#/chat?profile=prof-1", ("#/", qa.NAV_SETTINGS): "#/settings", ("#/settings", q47.LIMITS_SUMMARY): "#/settings#open", ("#/", '[data-nav="work"]'): "#/work",
                   ("#/work", '[data-work="routines"]'): "#/routines", ("#/routines", '[data-routine-action="new"]'): "#/routines#form",
                   ("#/routines#form", '[data-routine-action="save"]'): "#/routines",
@@ -628,10 +633,12 @@ class RunTests(unittest.TestCase):
     def build(self, label="after", tasks=qa.TASKS, **page_kw):
         pages, links = site(label)
         console = FakeConsole(events=self.events)
-        clicks = {qa.CEO_GO: lambda: console.profiles.append({"id": "prof-ceo", "name": "CEO", "model": {"tool": "claude"}}),
+        ceo = lambda: console.profiles.append({"id": "prof-ceo", "name": "CEO", "model": {"tool": "claude"}})
+        clicks = {qa.CEO_GO: ceo, q47.HOME_CEO_GO: ceo,
                   "[data-limit-save]": lambda: setattr(console, "daily", 5.0),
                   '[data-routine-action="save"]': lambda: console.routines.append({"id": "r-1", "name": "QA47 虛構早安", "enabled": True, "days": list(range(7)),
                                                                                    "times": ["08:00"]})}
+        page_kw.setdefault("opens_at", "#/" if label == "after" else "#/setup")       # (v0.25: a fresh install opens on the home page, which does the first run itself)
         page = FakePage(pages, links, on_click=clicks, events=self.events, **page_kw)
         check = q47.Check(lambda line: None)
         walker = q47.Walker(page, {"avoid": ["派工"], "errors": []}, FakeClock(), lambda s: None)
@@ -673,14 +680,14 @@ class RunTests(unittest.TestCase):
 
     # the first task
 
-    def test_the_first_walk_is_four_steps_in_both_versions_the_picker_press_being_the_look_at_claudes_row(self):
-        for label in ("before", "after"):
+    def test_the_first_walk_is_four_steps_before_and_three_after_the_picker_press_being_the_look_at_claudes_row(self):
+        # (v0.25: the home page makes the CEO itself, so the walk after has no separate 次一步 press: it is never more steps than before, which is what compare() reads)
+        for label, steps, kinds in (("before", 4, ["look", "press", "press", "look"]), ("after", 3, ["press", "press", "look"])):
             self.events.clear()
             run, page, console, check = self.walk(label=label, tasks=("first",))
             t = run.tasks["first"]
-            self.assertEqual((t["steps"], t["stuck"], t["done"]), (4, 0, True), label)
-            kinds = [s["kind"] for s in run.w.steps]
-            self.assertEqual(kinds, ["look", "press", "press", "look"] if label == "before" else ["press", "press", "press", "look"], label)
+            self.assertEqual((t["steps"], t["stuck"], t["done"]), (steps, 0, True), label)
+            self.assertEqual([s["kind"] for s in run.w.steps], kinds, label)
             self.assertEqual(run.w.steps[0]["target"], qa.FIRST_TARGET[label])
 
     def test_each_page_the_person_lands_on_is_timed_to_its_first_thing_to_press_in_seconds(self):
@@ -704,7 +711,7 @@ class RunTests(unittest.TestCase):
         run, page, console, check = self.walk(label="after", tasks=("first",))
         t = run.tasks["first"]
         self.assertEqual((t["checklist"], t["check_items"], t["change_pick"], t["chat_item"]), (True, 4, True, "fail"))
-        self.assertEqual(t["steps"], 4)
+        self.assertEqual(t["steps"], 3)                 # (v0.25: 4 before the home page made the CEO itself)
 
     def test_a_page_that_never_draws_is_slow_and_has_no_number_and_the_run_goes_on(self):
         pages, links = site("before")
@@ -721,18 +728,18 @@ class RunTests(unittest.TestCase):
 
     def test_when_no_tool_is_ready_the_task_is_unable_and_the_start_up_is_marked_done_for_the_others(self):
         pages, links = site("after")
-        pages["#/setup#picked"][qa.LEAVE] = {"top": 500, "disabled": True}
+        pages["#/#picked"][q47.HOME_CEO_GO] = {"top": 500, "disabled": True}      # (v0.25: the button that makes the CEO is on the home page)
         run, page, console, check = self.build(label="after", tasks=("first",))
         page.pages, page.links = pages, links
         run.start()
         run.run_all()
-        self.assertIn("next-step button stays off", run.tasks["first"]["unable"])
+        self.assertIn("no CEO can be made", run.tasks["first"]["unable"])
         self.assertTrue(console.config.get("setup_done"))
         self.assertEqual(check.failed, 0)
 
     def test_the_chat_a_ceo_page_opened_is_found_in_the_address_and_deleted_by_id_without_reading_the_chat_list(self):
         pages, links = site("after")
-        links[("#/ceo", qa.CEO_GO)] = "#/chat/c-0123456789ab"
+        links[("#/#picked", q47.HOME_CEO_GO)] = "#/chat/c-0123456789ab"
         pages["#/chat/c-0123456789ab"] = {qa.CHAT_INPUT: {"top": 300, "at": 100}, "_text": "和 CEO 的對話", "_h1": 50, "_ready": 50}
         run, page, console, check = self.build(label="after", tasks=("first",))
         page.pages, page.links = pages, links
@@ -873,8 +880,9 @@ class MainTests(unittest.TestCase):
         self.events: list = []
         self.console = FakeConsole(events=self.events)
         self.pages, self.links = site("after")
-        self.page = FakePage(self.pages, self.links, events=self.events, on_click={
+        self.page = FakePage(self.pages, self.links, opens_at="#/", events=self.events, on_click={
             qa.CEO_GO: lambda: self.console.profiles.append({"id": "prof-ceo", "name": "CEO", "model": {"tool": "claude"}}),
+            q47.HOME_CEO_GO: lambda: self.console.profiles.append({"id": "prof-ceo", "name": "CEO", "model": {"tool": "claude"}}),
             "[data-limit-save]": lambda: setattr(self.console, "daily", 5.0),
             '[data-routine-action="save"]': lambda: self.console.routines.append(
                 {"id": "r-1", "name": "QA47 虛構早安", "enabled": True, "days": list(range(7)), "times": ["08:00"]})})
@@ -930,7 +938,7 @@ class MainTests(unittest.TestCase):
         self.assertEqual((data["label"], data["mode"], data["ui"], data["tool"]), ("after", "no-ai", "v0.22", "qa_p48"))
         self.assertEqual(data["tasks_run"], list(qa.TASKS))
         self.assertEqual(data["cold"], "first")
-        self.assertEqual(data["tasks"]["first"]["steps"], 4)
+        self.assertEqual(data["tasks"]["first"]["steps"], 3)             # (v0.25: 4 before the home page made the CEO itself)
         self.assertEqual(data["tasks"]["notify"]["posts"], 0)
         self.assertEqual(data["money"]["claude_cap"], 0.30)
         self.assertEqual(self.console.profiles, [])                      # the employees it made are deleted

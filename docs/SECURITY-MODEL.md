@@ -2392,3 +2392,77 @@ limit moved, and no version was added to any verified list.
   The comparison cannot show behaviour: the files Codex makes in its own folder, the order of its messages, or what a new default-on feature does. (3) *The fixtures are the old version's.* No stream of 2.1.322 or 0.167.0 was recorded.
 - **AGY is not part of it.** AGY 1.5.5 was compared the same way and **not added**: one of AGY's own built-in skill files differs from the table of 1.5.3 (and two files that AGY generates cannot be read from the program),
   so a folder written by 1.5.5 would be refused by the folder check. A new table needs a run of the real 1.5.5 (`docs/evidence/agy-1.5.5-not-added.md`). `AGY_SOURCES` and `agy_chat_protocol.VERSIONS` did not change.
+
+## Chat-first home (v0.23)
+
+v0.23.0 (ADR 0015) changes what the home page, the side bar and the colours show, and nothing on the server: no file under `vbear/` changed except the version number, and there is no new route, request, setting, data file,
+kind of chat event or `localStorage` key. Guard rule 15b (the `/api/` paths the page uses are a subset of v0.20.0's, the routes and chat events are v0.20.0's) passes unchanged.
+
+- **The box still sends only when the person presses.** The home box is the old 「想做什麼？跟 CEO 說」 box with a new look: the same `openChatWith(profileId, { text })`, the same one `POST …/messages`, the same refusal
+  (the words are left in the chat's box) when the employee is busy, has a card waiting or cannot chat yet. Enter alone does not send; only Cmd/Ctrl + Enter (and the 送出 button) do (rule 17c). The cursor goes into
+  the box when the page is drawn, only on the home page, only when nothing else has the focus and not on a touch screen; that is a focus move, not a request.
+- **The example sentences send nothing.** The three buttons (「幫我整理今天的待辦」, 「幫我寫一篇貼文」, 「每天早上給我一份摘要」; shown only before the first conversation) only write the sentence into the box and put the
+  cursor there. The handler makes no request and calls no send function (rule 17a); what costs money is still the person's own press of 送出.
+- **The side bar's 最近 reads nothing of its own.** The list of recent employees is drawn from the `GET /api/chats` result the home page had already read (and the 30-second waiting model's data); the part of the page
+  that draws it calls neither `api.get("/api/chats")` nor `setInterval`/`setTimeout` (rule 17b). `GET /api/chats` makes the server run each AI tool's `--version`, so a side bar that read it on its own would start real
+  programs; it does not. With no data, or when nobody has talked, the list is not shown (no "no conversations" sentence: the page does not know). Each row holds only what the server said (the employee's name and
+  whether a card waits), no invented title, no message text; it is a link to the chat, which opens nothing and costs nothing.
+- **Only the look of the buttons and colours changed.** The pill for 等你決定 opens the same list in place (`homeWaiting`, the same entries and buttons); while the data has not arrived the block says 「載入中」, never 0.
+  The phone drawer is the same links behind a button (`aria-expanded`, `aria-controls`, Escape, a link or the backdrop closes it). Colours are neutral greys; the status colours, the office and the cards of the game are untouched.
+
+## Chat reads like text (v0.24)
+
+v0.24.0 (ADR 0016) changes what the chat page shows and nothing on the server: no file under `vbear/` changed except the version number, and there is no new route, request, setting, data file,
+kind of chat event or `localStorage` key. Guard rule 15b (the `/api/` paths the page uses are a subset of v0.20.0's, the routes and chat events are v0.20.0's) passes unchanged, and rules 15, 16 and 17 were not edited.
+
+- **Folding hides no decision and no record.** Only tool, tool result, auto-allowed, turn-ended (when the turn ended well), process-started and process-ended (for a reason the page can say) lines are put in a fold (`chatIsQuiet`); the card that waits
+  (`live-card` and the `card` line), `card_decision`, `denied`, `error`, `anomaly` and the words said are never in one, and a turn that was stopped, hit a limit or went wrong, or a process that ended for an unknown reason, stays in the open (rule 18a).
+  A fold is a closed `<details>` in the page, not a removed element: every line is still in the page with its `data-seq` and `data-chat`, and `chatQuietLog` neither drops, delays nor redraws a line (a fold you opened is not closed by a new line).
+  The amounts are inside the fold, one line each; the line over a fold is made only of counts (rule 18d).
+- **Changing whom you talk to sends nothing.** The button at the left of the box lists employees from the answer of `GET /api/chats` the page already had (the home page's read; the chat page's read when it was opened): opening the list and choosing make no
+  request, and `chatWhoGo`, `chatWhoLater` and the picker call no send or request function, do no POST, PUT or DELETE, read no chat list and set no timer (rule 18b). On the home page a pick changes only whom the one
+  `openChatWith(profileId, { text })` of the person's press of 送出 is for. On a chat page it goes to that employee's page (their latest chat in the answer already read, else `#/chat?profile=<id>`, where opening a chat is
+  the person's own press) and the words not yet sent wait in `ceoDrafts` (in the page's memory, not on disk) for that page's box; only that page's 送出 sends them. An employee who cannot chat is a link to the preparation page, never an option.
+- **Only Cmd/Ctrl + Enter sends from the chat box** (rule 18c). The box has one keydown handler, and it is the same as before with one more condition, `!e.isComposing` (an IME's Enter sends nothing); no keypress, keyup, form or timer reaches `send`.
+- **Nothing that asks you moved.** The permission card, its buttons and warnings, the 「⋯」 menu and every confirmation it opens, the limit notice, and the line over the head (the work, the AI tool, that everything asks first, which company the words go to) are the same; they are smaller or placed differently, not removed.
+- **Residual risk.** A fold's summary says only how many lines of each kind; a person who never opens it does not see each tool's summary line (what was read or run). The card that asked and the decision are never folded, so what was allowed or refused is always shown; what ran after an allow is in the fold.
+
+## First run on one page (v0.25)
+
+v0.25.0 (ADR 0017) moves the first run of a person with no employee onto the home page and says in plain words why an AI tool cannot be used. **It changes only what the screen shows and where
+a press is.** It does not touch any start-up boundary: nothing under `vbear/` changed (no file of `agent_launch.py`, `runtime/*`, `chat_service.py`, `*_verify.py`, `chat_check.py`, `cli_versions.py` or
+`admin_policy.py`), **no route (API path), no kind of request, no key of `config.json` and no kind of chat event was added**, and the only keys the page writes to the browser's `localStorage` are still
+`vbear-setup-pick` and `vbear-notify`. Guard rule 15b still holds unchanged; rule 19 (19a to 19c) was added and rules 1 to 16 were not loosened.
+
+- **Every step is still the person's own press.** The home block shows the same picker as the start-up page (nothing preselected, nothing marked as recommended, no reordering by state, ADR 0014), expands
+  the chosen tool's steps in place, and offers a name box and 「建立 CEO，開始聊」 only when the chosen tool can chat. Nothing is chosen, checked or created by the page on its own; a pick the person
+  made earlier (`vbear-setup-pick`) is the person's own and opens that tool, as it does on the start-up page.
+- **The chat safety check is asked for the same way.** The block uses the start-up page's own components and requests (one shared set of functions). 「試一下，並做聊天安全檢查」 opens the confirm area, which
+  says what each part does and what it costs; **only 「確認，開始」 sends** (`POST /api/setup/tools/<id>/try {"confirmed": true}`, then, if this version has not been verified, `POST /api/chat-support/verify`);
+  「取消」 sends nothing; a version that passed is not verified again; a tool that an administrator setting blocks gets no button, so nothing is run and nothing is spent (guard rule 19a, with 16a unchanged).
+  A pass is not carried to another version and is not kept in the browser.
+- **The CEO is made by one press.** 「建立 CEO，開始聊」 sends the same request as the create-CEO page (one `POST /api/agent-profiles` in safe mode, i.e. 「每件事先問我」, then the usual `POST /api/config`)
+  for the tool the person chose, with the name they typed. Loading the page, choosing a card, redrawing and the 5-second refresh send no such request (guard rule 19b). The plan for it is read once, only when the chosen tool
+  can chat (`GET /api/first-ceo?tool=<id>`); a plan for any other tool is refused and **never swaps in another tool**. The opening words of the first conversation are only put in the input box; **nothing is sent**.
+  `CEO_MODE` and, for AGY, the sentence that the talk goes to Google stay on the screen and are not folded away.
+- **Reading is bounded.** The home page's existing 5-second refresh gained one quiet `GET /api/setup/tools`; the chat list keeps its 30-second throttle (16d) and the block adds no timer. A person's typed name, an open
+  confirm area and the chosen tool survive the refresh.
+- **Words, not behaviour.** A tool that updated itself to a version VBear does not know is described as 「你的 {工具名} 是 {版本} 版，VBear 還不認得這一版，所以先不能用它聊天。等 VBear 出新版就能用。」 The version is
+  written only when the server's data holds it (never looked up by the page, never written into the code: guard rule 19c); the server's own sentence is kept whole behind 「技術細節」. No table of known or verified
+  versions was changed and no version was added; the page does not tell anyone to downgrade or to edit a setting file. A missing step (not installed, not logged in, no safety check yet, an administrator's settings,
+  an unknown version, or unreadable) is named from the state that was read and guessed from nothing.
+- **Small layout fixes.** The usage and limits box sits above notifications in settings; the team-template dialogs keep their button bar at the bottom. These change no request.
+
+- **The home page no longer sends anyone to the start-up page (P52-5).** A person whose `setup_done` is not true stays on the home page after the one existing `POST /api/setup/settle`; only the app window's first-time
+  page (`#/welcome`, shown once) can still come first, and its buttons now return to the home page (if saving the mark fails, the home page does not send the person back to it in that window). **`setup_done` is written
+  by one press**: after 「建立 CEO，開始聊」 has made the card, and only if it was not already true, the page sends `POST /api/config {"setup_done": true}` once, the same request as the start-up page's leave button; a failed write does
+  not keep the person out of the conversation, and loading, choosing a card, redrawing or a refused card never writes it (guard rule 19b). Nothing new is asked of the server and the server's own settle logic did not change.
+  A person with employees whose `setup_done` is not true (older data) is not sent away either.
+
+Residual risks: (1) The server's `setup_done` stays false for a person who never makes a CEO on the home page and never leaves the start-up page; nothing breaks (the home page no longer depends on it), but the settings
+and the start-up page still read it. (2) The tool state on the home page is read every 5 seconds but the chat state follows the 30-second chat read, so it may be up to about 30 seconds behind until the person presses 「重新檢查」 or the
+confirm flow reads it. (3) `tools/qa_p47.py` still names the old home page's step selector and must be updated before it is used for a real-Mac check. (4) The pages were not looked at in a real browser or app
+here; the person tries the first run after upgrading.
+
+Going back to v0.22.1: nothing is migrated; v0.25.0 added no setting and no data. The home page shows the three step links again, the unknown-version words are the server's own sentences again, and `vbear-setup-pick` is
+still read.

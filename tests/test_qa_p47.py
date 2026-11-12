@@ -771,13 +771,12 @@ class RunTests(unittest.TestCase):
     # -- the first task does not assume which screen comes first, and a chat box that cannot be used is a dead end ------------------------
 
     def first_site(self, leave=False, ending="input"):
-        pages = {"#/": {"_text": "首頁", '[data-home-step="2"] a[href="#/ceo"]': {"top": 300}},
-                 "#/ceo": {qa.CEO_GO: {"top": 400}, "_text": "建立 CEO"},
+        pages = {"#/": {"_text": "首頁", qa.HOME_PICK_CLAUDE: {"top": 300}, qa.HOME_CEO_GO: {"top": 400}},      # (v0.25: the home page makes the CEO itself)
                  "#/chat/c1": {"_text": "chat", **({qa.CHAT_INPUT: {"top": 300}} if ending == "input" else {'[data-chat="prep-action"]': {"top": 300}})}}
         if leave:
             pages["#/"][qa.LEAVE] = {"top": 200}
-            pages["#/start"] = {'[data-home-step="2"] a[href="#/ceo"]': {"top": 300}, "_text": "開始設定"}
-        links = {("#/", '[data-home-step="2"] a[href="#/ceo"]'): "#/ceo", ("#/ceo", qa.CEO_GO): "#/chat/c1"}
+            pages["#/start"] = {qa.HOME_PICK_CLAUDE: {"top": 300}, "_text": "開始設定"}
+        links = {("#/", qa.HOME_CEO_GO): "#/chat/c1"}
         if leave:
             links[("#/", qa.LEAVE)] = "#/"
         return pages, links
@@ -786,7 +785,7 @@ class RunTests(unittest.TestCase):
         pages, links = self.first_site(**site)
         console = FakeConsole()
         console.support_state = support
-        page = FakePage(pages, links, on_click={qa.CEO_GO: lambda: console.profiles.append({"id": "prof-000000000001", "name": "CEO", "model": {"tool": "claude"}})})
+        page = FakePage(pages, links, on_click={qa.HOME_CEO_GO: lambda: console.profiles.append({"id": "prof-000000000001", "name": "CEO", "model": {"tool": "claude"}})})
         run, page, console = self.run_for(page=page, console=console)
         run.orig = {"daily": 3.0, "per_turn": 0.25, "profiles": set(), "routines": set()}
         return run, page, console
@@ -796,7 +795,7 @@ class RunTests(unittest.TestCase):
         run.play("first")
         task = run.tasks["first"]
         self.assertIsNone(task["unable"])
-        self.assertEqual(task["steps"], 3)                           # the link to the CEO, the create button, the look at the box
+        self.assertEqual(task["steps"], 3)                           # the pick of Claude, the create button on the home page, the look at the box
         self.assertNotIn(("click", qa.LEAVE), page.log)
 
     def test_when_the_start_up_button_is_on_the_screen_it_is_pressed_first(self):

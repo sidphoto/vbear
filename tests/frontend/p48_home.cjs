@@ -304,10 +304,10 @@ function check16dPace(times, forced) {
   const DUE = { kind: "routine_due", name: "晨間整理", run_id: "run-1", slot: "2026-11-10T08:00" };
 
   // ---- 16c: the frame first ---------------------------------------------------------------------------------------------------
-  await test("16c: only /api/config is in: the title, the lede and the three blocks are there and say 載入中; nothing says 'nothing waits' or a zero; only GETs", async () => {
+  await test("16c: only /api/config is in: the title (hidden since P50-1, the sentence under it is gone) and the three blocks are there and say 載入中; nothing says 'nothing waits' or a zero; only GETs", async () => {
     const page = await home(world(), "#/", { hold: GETS });
     assert.strictEqual(text(all(page.main, (n) => n.tag === "h1")[0]), "首頁");
-    assert.ok(all(page.main, (n) => n.className === "lede").length === 1, "the lede is there");
+    assert.ok(all(page.main, (n) => n.tag === "h1")[0].className.includes("sr-only"), "the title is there for the screen reader");
     assert.deepStrictEqual(check16c(page.main, "loading"), []);
     assert.deepStrictEqual(loadingKeys(page.main).sort(), ["team", "today", "waiting"]);
     assert.strictEqual(posts(page).length, 0, "only GETs");
@@ -316,11 +316,11 @@ function check16dPace(times, forced) {
     assert.ok(requested.includes("/api/config") && requested.includes("/api/chats"), "the data is asked for at once, not after the frame");
   });
 
-  await test("16c: everything comes in: no 載入中 and no progress line is left; the waiting block says nobody waits, in words; only GETs", async () => {
+  await test("16c: everything comes in: no 載入中 and no progress line is left; the waiting block takes no room (P50-1: it no longer says 'nothing waits' in words; it is hidden); only GETs", async () => {
     const page = await home(world(), "#/", { hold: GETS });
     await page.release();
     assert.deepStrictEqual(check16c(page.main, "done"), []);
-    assert.ok(text(waitingBlock(page)).includes("現在沒有要你決定的事。"));
+    assert.ok(waitingBlock(page).getAttribute("hidden") !== null && !text(waitingBlock(page)), "hidden, nothing in it");
     assert.ok(one(page.main, "data-employee", "p-ceo"), "the team is there");
     assert.ok(one(page.main, "data-home", "ask"), "the ask box is there");
     assert.strictEqual(posts(page).length, 0);
@@ -372,7 +372,7 @@ function check16dPace(times, forced) {
     assert.deepStrictEqual(check16c(page.main, "loading"), []);
   });
 
-  await test("16c: a person who has not finished the start-up: only the title and one line (what is waited for) are drawn until the server has settled it; none of the blocks, no requests for them; then the start-up", async () => {
+  await test("16c: a person who has not finished the start-up: only the title and one line (what is waited for) are drawn until the server has settled it; none of the blocks, no requests for them; then the home page itself (P52-5: no longer the start-up page)", async () => {
     const W = world({ config: { setup_done: false }, posts: { "POST /api/setup/settle": { body: { setup_done: false } } } });
     const page = await home(W, "#/", { hold: ["/api/setup/settle"] });
     assert.strictEqual(text(all(page.main, (n) => n.tag === "h1")[0]), "首頁");
@@ -380,8 +380,8 @@ function check16dPace(times, forced) {
     assert.strictEqual(one(page.main, "data-home", "waiting"), null, "no block yet");
     assert.ok(!page.log.some(([, u]) => u === "/api/chats"), "the data of the blocks is not asked for before the person is known to stay");
     await page.release();
-    assert.strictEqual(page.location.hash, "#/setup");
-    assert.ok(!page.log.some(([, u]) => u === "/api/chats"));
+    assert.strictEqual(page.location.hash, "#/", "P52-5: the person stays here (before: sent to #/setup)");
+    assert.ok(one(page.main, "data-home", "waiting") || one(page.main, "data-home", "team"), "and the blocks are drawn after the settle");
   });
 
   await test("16c: leaving the page: a timer that fires after the person went elsewhere draws nothing into the new page", async () => {
@@ -392,23 +392,24 @@ function check16dPace(times, forced) {
     assert.ok(text(page.main).includes("對話紀錄"), "the work page is there");
   });
 
-  await test("16c: no employee yet: the three steps' frame is there at once, step 1 says it is looking at the tools until they are read, then the words", async () => {
+  await test("16c: no employee yet: the first-run block's frame is there at once and says it is looking at the tools until they are read, then the cards (P52-1: in place of the three steps)", async () => {
     const page = await home(world({ profiles: [], cards: [] }), "#/", { hold: ["/api/setup/tools"] });
-    const step = one(page.main, "data-home-step", "1");
-    assert.ok(step, "step 1 is there");
-    assert.deepStrictEqual(loadingKeys(page.main), ["first-steps"]);
-    assert.ok(text(step).includes("正在看你的 AI 工具…"));
-    assert.ok(!/AI 工具已就緒|還沒有就緒|讀不到 AI 工具/.test(text(step)), "no conclusion before the answer");
+    const block = one(page.main, "data-home", "first-run");
+    assert.ok(block, "the block is there");
+    assert.deepStrictEqual(loadingKeys(page.main), ["first-run"]);
+    assert.ok(text(block).includes("正在看你的 AI 工具…"));
+    assert.ok(!/還沒安裝|讀不到|可以聊天/.test(text(block)), "no conclusion before the answer");
+    assert.strictEqual(byData(page.main, "data-setup-pick-go", "claude").length, 0, "nothing to choose before the answer");
     await page.release();
     assert.deepStrictEqual(loadingKeys(page.main), []);
-    assert.ok(/已經有可以聊天的 AI 工具就緒了/.test(text(one(page.main, "data-home-step", "1"))));
-    assert.ok(one(page.main, "data-home", "first-steps"));
+    assert.ok(byData(page.main, "data-setup-pick-go", "claude").length === 1, "the cards are there");
+    assert.ok(one(page.main, "data-home", "first-run"));
   });
 
   await test("16c: the employees' data could not be read: the block says so (the frame stays, nothing is shown as an empty team) and no 載入中 is left", async () => {
     const page = await home(world({ fail: { "GET /api/agent-profiles": { status: 500, body: { error: "壞了" } } } }));
     assert.ok(/讀不到員工的資料/.test(text(one(page.main, "data-home", "team"))));
-    assert.ok(!one(page.main, "data-home", "first-steps"));
+    assert.ok(!one(page.main, "data-home", "first-run"));
     assert.deepStrictEqual(check16c(page.main, "done"), []);
   });
 
@@ -640,7 +641,7 @@ function check16dPace(times, forced) {
   });
 
   await test("source: the home page and its blocks keep the plan's data-* names, and the CSS has its own marked part", () => {
-    for (const k of ["data-home-loading", "loading-note", "chat_card", "first-steps"]) assert.ok(SOURCE.includes(k), k);
+    for (const k of ["data-home-loading", "loading-note", "chat_card", "first-run"]) assert.ok(SOURCE.includes(k), k);
     for (const k of ["waiting", "team", "today", "ask"]) assert.ok(SOURCE.includes(`"${k}"`), k);
     assert.ok(/\/\* P48-2 /.test(CSS), "style.css has the P48-2 part");
   });

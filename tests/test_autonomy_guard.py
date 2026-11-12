@@ -89,6 +89,35 @@ Never, whatever the person ticked in 「自己動手」:
      P48-7's documentation test (tests/test_p48_docs.py) checks that these files exist and carry the number of their rule; the first-CEO tool pick
      (``?tool=``, tests/test_p38_first_ceo.py ``WantedToolTests``) and the small fixes (tests/frontend/p48_sweep.cjs) are not rules but are tested beside them.
 
+  17. (P50, ADR 0015) the chat-first home of v0.23.0 changes only what the screen shows: a greeting, one box, a side bar of recent employees and neutral colours; it sends nothing,
+     reads nothing and decides nothing on its own. Three rules about the page's source, tested here on ``web/app.js`` (each with a made-up bad source that must fire), and where the thing is:
+     17a  an example sentence only puts its words in the home box and puts the cursor there: the function that handles it makes no request and calls no send; the button's click
+          calls only that function (P50-1, this file, ``ChatFirstHomeRules``, with tests/frontend/p50_home.cjs).
+     17b  the side bar's 最近 asks for nothing and has no timer: the part of the page that draws it never calls ``api`` or names ``/api/chats``, and sets no ``setInterval`` or
+          ``setTimeout``; it is drawn from the chat list the home page had already read (P50-2, this file, with tests/frontend/p50_nav.cjs).
+     17c  only Cmd/Ctrl + Enter sends from the home box: the box's keydown handler calls the send function in that one case, and nothing else of the box (keypress, keyup, a form's
+          submit) sends (P50-1, this file, with tests/frontend/p50_home.cjs).
+     15b is not changed and still passes: v0.23.0 uses no ``/api/`` path that v0.20.0 did not. tests/test_p50_docs.py checks that these files exist and carry the number of their rule.
+
+  18. (P51, ADR 0016) the chat page of v0.24.0 reads like text and lets you change whom you talk to; it is only what the screen shows. Four rules about the page's source, tested here on
+     ``web/app.js`` (each with a made-up bad source that must fire), and where the thing is:
+     18a  a fold on the chat page holds only tool, result, auto-allowed, cost and process lines: the card that waits, its decision, a refusal, an error, an odd message and the words said
+          (yours and the employee's) are never in one, and a fold drops no line (P51-1, this file, ``ChatReadsLikeTextRules``, with tests/frontend/p51_chat.cjs).
+     18b  changing whom you talk to sends nothing and writes nothing: the handlers of a pick call no send or request function, make no POST, PUT or DELETE and do not read ``/api/chats``;
+          they only go to a page (or change whom the home box is for) and keep the unsent words in the page's memory (P51-2, this file, with tests/frontend/p51_who.cjs).
+     18c  only Cmd/Ctrl + Enter sends from the chat page's box: its keydown handler calls ``send`` in that one case, and nothing else of the page (keypress, keyup, a form's submit) does
+          (P51-2, this file, with tests/frontend/p51_who.cjs and tests/frontend/chat.cjs).
+     18d  the line over a fold has no money: ``chatQuietSummary`` is only counts of kinds, and nothing else writes into it (ADR 0013 point 5; P51-1, this file, with tests/frontend/p51_chat.cjs).
+     15b is not changed and still passes: v0.24.0 uses no ``/api/`` path that v0.20.0 did not. tests/test_p51_docs.py checks that these files exist and carry the number of their rule.
+
+  19. (P52, ADR 0017) the first run on the home page of v0.25.0 puts the steps of the start-up page and the create-CEO page on one page; every step is still the person's own press. Three rules, tested where the thing is:
+     19a  on the home page's first-run block the chat safety check is sent only by the button of the confirm area (「確認，開始」), the same road as 16a, with no second way in
+          (P52-1, tests/frontend/p52_first_run.cjs).
+     19b  the request that makes the first CEO is sent only inside the click of 「建立 CEO，開始聊」 (and of the old create-CEO page's button); loading, choosing a card and redrawing never send it;
+          after the card is made the page writes ``setup_done: true`` once (only if it was not true), never on load, pick or redraw, never without a made card (P52-1 and P52-5, tests/frontend/p52_first_run.cjs).
+     19c  the plain sentence for a tool whose version VBear does not know holds no version number that the program did not take from the server's data (P52-2, tests/frontend/p52_words.cjs).
+     P52-4's rule: this file, ``Guard19FilesAreThere``, checks that these files exist and carry the number of their rule.
+
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
 ``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py``, ``vbear/skillbook*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
 staff, of dispatch, of groups and of memory (the suggestions, P42-4) are held to it the day they are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
@@ -2591,6 +2620,714 @@ class Guard16FilesAreThere(unittest.TestCase):
         self.assertTrue((self.ROOT / "macos" / "VBear" / "main.swift").is_file())
         script = self.read("macos", "test_waiting_bridge.sh")
         self.assertIn("main.swift", script)
+
+
+# ---- 17: the chat-first home (v0.23.0, ADR 0015) ---------------------------------------------------------------------------------------------------
+# These scan the JavaScript of web/app.js as text: the function bodies are cut out by their braces, the comments are dropped, and a rule fires when a body does something it
+# must not. Each ``*_problems`` function is run on the real page (must be empty) and on a made-up bad source (must not be).
+
+def js_without_comments(text: str) -> str:
+    """The text without ``//`` comments (a ``//`` that follows whitespace or starts a line; a URL's ``://`` is kept)."""
+    return "\n".join(re.sub(r"(^|\s)//.*$", r"\1", line) for line in text.splitlines())
+
+
+def js_function_body(source: str, name: str) -> str | None:
+    """The text between the braces of ``function name(...) {...}`` (or ``async function``), comments dropped, or None when there is no such function."""
+    m = re.search(r"(?:^|\n)(?:async )?function " + re.escape(name) + r"\(", source)
+    if not m:
+        return None
+    start = source.index("{", source.index(")", m.end()))
+    depth = 0
+    for i in range(start, len(source)):
+        if source[i] == "{":
+            depth += 1
+        elif source[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return js_without_comments(source[start + 1:i])
+    return None
+
+
+# anything that makes a request, sends, stores or leaves the page
+JS_REACHES_OUT = re.compile(r"\bapi\.|\bfetch\(|XMLHttpRequest|sendBeacon|openChatWith|\bsend\b|\bsubmit\b|\blocation\b|localStorage|sessionStorage|\.post\b|postMessage|\bpost\(|window\.open|\.click\(")
+EXAMPLE_FILL_STATEMENTS = ("input.value = sentence", "homeAskGrow(input)", "input.focus()")
+EXAMPLE_CLICK = re.compile(r'"data-home": "ask-example", on: \{ click: \(\) => ([^}]*?) \}')
+
+
+def example_problems(source: str, label: str = "<app.js>") -> list[str]:
+    """17a: the function that handles an example sentence only writes ``input.value``, grows the box and focuses it; the button calls nothing but that function."""
+    found = []
+    body = js_function_body(source, "homeExampleFill")
+    if body is None:
+        return [f"{label}: homeExampleFill is not there"]
+    for hit in JS_REACHES_OUT.finditer(body):
+        found.append(f"{label}: homeExampleFill reaches out: {hit.group(0)}")
+    for statement in [x.strip() for x in body.replace("\n", " ").split(";") if x.strip()]:
+        if statement not in EXAMPLE_FILL_STATEMENTS:
+            found.append(f"{label}: homeExampleFill does more than fill and focus: {statement[:60]}")
+    clicks = EXAMPLE_CLICK.findall(js_without_comments(source))
+    if not clicks:
+        found.append(f"{label}: no example button wired to homeExampleFill")
+    for call in clicks:
+        if call != "homeExampleFill(input, sentence)":
+            found.append(f"{label}: an example button does more than call homeExampleFill: {call[:60]}")
+    if js_without_comments(source).count('"ask-example"') != len(clicks):
+        found.append(f"{label}: an example button is not wired the way the rule reads")
+    return found
+
+
+NAV_RECENT_START = "// ---------- the side bar's 最近"
+NAV_RECENT_END = "// ---------- end of the side bar's 最近"
+NAV_RECENT_FORBIDDEN = re.compile(r"\bapi\b|/api/|\bfetch\b|XMLHttpRequest|sendBeacon|setInterval|setTimeout|requestAnimationFrame|waitingModel|WebSocket|EventSource")
+
+
+def nav_recent_problems(source: str, label: str = "<app.js>") -> list[str]:
+    """17b: the part of the page between the two markers (the side bar's 最近) never calls ``api``, never names a path under /api/ or the chat list, and sets no timer."""
+    if NAV_RECENT_START not in source or NAV_RECENT_END not in source or source.index(NAV_RECENT_END) < source.index(NAV_RECENT_START):
+        return [f"{label}: the markers of the side bar's 最近 are not there"]
+    part = js_without_comments(source[source.index(NAV_RECENT_START):source.index(NAV_RECENT_END)])
+    found = [f"{label}: the side bar's 最近 reaches out or sets a timer: {hit.group(0)}" for hit in NAV_RECENT_FORBIDDEN.finditer(part)]
+    if "navRecentRows" not in part or "drawNavRecent" not in part:
+        found.append(f"{label}: navRecentRows / drawNavRecent are not between the markers")
+    return found
+
+
+KEYDOWN_BODY = re.compile(r'^if \(e\.key === "Enter" && \(e\.metaKey \|\| e\.ctrlKey\)( && !e\.isComposing)?\) \{ e\.preventDefault\(\); send\(\); \}$')
+HOME_SEND_USES = ("homeAskKeydown(e, send)", "async function send()", "click: () => send()")
+
+
+def home_keydown_problems(source: str, label: str = "<app.js>") -> list[str]:
+    """17c: the keydown handler of the home box calls ``send`` only for Enter together with Cmd or Ctrl; the box has no other key, form or submit path to ``send``."""
+    found = []
+    key = js_function_body(source, "homeAskKeydown")
+    if key is None:
+        return [f"{label}: homeAskKeydown is not there"]
+    if not KEYDOWN_BODY.match(" ".join(key.split())):
+        found.append(f"{label}: homeAskKeydown is not 'Enter with Cmd or Ctrl sends, nothing else': {' '.join(key.split())[:90]}")
+    ask = js_function_body(source, "homeAsk")
+    if ask is None:
+        return found + [f"{label}: homeAsk is not there"]
+    rest = ask
+    for use in HOME_SEND_USES:
+        rest = rest.replace(use, "")
+    for hit in re.finditer(r"(?<![\w-])send(?![\w-])", rest):      # (the word ``send`` as a name, not the ``send`` inside ``home-send`` or ``ask-send``)
+        found.append(f"{label}: homeAsk reaches send another way (near: {rest[max(0, hit.start() - 30):hit.end() + 10].strip()!r})")
+    for hit in re.finditer(r"keypress|keyup|onkeydown|onkeypress|onkeyup|[\"\']submit[\"\']|addEventListener|<form|el\(\"form\"", ask):
+        found.append(f"{label}: homeAsk has another input path: {hit.group(0)}")
+    if len(re.findall(r"keydown:", ask)) != 1 or "keydown: (e) => homeAskKeydown(e, send)" not in ask:
+        found.append(f"{label}: the box does not have exactly one keydown, the one that calls homeAskKeydown")
+    return found
+
+
+class ChatFirstHomeRules(unittest.TestCase):
+    """17a, 17b, 17c"""
+
+    SOURCE = (Path(__file__).resolve().parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+
+    GOOD_FILL = """
+function homeAskGrow(input) { input.style.height = "1px"; }
+function homeExampleFill(input, sentence) {
+  input.value = sentence;   // only the words
+  homeAskGrow(input);
+  input.focus();
+}
+function x() { return el("button", { type: "button", "data-home": "ask-example", on: { click: () => homeExampleFill(input, sentence) } }, sentence); }
+"""
+
+    def test_17a_the_page_only_fills_and_focuses(self):
+        self.assertEqual(example_problems(self.SOURCE), [])
+
+    def test_17a_the_scan_fires_on_a_handler_that_sends_asks_or_stores(self):
+        self.assertEqual(example_problems(self.GOOD_FILL), [])
+        for bad in ("  openChatWith(ceo.id, { text: sentence });", "  api.post(\"/api/chats\", { text: sentence });", "  send();", "  fetch(\"/x\");",
+                    "  location.hash = \"#/chat\";", "  localStorage.setItem(\"k\", sentence);", "  button.click();", "  navigator.sendBeacon(\"/x\");", "  console.log(sentence);"):
+            worse = self.GOOD_FILL.replace("  input.focus();", "  input.focus();\n" + bad)
+            self.assertNotEqual(example_problems(worse), [], bad)
+
+    def test_17a_the_scan_fires_on_a_button_that_does_more_than_call_the_function(self):
+        for call in ("send()", "homeExampleFill(input, sentence); send()", "(homeExampleFill(input, sentence), openChatWith(ceo.id, { text: sentence }))"):
+            worse = self.GOOD_FILL.replace("click: () => homeExampleFill(input, sentence)", "click: () => " + call)
+            self.assertNotEqual(example_problems(worse), [], call)
+        self.assertNotEqual(example_problems("function homeExampleFill(input, sentence) { input.value = sentence; }\n"), [], "no button at all")
+        self.assertNotEqual(example_problems(self.GOOD_FILL + 'x = { "data-home": "ask-example", onclick: send };'), [], "a second example button wired another way")
+        self.assertNotEqual(example_problems("function other() {}"), [], "no function")
+
+    def test_17b_the_side_bar_recent_asks_for_nothing_and_has_no_timer(self):
+        self.assertEqual(nav_recent_problems(self.SOURCE), [])
+
+    def test_17b_the_scan_fires_on_a_read_or_a_timer(self):
+        good = NAV_RECENT_START + "\nfunction navRecentRows(x) { return []; }\nfunction drawNavRecent() { setKids(a, []); }\n" + NAV_RECENT_END + "\n"
+        self.assertEqual(nav_recent_problems(good), [])
+        for bad in ("api.get(\"/api/chats\")", "await api.get(`/api/chats`)", "fetch(\"/api/chats\")", "setInterval(drawNavRecent, 1000)", "setTimeout(drawNavRecent, 10)",
+                    "requestAnimationFrame(drawNavRecent)", "waitingModel.refresh()", "new EventSource(\"/x\")"):
+            worse = good.replace("setKids(a, []);", "setKids(a, []); " + bad + ";")
+            self.assertNotEqual(nav_recent_problems(worse), [], bad)
+        self.assertEqual(nav_recent_problems(good.replace("setKids(a, []);", "setKids(a, []); // api.get(\"/api/chats\") is not called here")), [], "a comment is not a call")
+        self.assertNotEqual(nav_recent_problems("function navRecentRows() {}"), [], "no markers")
+
+    GOOD_ASK = """
+function homeAskKeydown(e, send) {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.isComposing) { e.preventDefault(); send(); }
+}
+function homeAsk(state) {
+  const input = el("textarea", { on: { keydown: (e) => homeAskKeydown(e, send), input: () => homeAskGrow(input) } });
+  const button = el("button", { on: { click: () => send() } }, "送出");
+  async function send() { await openChatWith(1, {}); }
+  return block(el("div", null, input, button));
+}
+"""
+
+    def test_17c_the_box_sends_only_on_cmd_or_ctrl_enter(self):
+        self.assertEqual(home_keydown_problems(self.SOURCE), [])
+
+    def test_17c_the_scan_fires_on_a_plain_enter_or_another_path_to_send(self):
+        self.assertEqual(home_keydown_problems(self.GOOD_ASK), [])
+        worse_keys = ("if (e.key === \"Enter\") { e.preventDefault(); send(); }", "if (e.key === \"Enter\" && !e.shiftKey) { e.preventDefault(); send(); }",
+                      "if (e.key === \"Enter\" && (e.metaKey || e.ctrlKey)) { send(); } else if (e.key === \"Enter\") { send(); }",
+                      "if (e.key === \"Enter\" || (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); }", "send();")
+        for worse in worse_keys:
+            source = self.GOOD_ASK.replace("if (e.key === \"Enter\" && (e.metaKey || e.ctrlKey) && !e.isComposing) { e.preventDefault(); send(); }", worse)
+            self.assertNotEqual(home_keydown_problems(source), [], worse)
+        for extra in ("input.addEventListener(\"keypress\", (e) => { if (e.key === \"Enter\") send(); });", "const f = el(\"form\", { on: { submit: send } });",
+                      "input.onkeyup = (e) => send();", "setTimeout(send, 10);"):
+            source = self.GOOD_ASK.replace("  return block(", "  " + extra + "\n  return block(")
+            self.assertNotEqual(home_keydown_problems(source), [], extra)
+        two = self.GOOD_ASK.replace("input: () => homeAskGrow(input) }", "input: () => homeAskGrow(input), keydown: (e) => send() }")
+        self.assertNotEqual(home_keydown_problems(two), [], "a second keydown")
+
+
+# ---- 17, stronger (P53, from the review of v0.23.0): the same three rules, with the doors the review found left open shut ---------------------------------------------------------
+# 17a also reads the helper the fill calls (``homeAskGrow``); 17b also reads every place ``drawNavRecent`` is called from; 17c also reads every keydown handler on ``document`` or ``window``.
+
+
+def ask_grow_problems(source: str, label: str = "<app.js>") -> list[str]:
+    """17a (stronger): ``homeAskGrow``, which ``homeExampleFill`` calls, only measures and sizes the box: it reaches out to nothing, so a side effect cannot hide in it."""
+    body = js_function_body(source, "homeAskGrow")
+    if body is None:
+        return [f"{label}: homeAskGrow is not there"]
+    return [f"{label}: homeAskGrow reaches out: {hit.group(0)}" for hit in JS_REACHES_OUT.finditer(body)]
+
+
+NAV_RECENT_CALLERS = ("waitingChatsNote", "route")
+
+
+def nav_recent_call_problems(source: str, label: str = "<app.js>") -> list[str]:
+    """17b (stronger): ``drawNavRecent`` is only ever called (never handed over as a value) from the place the chat list was just read (``waitingChatsNote``) and from the page change (``route``)."""
+    code = js_without_comments(source)
+    found, called = [], False
+    for hit in re.finditer(r"\bdrawNavRecent\b", code):
+        before = code[max(0, hit.start() - 9):hit.start()]
+        if before.endswith("function "):
+            continue
+        if not code[hit.end():].startswith("("):
+            found.append(f"{label}: drawNavRecent is used as a value, not called (near: {code[max(0, hit.start() - 30):hit.end() + 20].strip()!r})")
+            continue
+        called = True
+        owner = None
+        for fn in re.finditer(r"^(?:async )?function (\w+)", code[:hit.start()], re.M):
+            owner = fn.group(1)
+        if owner not in NAV_RECENT_CALLERS:
+            found.append(f"{label}: drawNavRecent is called from {owner}, not from {' or '.join(NAV_RECENT_CALLERS)}")
+    if not called:
+        found.append(f"{label}: drawNavRecent is never called")
+    return found
+
+
+GLOBAL_KEYDOWN = re.compile(r"\b(?:document|window)\.addEventListener\(\s*[\"\']keydown[\"\']")
+HOME_SEND_WORDS = re.compile(r"(?<![\w-])send(?![\w-])|openChatWith|homeAskKeydown|ask-send|\.click\(")
+
+
+def global_keydown_problems(source: str, label: str = "<app.js>") -> list[str]:
+    """17c (stronger): no keydown handler on ``document`` or ``window`` (the whole file) sends, opens a chat or presses the home box's button, and ``homeAskKeydown`` is used only inside ``homeAsk``."""
+    code = js_without_comments(source)
+    found = []
+    for hit in GLOBAL_KEYDOWN.finditer(code):
+        start = hit.start() + hit.group(0).index("(")
+        depth, end = 0, None
+        for i in range(start, len(code)):
+            if code[i] == "(":
+                depth += 1
+            elif code[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        call = code[start:end] if end else code[start:start + 600]
+        texts = [call]
+        named = re.search(r",\s*([A-Za-z_]\w*)\s*(?:,\s*\w+\s*)?$", call)
+        if named:
+            body = js_function_body(code, named.group(1))
+            texts.append(body or "")
+        for text in texts:
+            for bad in HOME_SEND_WORDS.finditer(text):
+                found.append(f"{label}: a keydown on document or window reaches the home box's send: {bad.group(0)}")
+    ask = js_function_body(code, "homeAsk") or ""
+    key = js_function_body(code, "homeAskKeydown") or ""
+    outside = code.replace(ask, "", 1).replace(key, "", 1)
+    for hit in re.finditer(r"homeAskKeydown", outside):
+        if not code[max(0, hit.start() - 9):hit.start()].endswith("function "):
+            found.append(f"{label}: homeAskKeydown is used outside homeAsk")
+    return found
+
+
+class ChatFirstHomeRulesStronger(unittest.TestCase):
+    """17a, 17b, 17c, stronger (P53): the review of v0.23.0 asked for these; each has a made-up bad source that must fire."""
+
+    SOURCE = (Path(__file__).resolve().parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+
+    def test_17a_the_helper_the_fill_calls_reaches_out_to_nothing(self):
+        self.assertEqual(ask_grow_problems(self.SOURCE), [])
+        good = "function homeAskGrow(input) { input.style.height = \"1px\"; }\n"
+        self.assertEqual(ask_grow_problems(good), [])
+        for bad in ("openChatWith(1, {});", "api.post(\"/api/chats\", {});", "send();", "fetch(\"/x\");", "location.hash = \"#/x\";", "localStorage.setItem(\"k\", \"v\");", "button.click();"):
+            self.assertNotEqual(ask_grow_problems(good.replace("}\n", " " + bad + " }\n")), [], bad)
+        self.assertNotEqual(ask_grow_problems("function other() {}"), [], "no function")
+
+    def test_17b_drawNavRecent_is_only_called_from_the_chat_list_read_and_the_page_change(self):
+        self.assertEqual(nav_recent_call_problems(self.SOURCE), [])
+        good = ("function drawNavRecent() { return 1; }\nfunction waitingChatsNote(b) { drawNavRecent(); }\nasync function route() { drawNavRecent(); }\n")
+        self.assertEqual(nav_recent_call_problems(good), [])
+        self.assertEqual(nav_recent_call_problems(good + "// function other() { setInterval(drawNavRecent, 10); }\n"), [], "a comment is not a call")
+        for bad in ("function wireNavMenu() { setInterval(() => drawNavRecent(), 1000); }", "function other() { setTimeout(drawNavRecent, 10); }",
+                    "function viewHome() { drawNavRecent(); }", "function x() { const f = drawNavRecent; f(); }"):
+            self.assertNotEqual(nav_recent_call_problems(good + bad + "\n"), [], bad)
+        self.assertNotEqual(nav_recent_call_problems("function drawNavRecent() {}\n"), [], "never called")
+
+    def test_17c_no_keydown_on_document_or_window_sends_from_the_home_box(self):
+        self.assertEqual(global_keydown_problems(self.SOURCE), [])
+        good = ("function homeAskKeydown(e, send) { if (e.key === \"Enter\") { send(); } }\nfunction homeAsk(s) { const i = el(\"textarea\", { on: { keydown: (e) => homeAskKeydown(e, send) } }); async function send() {} }\n"
+                "function w() { document.addEventListener(\"keydown\", (e) => { if (e.key === \"Escape\") close(); }); }\n")
+        self.assertEqual(global_keydown_problems(good), [])
+        for bad in ("function w2() { document.addEventListener(\"keydown\", (e) => { if (e.key === \"Enter\" && e.metaKey) send(); }); }",
+                    "function w2() { window.addEventListener(\"keydown\", (e) => { if (e.key === \"Enter\") openChatWith(1, {}); }); }",
+                    "function w2() { document.addEventListener(\"keydown\", (e) => { askButton.click(); }); }",
+                    "function w2() { document.addEventListener('keydown', onKey); }\nfunction onKey(e) { homeSend(); send(); }",
+                    "function w2() { window.addEventListener(\"keydown\", (e) => homeAskKeydown(e, go)); }"):
+            self.assertNotEqual(global_keydown_problems(good + bad + "\n"), [], bad)
+        self.assertEqual(global_keydown_problems(good + "// document.addEventListener(\"keydown\", (e) => send());\n"), [], "a comment is not a handler")
+
+
+class Guard17FilesAreThere(unittest.TestCase):
+    """17: the three rules of v0.23.0 are kept where the description above says, and each file carries the number of its rule."""
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def read(self, *parts):
+        return self.ROOT.joinpath(*parts).read_text(encoding="utf-8")
+
+    def test_17_the_description_names_all_three_rules_and_their_files(self):
+        text = self.read("tests", "test_autonomy_guard.py")
+        for rule in "abc":
+            self.assertIn(f"     17{rule}  ", text, rule)
+        for name in ("p50_home.cjs", "p50_nav.cjs", "ChatFirstHomeRules"):
+            self.assertIn(name, text, name)
+
+    def test_17_each_file_exists_and_carries_the_number_of_its_rule(self):
+        for rule, parts in (("17a", ("tests", "frontend", "p50_home.cjs")), ("17c", ("tests", "frontend", "p50_home.cjs")), ("17b", ("tests", "frontend", "p50_nav.cjs"))):
+            self.assertIn(rule, self.read(*parts), "/".join(parts))
+        self.assertRegex(self.read("tests", "test_autonomy_guard.py"), r"class ChatFirstHomeRules")
+        for rule in ("test_17a_", "test_17b_", "test_17c_"):
+            self.assertIn(rule, self.read("tests", "test_autonomy_guard.py"), rule)
+        self.assertRegex(self.read("tests", "test_autonomy_guard.py"), r"class ChatFirstHomeRulesStronger")
+
+
+# ---- 18: the chat reads like text (v0.24.0, ADR 0016) ---------------------------------------------------------------------------------------------------
+# Same method as 17: the JavaScript of web/app.js as text, function bodies cut out by their braces, comments dropped; each ``*_problems`` function is run on the real page (must be empty)
+# and on a made-up bad source (must not be).
+
+QUIET_DATA_CHAT = ("process", "tool", "result", "auto", "cost", "process-end")                     # the data-chat of the lines a fold may hold
+QUIET_RECORDS = {"tool_call", "tool_result", "auto_allowed", "process_started", "turn_ended", "process_ended"}
+NEVER_FOLDED = ("card", "card_decision", "denied", "error", "anomaly", "user_message", "reply")
+
+
+def chat_line_data_chats(source: str) -> dict[str, str]:
+    """{record kind: data-chat of its line} read from the cases of ``chatLine``."""
+    body = js_function_body(source, "chatLine") or ""
+    parts = re.split(r'\n\s*case "(\w+)":', body)
+    out = {}
+    for kind, chunk in zip(parts[1::2], parts[2::2]):
+        m = re.search(r'"data-chat": "([\w-]+)"', chunk)
+        if m:
+            out[kind] = m.group(1)
+    return out
+
+
+def quiet_group_problems(source: str, label: str = "<app.js>") -> list[str]:
+    """18a: what may be put in a fold is a closed list; ``chatIsQuiet`` says yes to those record kinds only (the same ones whose line has one of the six quiet data-chat values),
+    never to the kinds that must stay in the open, and ``chatQuietLog.add`` puts every other line straight into the list and every line somewhere (nothing is dropped)."""
+    found = []
+    kinds_const = re.search(r"const CHAT_QUIET_KINDS = \[([^\]]*)\]", source)
+    if not kinds_const or tuple(re.findall(r'"([\w-]+)"', kinds_const.group(1))) != QUIET_DATA_CHAT:
+        found.append(f"{label}: CHAT_QUIET_KINDS is not exactly {QUIET_DATA_CHAT}")
+    quiet = js_function_body(source, "chatIsQuiet")
+    if quiet is None:
+        return found + [f"{label}: chatIsQuiet is not there"]
+    said = set(re.findall(r'case "(\w+)":', quiet))
+    if said != QUIET_RECORDS:
+        found.append(f"{label}: chatIsQuiet names {sorted(said)}, not {sorted(QUIET_RECORDS)}")
+    for kind in NEVER_FOLDED:
+        if re.search(r'["\']' + kind + r'["\']', quiet):
+            found.append(f"{label}: chatIsQuiet names {kind}, which must never be folded")
+    if not re.search(r"default:\s*return false;", quiet):
+        found.append(f"{label}: chatIsQuiet does not say no to every other kind")
+    if "rec.kind" not in quiet or not re.search(r'if \(!rec \|\| typeof rec !== "object"\) return false;', quiet):
+        found.append(f"{label}: chatIsQuiet does not say no to a record it cannot read")
+    lines = chat_line_data_chats(source)
+    if not lines:
+        found.append(f"{label}: could not read the lines of chatLine")
+    quiet_lines = {kind for kind, dc in lines.items() if dc in QUIET_DATA_CHAT}
+    if quiet_lines != QUIET_RECORDS:
+        found.append(f"{label}: the records whose line is a quiet one are {sorted(quiet_lines)}, not {sorted(QUIET_RECORDS)}")
+    for kind in NEVER_FOLDED:
+        if lines.get(kind) in QUIET_DATA_CHAT:
+            found.append(f"{label}: the line of {kind} has a quiet data-chat ({lines[kind]})")
+    log = js_function_body(source, "chatQuietLog")
+    if log is None:
+        return found + [f"{label}: chatQuietLog is not there"]
+    flat_log = " ".join(log.split())
+    if "if (!chatIsQuiet(rec)) { group = null; log.append(line); return; }" not in flat_log:
+        found.append(f"{label}: chatQuietLog does not put a line that may not be folded straight into the list")
+    if len(re.findall(r"group\.list\.append\(line\)", flat_log)) != 1:
+        found.append(f"{label}: chatQuietLog does not put every folded line into its fold exactly once")
+    for hit in re.finditer(r"\.remove\(|\.replaceChildren\(|setKids\(group\.list|\.splice\(|\.shift\(|\.pop\(", flat_log):
+        found.append(f"{label}: chatQuietLog takes a line out: {hit.group(0)}")
+    return found
+
+
+WHO_REACHES_OUT = re.compile(r"\bapi\b|\bfetch\b|XMLHttpRequest|sendBeacon|openChatWith|(?<![\w-])send(?![\w-])|\bsubmit\b|\.post\b|\.put\b|\.del\b|\bPOST\b|\bPUT\b|\bDELETE\b|/api/|postMessage|window\.open|\.click\(|setInterval|setTimeout|localStorage|sessionStorage")
+WHO_PICK_WIRING = "onPick: (c) => chatWhoGo(c.id, input.value, info), onLater: (c) => chatWhoLater(c.id, input.value) });"
+
+
+def who_pick_problems(source: str, label: str = "<app.js>") -> list[str]:
+    """18b: the handlers of a pick on the chat page and on the home page, and the pick list itself, call no send or request function and do not read ``/api/chats``; on the chat page
+    the pick goes to a page (``location``) and the unsent words wait in ``ceoDrafts``; the picker is wired to exactly those two functions."""
+    found = []
+    for name in ("chatWhoGo", "chatWhoLater", "whoPicker"):
+        body = js_function_body(source, name)
+        if body is None:
+            found.append(f"{label}: {name} is not there")
+            continue
+        for hit in WHO_REACHES_OUT.finditer(body):
+            found.append(f"{label}: {name} reaches out: {hit.group(0)}")
+    ask = js_function_body(source, "homeAsk") or ""
+    at = ask.find("onPick: (c) => {")
+    end = ask.find("onLater:", at)
+    if at < 0 or end < 0:
+        found.append(f"{label}: the home page's pick handler is not there")
+    else:
+        for hit in WHO_REACHES_OUT.finditer(ask[at:end]):
+            found.append(f"{label}: the home page's pick handler reaches out: {hit.group(0)}")
+    detail = js_function_body(source, "viewChatDetail") or ""
+    flat_detail = " ".join(detail.split())
+    if WHO_PICK_WIRING not in flat_detail:
+        found.append(f"{label}: the chat page's picker is not wired to chatWhoGo and chatWhoLater only")
+    if flat_detail.count("whoPicker(") != 1:
+        found.append(f"{label}: the chat page does not have exactly one picker")
+    return found
+
+
+CHAT_KEYDOWN = re.compile(r'on: \{ keydown: \(e\) => \{ if \(e\.key === "Enter" && \(e\.metaKey \|\| e\.ctrlKey\)( && !e\.isComposing)?\) \{ e\.preventDefault\(\); send\(\); \} \}, input: \(\) => homeAskGrow\(input\) \}')
+CHAT_SEND_USES = ("async function send()", "click: () => send() } }, \"送出\"", "e.preventDefault(); send(); }")
+
+
+def chat_keydown_problems(source: str, label: str = "<app.js>") -> list[str]:
+    """18c: in the chat page, the box's one keydown calls ``send`` only for Enter together with Cmd or Ctrl; no other key, form or submit path reaches ``send``."""
+    detail = js_function_body(source, "viewChatDetail")
+    if detail is None:
+        return [f"{label}: viewChatDetail is not there"]
+    flat = " ".join(detail.split())
+    found = []
+    box = re.search(r'const input = el\("textarea", \{.*?\}\);', flat)
+    if not box:
+        return [f"{label}: the chat page's box is not there"]
+    if not CHAT_KEYDOWN.search(box.group(0)):
+        found.append(f"{label}: the chat box's keydown is not 'Enter with Cmd or Ctrl sends, nothing else': {box.group(0)[:160]}")
+    if len(re.findall(r"keydown:", box.group(0))) != 1:
+        found.append(f"{label}: the chat box does not have exactly one keydown")
+    rest = flat
+    for use in CHAT_SEND_USES:
+        rest = rest.replace(use, "")
+    for hit in re.finditer(r"(?<![\w.\"'-])send(?![\w\"'-])", rest):      # (the word ``send`` as a name, called or handed on; not a string such as "send")
+        found.append(f"{label}: the chat page reaches send another way (near: {rest[max(0, hit.start() - 30):hit.end() + 10].strip()!r})")
+    for hit in re.finditer(r"keypress|keyup|onkeydown|onkeypress|onkeyup|[\"\']submit[\"\']|<form|el\(\"form\"", flat):
+        found.append(f"{label}: the chat page has another input path: {hit.group(0)}")
+    return found
+
+
+MONEY_IN_SUMMARY = re.compile(r"chatMoney|chatTurnCost|usd|US\$|budget|total|spent|\.cost|\.reported|\.estimate|toFixed|toLocale")
+
+
+def quiet_summary_problems(source: str, label: str = "<app.js>") -> list[str]:
+    """18d: the line over a fold is made by ``chatQuietSummary`` from counts only, and it is the only thing that writes into the line; no amount, no money word, no record field."""
+    found = []
+    body = js_function_body(source, "chatQuietSummary")
+    if body is None:
+        return [f"{label}: chatQuietSummary is not there"]
+    for hit in MONEY_IN_SUMMARY.finditer(body):
+        found.append(f"{label}: chatQuietSummary mentions money or a record field: {hit.group(0)}")
+    log = js_function_body(source, "chatQuietLog") or ""
+    writes = re.findall(r"setKids\(group\.summary, ([^;]*)\);", log)
+    if writes != ["chatQuietSummary(group.counts)"]:
+        found.append(f"{label}: something other than chatQuietSummary(group.counts) writes into the line over a fold: {writes}")
+    for hit in MONEY_IN_SUMMARY.finditer(log):
+        found.append(f"{label}: chatQuietLog mentions money or a record field: {hit.group(0)}")
+    if re.search(r"\bsummary\b[^;]*(textContent|innerText)", log):
+        found.append(f"{label}: the line over a fold is written another way")
+    return found
+
+
+class ChatReadsLikeTextRules(unittest.TestCase):
+    """18a, 18b, 18c, 18d"""
+
+    SOURCE = (Path(__file__).resolve().parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+
+    def test_the_scans_find_their_functions_in_the_real_page(self):
+        for name in ("chatIsQuiet", "chatQuietSummary", "chatQuietLog", "chatWhoGo", "chatWhoLater", "whoPicker", "chatLine", "viewChatDetail", "homeAsk"):
+            self.assertIsNotNone(js_function_body(self.SOURCE, name), name)
+        self.assertEqual(set(chat_line_data_chats(self.SOURCE)), {"user_message", "reply", "tool_call", "tool_result", "auto_allowed", "denied", "card", "card_decision", "turn_ended",
+                                                                   "process_started", "process_ended", "anomaly", "error"})
+
+    # ---- 18a ----
+
+    GOOD_QUIET = """
+const CHAT_QUIET_KINDS = ["process", "tool", "result", "auto", "cost", "process-end"];
+function chatIsQuiet(rec) {
+  if (!rec || typeof rec !== "object") return false;
+  switch (rec.kind) {
+    case "tool_call": case "tool_result": case "auto_allowed": case "process_started": return true;
+    case "turn_ended": return rec.reason === "result";
+    case "process_ended": return true;
+    default: return false;
+  }
+}
+function chatQuietLog(log) {
+  let group = null;
+  return { add(line, rec) {
+    if (!chatIsQuiet(rec)) { group = null; log.append(line); return; }
+    if (!group) group = start();
+    group.list.append(line);
+  } };
+}
+function chatLine(rec) {
+  switch (rec.kind) {
+    case "user_message": {
+      return el("li", { "data-chat": "user" });
+    }
+    case "reply":
+      return el("li", { "data-chat": "reply" });
+    case "tool_call":
+      return el("li", { "data-chat": "tool" });
+    case "tool_result":
+      return el("li", { "data-chat": "result" });
+    case "auto_allowed":
+      return el("li", { "data-chat": "auto" });
+    case "denied":
+      return el("li", { "data-chat": "denied" });
+    case "card":
+      return el("li", { "data-chat": "card" });
+    case "card_decision":
+      return el("li", { "data-chat": "decision" });
+    case "turn_ended": {
+      return el("li", { "data-chat": "cost" });
+    }
+    case "process_started":
+      return el("li", { "data-chat": "process" });
+    case "process_ended":
+      return el("li", { "data-chat": "process-end" });
+    case "anomaly":
+      return el("li", { "data-chat": "anomaly" });
+    case "error":
+      return el("li", { "data-chat": "error" });
+    default:
+      return null;
+  }
+}
+"""
+
+    def test_18a_the_page_folds_only_the_quiet_kinds(self):
+        self.assertEqual(quiet_group_problems(self.SOURCE), [])
+
+    def test_18a_the_scan_fires_on_a_fold_that_could_hold_a_card_an_error_or_the_words_said(self):
+        self.assertEqual(quiet_group_problems(self.GOOD_QUIET), [])
+        for kind in ("card", "card_decision", "denied", "error", "anomaly", "user_message", "reply"):
+            worse = self.GOOD_QUIET.replace('case "process_ended": return true;', f'case "process_ended": return true;\n    case "{kind}": return true;')
+            self.assertNotEqual(quiet_group_problems(worse), [], kind)
+        self.assertNotEqual(quiet_group_problems(self.GOOD_QUIET.replace("default: return false;", "default: return true;")), [], "yes to every other kind")
+        self.assertNotEqual(quiet_group_problems(self.GOOD_QUIET.replace('if (!rec || typeof rec !== "object") return false;', "")), [], "a record it cannot read")
+        self.assertNotEqual(quiet_group_problems(self.GOOD_QUIET.replace('"data-chat": "error"', '"data-chat": "tool"')), [], "the line of an error has a quiet data-chat")
+        self.assertNotEqual(quiet_group_problems(self.GOOD_QUIET.replace('"data-chat": "decision"', '"data-chat": "auto"')), [], "the line of a decision has a quiet data-chat")
+        self.assertNotEqual(quiet_group_problems(self.GOOD_QUIET.replace('const CHAT_QUIET_KINDS = ["process", "tool", "result", "auto", "cost", "process-end"];', 'const CHAT_QUIET_KINDS = ["process", "tool", "result", "auto", "cost", "process-end", "card"];')), [], "a seventh kind")
+        self.assertNotEqual(quiet_group_problems(self.GOOD_QUIET.replace('case "tool_call": case "tool_result":', 'case "tool_call":')), [], "a kind left out of the fold list but still a quiet line")
+
+    def test_18a_the_scan_fires_on_a_log_that_drops_a_line(self):
+        self.assertNotEqual(quiet_group_problems(self.GOOD_QUIET.replace("if (!chatIsQuiet(rec)) { group = null; log.append(line); return; }", "if (!chatIsQuiet(rec)) { group = null; return; }")), [], "a line is dropped")
+        self.assertNotEqual(quiet_group_problems(self.GOOD_QUIET.replace("group.list.append(line);", "")), [], "a folded line is dropped")
+        self.assertNotEqual(quiet_group_problems(self.GOOD_QUIET.replace("group.list.append(line);", "group.list.append(line); group.list.children[0].remove();")), [], "a line is taken out")
+        self.assertNotEqual(quiet_group_problems(self.GOOD_QUIET.replace("group.list.append(line);", "setKids(group.list, line);")), [], "the fold is redrawn with one line")
+
+    # ---- 18b ----
+
+    GOOD_WHO = """
+function whoPicker(opts) {
+  const x = el("button", { on: { click: () => choose(c) } });
+  function choose(c) { close(false); if (typeof opts.onPick === "function") opts.onPick(c); }
+  return { node: x };
+}
+function chatWhoGo(profileId, words, chatsRes) {
+  const chat = homeChatsOf(chatsRes, null, profileId)[0] || null;
+  if (chat) { ceoDrafts.set(chat.id, words); location.hash = `#/chat/${chat.id}`; return; }
+  location.hash = `#/chat?profile=${profileId}`;
+}
+function chatWhoLater(profileId, words) { ceoDrafts.set(profileId, words); }
+function homeAsk(state) {
+  const picker = whoPicker({ cards: state.chats && state.chats.cards, data: state.chats, current: ceo.id, dir: "down",
+    onPick: (c) => {
+      target = { id: c.id };
+      picker.setCurrent(c.id);
+      input.focus();
+    },
+    onLater: (c) => chatWhoLater(c.id, input.value) });
+}
+async function viewChatDetail(token, id) {
+  const picker = whoPicker({ cards: info && info.cards, data: info, current: ownerId, currentName: all.card && all.card.name, dir: "up",
+      onPick: (c) => chatWhoGo(c.id, input.value, info), onLater: (c) => chatWhoLater(c.id, input.value) });
+}
+"""
+
+    def test_18b_a_pick_only_goes_to_a_page_or_changes_whom_the_box_is_for(self):
+        self.assertEqual(who_pick_problems(self.SOURCE), [])
+
+    def test_18b_the_scan_fires_on_a_pick_that_sends_writes_or_reads_the_chat_list(self):
+        self.assertEqual(who_pick_problems(self.GOOD_WHO), [])
+        for bad in ("api.post(\"/api/chats\", { profile_id: c.id });", "await api.get(\"/api/chats\");", "openChatWith(c.id, { text: input.value });", "send();", "fetch(\"/x\");",
+                    "localStorage.setItem(\"k\", c.id);", "api.del(\"/api/chats/x\");", "setTimeout(() => {}, 10);", "button.click();"):
+            for where in ("function chatWhoGo(profileId, words, chatsRes) {", "function chatWhoLater(profileId, words) {", "function whoPicker(opts) {", "    onPick: (c) => {"):
+                worse = self.GOOD_WHO.replace(where, where + "\n  " + bad)
+                self.assertNotEqual(who_pick_problems(worse), [], f"{bad} in {where}")
+        for wired in ("onPick: (c) => { send(); chatWhoGo(c.id, input.value, info) }, onLater: (c) => chatWhoLater(c.id, input.value) });",
+                      "onPick: (c) => chatWhoGo(c.id, input.value, info), onLater: (c) => openChatWith(c.id) });"):
+            worse = self.GOOD_WHO.replace(WHO_PICK_WIRING, wired)
+            self.assertNotEqual(who_pick_problems(worse), [], wired)
+        self.assertNotEqual(who_pick_problems(self.GOOD_WHO.replace("function chatWhoGo(", "function chatWhoElsewhere(")), [], "no handler")
+        two = self.GOOD_WHO.replace("      onPick: (c) => chatWhoGo(c.id, input.value, info), onLater:", "      onPick: (c) => chatWhoGo(c.id, input.value, info), onLater:").replace(
+            "async function viewChatDetail(token, id) {", "async function viewChatDetail(token, id) {\n  const other = whoPicker({ onPick: (c) => doIt(c) });")
+        self.assertNotEqual(who_pick_problems(two), [], "a second picker on the chat page, with a handler of its own")
+
+    # ---- 18c ----
+
+    GOOD_CHAT_BOX = """
+async function viewChatDetail(token, id) {
+  const input = el("textarea", { rows: "2", "data-chat": "input", "aria-label": "要對員工說的話", maxlength: "20000", placeholder: "要對員工說什麼？（Cmd/Ctrl + Enter 送出）",
+    on: { keydown: (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.isComposing) { e.preventDefault(); send(); } }, input: () => homeAskGrow(input) } });
+  const sendBtn = el("button", { type: "button", class: "btn primary home-send", "data-chat": "send", on: { click: () => send() } }, "送出");
+  async function send() { await api.post("/x", {}); }
+  return 1;
+}
+"""
+
+    def test_18c_the_chat_box_sends_only_on_cmd_or_ctrl_enter(self):
+        self.assertEqual(chat_keydown_problems(self.SOURCE), [])
+
+    def test_18c_the_scan_fires_on_a_plain_enter_or_another_path_to_send(self):
+        self.assertEqual(chat_keydown_problems(self.GOOD_CHAT_BOX), [])
+        for worse in ('if (e.key === "Enter") { e.preventDefault(); send(); }', 'if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }',
+                      'if (e.key === "Enter" || (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); }', "send();"):
+            source = self.GOOD_CHAT_BOX.replace('if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.isComposing) { e.preventDefault(); send(); }', worse)
+            self.assertNotEqual(chat_keydown_problems(source), [], worse)
+        for extra in ('input.addEventListener("keypress", (e) => { if (e.key === "Enter") send(); });', 'const f = el("form", { on: { submit: send } });', "input.onkeyup = (e) => send();",
+                      "setTimeout(send, 10);", "picker.onpick = () => send();", "who.button.click(); send();"):
+            source = self.GOOD_CHAT_BOX.replace("  return 1;", "  " + extra + "\n  return 1;")
+            self.assertNotEqual(chat_keydown_problems(source), [], extra)
+        two = self.GOOD_CHAT_BOX.replace("input: () => homeAskGrow(input) }", "input: () => homeAskGrow(input), keydown: (e) => send() }")
+        self.assertNotEqual(chat_keydown_problems(two), [], "a second keydown")
+
+    # ---- 18d ----
+
+    GOOD_SUMMARY = """
+function chatQuietSummary(counts) {
+  const c = counts && typeof counts === "object" ? counts : {};
+  const n = (k) => (Number.isInteger(c[k]) && c[k] > 0 ? c[k] : 0);
+  const said = [];
+  if (n("tool")) said.push(`用了 ${n("tool")} 次工具`);
+  if (n("cost")) said.push(`${n("cost")} 回合結算`);
+  return [...said, "細節"].join("・");
+}
+function chatQuietLog(log) {
+  return { add(line, rec) {
+    group.counts[kind] = (group.counts[kind] || 0) + 1;
+    setKids(group.summary, chatQuietSummary(group.counts));
+  } };
+}
+"""
+
+    def test_18d_the_line_over_a_fold_has_no_money(self):
+        self.assertEqual(quiet_summary_problems(self.SOURCE), [])
+
+    def test_18d_the_scan_fires_on_an_amount_or_another_writer(self):
+        self.assertEqual(quiet_summary_problems(self.GOOD_SUMMARY), [])
+        for bad in ("said.push(`花了 ${chatMoney(c.usd)}`);", "said.push(`US$${c.total}`);", "said.push(chatTurnCost(rec));", "said.push(String(c.cost_usd.toFixed(2)));", "said.push(`${c.spent}`);"):
+            worse = self.GOOD_SUMMARY.replace('  return [...said, "細節"]', "  " + bad + '\n  return [...said, "細節"]')
+            self.assertNotEqual(quiet_summary_problems(worse), [], bad)
+        self.assertNotEqual(quiet_summary_problems(self.GOOD_SUMMARY.replace("setKids(group.summary, chatQuietSummary(group.counts));", "setKids(group.summary, chatQuietSummary(group.counts) + chatMoney(rec.cost_usd));")), [], "money added where it is written")
+        self.assertNotEqual(quiet_summary_problems(self.GOOD_SUMMARY.replace("setKids(group.summary, chatQuietSummary(group.counts));", "setKids(group.summary, chatQuietSummary(group.counts)); setKids(group.summary, `${rec.cost_usd}`);")), [], "a second writer")
+        self.assertNotEqual(quiet_summary_problems("function other() {}"), [], "no function")
+
+
+class Guard18FilesAreThere(unittest.TestCase):
+    """18: the four rules of v0.24.0 are kept where the description above says, and each file carries the number of its rule."""
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def read(self, *parts):
+        return self.ROOT.joinpath(*parts).read_text(encoding="utf-8")
+
+    def test_18_the_description_names_all_four_rules_and_their_files(self):
+        text = self.read("tests", "test_autonomy_guard.py")
+        for rule in "abcd":
+            self.assertIn(f"     18{rule}  ", text, rule)
+        for name in ("p51_chat.cjs", "p51_who.cjs", "ChatReadsLikeTextRules"):
+            self.assertIn(name, text, name)
+
+    def test_18_each_file_exists_and_carries_the_number_of_its_rule(self):
+        for rule, parts in (("18a", ("tests", "frontend", "p51_chat.cjs")), ("18d", ("tests", "frontend", "p51_chat.cjs")), ("18b", ("tests", "frontend", "p51_who.cjs"))):
+            self.assertIn(rule, self.read(*parts), "/".join(parts))
+        self.assertIn("p51_who.cjs", self.read("tests", "test_autonomy_guard.py"))
+        self.assertRegex(self.read("tests", "test_autonomy_guard.py"), r"class ChatReadsLikeTextRules")
+        for rule in ("test_18a_", "test_18b_", "test_18c_", "test_18d_"):
+            self.assertIn(rule, self.read("tests", "test_autonomy_guard.py"), rule)
+
+
+class Guard19FilesAreThere(unittest.TestCase):
+    """19: the three rules of v0.25.0 are kept where the description above says, and each file carries the number of its rule."""
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def read(self, *parts):
+        return self.ROOT.joinpath(*parts).read_text(encoding="utf-8")
+
+    def test_19_the_description_names_all_three_rules_and_their_files(self):
+        text = self.read("tests", "test_autonomy_guard.py")
+        for rule in "abc":
+            self.assertIn(f"     19{rule}  ", text, rule)
+        for name in ("p52_first_run.cjs", "p52_words.cjs"):
+            self.assertIn(name, text, name)
+
+    def test_19_each_file_exists_and_carries_the_number_of_its_rule(self):
+        for rule, parts in (("19a", ("tests", "frontend", "p52_first_run.cjs")), ("19b", ("tests", "frontend", "p52_first_run.cjs")),
+                            ("19c", ("tests", "frontend", "p52_words.cjs"))):
+            self.assertIn(rule, self.read(*parts), "/".join(parts))
+
+    def test_19_each_rule_has_a_bad_sample_that_it_catches(self):
+        # a rule whose judge never fires is no rule: each test file names its judge and shows it catching a made-up bad page or source
+        first = self.read("tests", "frontend", "p52_first_run.cjs")
+        words = self.read("tests", "frontend", "p52_words.cjs")
+        for needle in ("judge19a", "judge19aSource", "judge19b", "judge19bSource"):
+            self.assertIn(needle, first, needle)
+        for needle in ("judge19c", "judge19cSource"):
+            self.assertIn(needle, words, needle)
+        self.assertRegex(first, r"19a judge[^\n]*catches")
+        self.assertRegex(first, r"19b judge[^\n]*catches")
+        self.assertRegex(words, r"19c[^\n]*(catches|bad)")
 
 
 if __name__ == "__main__":

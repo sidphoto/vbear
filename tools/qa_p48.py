@@ -18,7 +18,8 @@ The tasks (``--tasks a,b,c`` picks some; the default is all, in this order):
 
   first    the new person's first run: open, the start-up page, choose Claude (v0.21.0 has no picker: the person finds Claude's row; v0.22.0:
            one press of the card's button), the next step, create the CEO, and end at the box with the opening in it or at the one action of
-           the prepare page. Counted like qa_p47 (a step is a press, a field filled, or one screen scrolled; stuck is a step with more than
+           the prepare page. (v0.25 "after": the home page does the first run itself, so the walk is the pick and the home page's button that
+           makes the CEO, with no start-up page and no separate next-step press.) Counted like qa_p47 (a step is a press, a field filled, or one screen scrolled; stuck is a step with more than
            one screen of scrolling, a word of the vocabulary table's ``avoid`` lists or a known server sentence, or looking on another page);
            also kept for **each page the person lands on**: the seconds from the page being asked for to its first ``h1`` (``h1_s``), and to
            the thing to press being on the screen (``target_s``). The v0.22.0 picker is **one press that v0.21.0 does as a look at Claude's row**,
@@ -150,13 +151,19 @@ _COMMON_FIRST = [
     {"kind": "look", "sel": FIRST_END, "then": "chat_usable"},
     {"kind": "press", "sel": SEND, "ai": True, "then": "first_reply"},
 ]
+_AFTER_FIRST = [      # v0.25: the home page does the first run itself (pick, then the button that makes the CEO), the start-up page is not visited
+    {"kind": "press", "sel": PICK_CLAUDE, "then": "picked"},
+    {"kind": "press", "sel": qa47.HOME_CEO_GO, "then": "ceo_made", "unable": "no CEO can be made (the AI tool is not ready for it)"},
+    {"kind": "look", "sel": FIRST_END, "then": "chat_usable"},
+    {"kind": "press", "sel": SEND, "ai": True, "then": "first_reply"},
+]
 PATHS = {
     "before": {
         "first": {"start": "#/", "steps": [{"kind": "look", "sel": CLAUDE_ROW}, *_COMMON_FIRST]},
         **_regression_paths(),
     },
     "after": {
-        "first": {"start": "#/", "steps": [{"kind": "press", "sel": PICK_CLAUDE, "then": "picked"}, *_COMMON_FIRST]},
+        "first": {"start": "#/", "steps": list(_AFTER_FIRST)},
         **_regression_paths(),
     },
 }
