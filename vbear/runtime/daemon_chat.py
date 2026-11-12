@@ -361,8 +361,7 @@ class ChatOps:
             log.append("user_message", _said(n, text, origin), now=time.time())
             log.append("turn_started", {"turn": n, "cap_usd": cs.usd(allowance)}, now=time.time())
             log.append("process_started", {"mode": "resume" if resume else "new",
-                                           "budget_usd": cs.usd(allowance), "instructions": instructions is not None,
-                                           "identity": named is not None}, now=time.time())
+                                           "budget_usd": cs.usd(allowance), "instructions": instructions is not None}, now=time.time())
         except cs.ChatStoreError as exc:
             self._chat_not_started(log, n, launch_id, "聊天紀錄無法寫入")
             return _store_err(rid, exc)
@@ -524,7 +523,7 @@ class ChatOps:
             log.append("user_message", _said(n, text, origin), now=time.time())
             log.append("turn_started", {"turn": n, "cap_usd": cs.usd(allowance)}, now=time.time())
             log.append("process_started", {"mode": "resume" if resume else "new", "budget_usd": cs.usd(allowance),
-                                           "instructions": instructions is not None, "identity": named is not None}, now=time.time())
+                                           "instructions": instructions is not None}, now=time.time())
         except cs.ChatStoreError as exc:
             self._chat_not_started(log, n, launch_id, "聊天紀錄無法寫入")
             return _store_err(rid, exc)
@@ -691,7 +690,7 @@ class ChatOps:
             log.append("user_message", _said(n, text, origin), now=time.time())
             log.append("turn_started", {"turn": n, "cap_usd": cs.usd(allowance)}, now=time.time())
             log.append("process_started", {"mode": "resume" if resume else "new", "budget_usd": cs.usd(allowance),
-                                           "instructions": instructions is not None, "identity": named is not None}, now=time.time())
+                                           "instructions": instructions is not None}, now=time.time())
         except cs.ChatStoreError as exc:
             self._chat_not_started(log, n, launch_id, "聊天紀錄無法寫入")
             return _store_err(rid, exc)

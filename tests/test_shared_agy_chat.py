@@ -93,7 +93,7 @@ class WhatTheProcessGetsTests(SharedAgyCase):
         self.assertTrue(self.send_with(chat_id, True)["ok"])
         self.wait_turn(chat_id, 1)
         started = next(x for x in self.events(chat_id)[0] if x["kind"] == "process_started")
-        self.assertEqual(set(started) - {"seq", "at", "kind"}, {"mode", "budget_usd", "instructions", "identity"})      # P58: one yes-or-no field, no word of the name
+        self.assertEqual(set(started) - {"seq", "at", "kind"}, {"mode", "budget_usd", "instructions"})
         raw = self.raw(chat_id) + json.dumps(self.rpc("chat_events", chat_id=chat_id, after=0), ensure_ascii=False)
         self.assertNotIn(self.shared, raw)
         self.assertEqual(cs.prompt_start(self.base, chat_id).keys(), {"sha", "memory"})

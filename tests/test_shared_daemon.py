@@ -159,7 +159,7 @@ class NewProcessTests(SharedCase):
         self.assertEqual(self.prompt_sha(chat_id), mr.prompt_sha(None, None, sr.block(self.shared)))
         self.assertNotEqual(self.prompt_sha(chat_id), V0170_EMPTY_SHA)
         started = next(x for x in self.events(chat_id)[0] if x["kind"] == "process_started")
-        self.assertEqual(set(started) - {"seq", "at", "kind"}, {"mode", "budget_usd", "instructions", "identity"})      # P58: one yes-or-no field, no word of the name
+        self.assertEqual(set(started) - {"seq", "at", "kind"}, {"mode", "budget_usd", "instructions"})
         self.assertEqual(cs.prompt_start(self.base, chat_id).keys(), {"sha", "memory"})
         self.assertEqual(set(cs.KINDS["process_started"]), {"mode", "budget_usd", "instructions"})
         self.assertNotIn(self.shared, self.raw(chat_id))

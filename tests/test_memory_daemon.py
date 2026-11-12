@@ -92,7 +92,7 @@ class ClaudeMemoryTests(tcd.ChatCase):
         self.assertTrue(self.send_mem(chat_id, ENTRIES, instructions=None)["ok"])
         self.wait_turn(chat_id, 1)
         started = self.started(chat_id)
-        self.assertEqual(set(started) - {"seq", "at", "kind"}, {"mode", "budget_usd", "instructions", "identity"})      # P58: one yes-or-no field, no word of the name
+        self.assertEqual(set(started) - {"seq", "at", "kind"}, {"mode", "budget_usd", "instructions"})
         self.assertIs(started["instructions"], False, "it says whether the CARD has instructions, not whether memory went")
         self.assertEqual(set(cs.KINDS["process_started"]), {"mode", "budget_usd", "instructions"})
         blob = self.raw(chat_id) + json.dumps(self.rpc("chat_events", chat_id=chat_id, after=0), ensure_ascii=False)
@@ -251,7 +251,7 @@ class CodexMemoryTests(tcx.CodexCase):
         for text in TEXTS:
             self.assertNotIn(text, blob)
         started = next(x for x in self.events(chat_id)[0] if x["kind"] == "process_started")
-        self.assertEqual(set(started) - {"seq", "at", "kind"}, {"mode", "budget_usd", "instructions", "identity"})      # P58: one yes-or-no field, no word of the name
+        self.assertEqual(set(started) - {"seq", "at", "kind"}, {"mode", "budget_usd", "instructions"})
 
 
 class BoundaryTests(unittest.TestCase):
@@ -283,8 +283,7 @@ class BoundaryTests(unittest.TestCase):
             "turn_started": ["cap_usd", "turn"], "usage": ["delta_tokens", "total_tokens", "turn"],
             "user_message": ["text", "turn"]}
         self.assertEqual({k: sorted(v) for k, v in cs.KINDS.items()}, v016)
-        self.assertEqual({k: sorted(v) for k, v in cs._OPTIONAL.items()},
-                         {"process_started": ["identity"], "turn_ended": ["estimate", "tokens"], "user_message": ["origin"]})      # P58: the one yes-or-no field of v0.25.3
+        self.assertEqual({k: sorted(v) for k, v in cs._OPTIONAL.items()}, {"turn_ended": ["estimate", "tokens"], "user_message": ["origin"]})
 
     def test_the_daemon_accepts_the_field(self):
         from vbear.runtime import daemon

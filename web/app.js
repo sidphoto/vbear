@@ -15256,13 +15256,6 @@ function chatInputRows(input) {
   });
 }
 
-// P58 (ADR 0020): the "employee goes online" line also says whether the new process was told its own name and position. A record of before the
-// upgrade has no `identity` field and says nothing about it; the words are the server's fact (the daemon wrote it), never a guess.
-function chatIdentityWords(rec) {
-  if (rec.identity === true) return "，帶著名字和職位";
-  if (rec.identity === false) return "，沒有帶名字和職位";
-  return "";
-}
 // One record of the chat as a line of the transcript, or null (a kind this page does not draw, which is every kind it does
 // not know). A closed table: whatever the record holds, only these shapes come out.
 function chatLine(rec, opts) {
@@ -15323,7 +15316,7 @@ function chatLine(rec, opts) {
     }
     case "process_started":
       return el("li", { class: "chat-sys small muted", "data-chat": "process", "data-seq": String(rec.seq) },
-        `${rec.mode === "resume" ? "員工接續上次的對話上線" : "員工上線"}${chatIdentityWords(rec)}${rec.instructions === true ? "，帶著員工自己寫的指示" : "，沒有帶指示（員工設定上沒有自己寫的）"}`,
+        `${rec.mode === "resume" ? "員工接續上次的對話上線" : "員工上線"}${rec.instructions === true ? "，帶著員工自己寫的指示" : "，沒有帶指示（員工設定上沒有自己寫的）"}`,
         el("details", { class: "fold chat-money", "data-chat": "process-detail" }, el("summary", null, "詳細資訊"), el("p", { class: "small" }, `這次最多可花 ${chatMoney(rec.budget_usd)}。`)));
     case "process_ended":
       return el("li", { class: "chat-sys small muted", "data-chat": "process-end", "data-seq": String(rec.seq) },

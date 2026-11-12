@@ -64,7 +64,7 @@ Never, whatever the person ticked in 「自己動手」:
           read it (``conf.advanced_mode``) and as the body of the settings switch's POST to /api/config. (This file, ``AdvancedModeIsADisplay`` and ``AdvancedModeChangesNothingElse``.)
      15b  nothing new is asked of the server and nothing about the data changes: the ``/api/`` paths ``web/app.js`` uses are a subset of those
           of v0.20.0, the routes of ``vbear/server.py`` are those of v0.20.0, and the kinds of a chat's record (``chat_store.KINDS``,
-          ``_OPTIONAL``, ``_ALTERNATIVES``) and their fields are those of v0.20.0, plus the one optional ``process_started.identity`` that P58 (rule 22, ADR 0020) added and ``CHAT_OPTIONAL_ADDED`` names. (This file, ``NothingNewIsAsked``.)
+          ``_OPTIONAL``, ``_ALTERNATIVES``) and their fields are those of v0.20.0. (This file, ``NothingNewIsAsked``.)
      15c  the home page sends nothing by itself: only the press of 「送出」 sends one message (P47-2, tests/frontend/p47_home.cjs).
      15d  the spending limit and a routine are changed only by the person's press: the settings page sends nothing when it loads, the limit is
           saved by 「儲存」 alone, a routine kept on goes through ``confirmInPage`` when 「自己動手」 item 3 is on (P47-3, tests/frontend/p47_settings.cjs).
@@ -2471,8 +2471,6 @@ CHAT_KINDS_V0200 = {
     "card_edit_sent": ("card_id", "text"),
 }
 CHAT_OPTIONAL_V0200 = {"turn_ended": ("estimate", "tokens"), "user_message": ("origin",)}
-# P58 (ADR 0020): the one field the record gained since v0.20.0, named here so that any other new field is still caught: whether a new process was told the employee's name.
-CHAT_OPTIONAL_ADDED = {"process_started": ("identity",)}
 CHAT_ALTERNATIVES_V0200 = {"session_ready": ("claude_code_version", "cli_version")}
 API_PREFIX = re.compile(r"""["'`](/api/[^"'`$\s]*)""")
 
@@ -2512,7 +2510,7 @@ class NothingNewIsAsked(unittest.TestCase):
         from vbear.runtime import chat_store
         shape = chat_record_shape(chat_store.KINDS, chat_store._OPTIONAL, chat_store._ALTERNATIVES)
         self.assertEqual(shape["kinds"], {k: tuple(sorted(v)) for k, v in CHAT_KINDS_V0200.items()})
-        self.assertEqual(shape["optional"], {k: tuple(sorted(v)) for k, v in {**CHAT_OPTIONAL_V0200, **CHAT_OPTIONAL_ADDED}.items()})
+        self.assertEqual(shape["optional"], {k: tuple(sorted(v)) for k, v in CHAT_OPTIONAL_V0200.items()})
         self.assertEqual(shape["alternatives"], {k: tuple(sorted(v)) for k, v in CHAT_ALTERNATIVES_V0200.items()})
 
     def test_15b_the_scans_fire_on_small_made_up_sources(self):
@@ -2531,8 +2529,6 @@ class NothingNewIsAsked(unittest.TestCase):
         self.assertEqual(base["kinds"], {k: tuple(sorted(v)) for k, v in CHAT_KINDS_V0200.items()}, "the helper reads a table the way the test does")
         more = chat_record_shape({**{k: dict.fromkeys(v) for k, v in kinds.items()}, "spending": {"usd": None}}, {}, {})
         self.assertNotEqual(more["kinds"], base["kinds"], "a new kind is caught")
-        extra = {**{k: dict.fromkeys(v) for k, v in CHAT_OPTIONAL_V0200.items()}, **{k: dict.fromkeys(v) for k, v in CHAT_OPTIONAL_ADDED.items()}, "reply": {"extra": None}}
-        self.assertNotEqual(chat_record_shape({}, extra, {})["optional"], {k: tuple(sorted(v)) for k, v in {**CHAT_OPTIONAL_V0200, **CHAT_OPTIONAL_ADDED}.items()}, "a new optional field that is not named is caught")
         fewer = {k: dict.fromkeys(v) for k, v in kinds.items()}
         fewer["reply"] = {"text": None, "turn": None, "truncated": None, "extra": None}
         self.assertNotEqual(chat_record_shape(fewer, {}, {})["kinds"], base["kinds"], "a new field of a kind is caught")

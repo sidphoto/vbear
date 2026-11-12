@@ -31,7 +31,7 @@ class AdrTests(unittest.TestCase):
     def test_it_says_where_the_sentence_goes_what_is_cleaned_and_what_a_chat_that_exists_keeps(self):
         from vbear.runtime import memory_rules as mr
         for part in ("`--append-system-prompt`", "`developerInstructions`", "`systemPrompt.append`", "`memory_rules.combine`", "最前面", "64 字", "整段不送", "`prepare_identity`", "9,500",
-                     "`chat-prompt/<id>.json`", "`identity: true`", "升級不會把舊對話全標成「改了」", "只有開新對話才生效", "`process_started`", "選填布林 `identity`", "送到這位員工用的那家公司",
+                     "`chat-prompt/<id>.json`", "`identity: true`", "升級不會把舊對話全標成「改了」", "只有開新對話才生效", "聊天紀錄的格式不動", "`prompt_start`", "回 None", "送到這位員工用的那家公司",
                      "群組聊天、例行工作、派工步驟", "沒有新增 API 路徑", "降版", "22a", "22b", "22c", "EmployeeNameRules", "tests/test_p58_identity.py", "tests/frontend/p58_chat.cjs"):
             self.assertIn(part, self.adr, part)
         self.assertIn(mr.IDENTITY_HEAD.strip(), self.adr)
@@ -57,8 +57,8 @@ class DocumentsTests(unittest.TestCase):
 
     def test_the_changelog_says_what_changed_what_did_not_and_what_is_not_tried(self):
         for part in ("an employee knows its own name", "fixed sentence", "in front of everything else", "the employees you already have", "Only a new chat starts with it",
-                     "The name goes to the company", "Anthropic, OpenAI or Google", "64 characters", "is not sent at all", "帶著名字和職位", "沒有帶名字和職位", "9,500",
-                     "Not tried on a real Mac", "22a:", "22b:", "22c:", "`identity`", "Going back to v0.25.2", "open new chats"):
+                     "The name goes to the company", "Anthropic, OpenAI or Google", "64 characters", "is not sent at all", "does not say whether the name went", "9,500",
+                     "Not tried on a real Mac", "22a:", "22b:", "22c:", "`identity: true`", "Going back to v0.25.2", "`prompt_start` returns nothing"):
             self.assertIn(part, self.first, part)
 
     def test_the_changelog_quotes_the_sentence_the_code_makes(self):
@@ -69,7 +69,7 @@ class DocumentsTests(unittest.TestCase):
     def test_the_security_model_says_what_leaves_the_machine_and_how(self):
         for part in ("changes what VBear sends to an AI company", "Anthropic for a Claude Code employee", "OpenAI for a Codex employee", "Google for an AGY employee", "`identity_parts`", "`prepare_identity`",
                      "is **not sent at all**", "64 characters", "guard rule 22a", "22b", "22c", "MAX_CHAT_APPEND_PROMPT", "9,500", "Only a new session has it", "`chat-prompt/<id>.json`", "`identity: true`",
-                     "optional boolean `identity`", "guard rule 15b names it", "Residual risk", "Not verified", "Meetings, the chief of staff"):
+                     "The chat record did not change", "guard rule 15b is as it was in v0.25.2", "Going back to v0.25.2", "Residual risk", "Not verified", "Meetings, the chief of staff"):
             self.assertIn(part, self.model, part)
         self.assertEqual(problems(self.model, "SECURITY-MODEL v0.25.3"), [])
         self.assertNotIn("\n## ", self.security[self.security.index("## An employee knows its own name (v0.25.3)") + 5:], "v0.25.3's is the last section")
@@ -91,13 +91,14 @@ class GuardFilesTests(unittest.TestCase):
 
     def test_the_words_of_the_page_are_the_ones_the_documents_quote(self):
         app = raw("web", "app.js")
-        for word in ("帶著名字和職位", "沒有帶名字和職位", "名字、職位、固定指示"):
+        for word in ("名字、職位、固定指示",):
             self.assertIn(word, app, word)
 
-    def test_rule_15b_names_the_one_field_it_allows(self):
+    def test_rule_15b_is_as_it_was_and_the_record_has_no_new_field(self):
         guard = raw("tests", "test_autonomy_guard.py")
-        self.assertIn("CHAT_OPTIONAL_ADDED", guard)
-        self.assertIn('"process_started": ("identity",)', guard)
+        self.assertNotIn("CHAT_OPTIONAL_ADDED", guard)
+        self.assertNotIn("process_started.identity", guard)
+        self.assertNotIn("chatIdentityWords", raw("web", "app.js"))
 
 
 if __name__ == "__main__":

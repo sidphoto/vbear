@@ -173,12 +173,27 @@ class StoreTests(unittest.TestCase):
             path.chmod(0o600)
             self.assertIsNone(cs.prompt_start(self.base, self.cid), rec)
 
-    def test_process_started_may_say_whether_the_paragraph_went(self):
+    def test_process_started_takes_no_identity_field(self):
         base = {"seq": 1, "at": 1.0, "kind": "process_started", "mode": "new", "budget_usd": "0.50", "instructions": False}
-        self.assertIsNone(cs.record_problem(base), "a record of before")
-        self.assertIsNone(cs.record_problem(dict(base, identity=True)))
-        self.assertIsNone(cs.record_problem(dict(base, identity=False)))
-        self.assertIsNotNone(cs.record_problem(dict(base, identity="yes")))
+        self.assertIsNone(cs.record_problem(base), "the record of v0.25.2 is the record of v0.25.3")
+        for value in (True, False, "yes"):
+            self.assertIsNotNone(cs.record_problem(dict(base, identity=value)), "no field was added to the record (v0.25.2 reads a record only if its fields are exactly these)")
+
+    def test_v0252_reads_a_fingerprint_file_with_the_identity_key_as_nothing_and_does_not_break(self):
+        # The judgement of v0.25.2's ``chat_store.prompt_start`` (copied from 4adc078, the part after the file is read): a file is a fingerprint only
+        # when its keys are exactly v, sha and memory. Going back to v0.25.2 after v0.25.3 wrote ``identity: true`` therefore gives None: the page says nothing.
+        def v0252_judges(rec):
+            if not (isinstance(rec, dict) and set(rec) == {"v", "sha", "memory"} and rec["v"] == 1 and isinstance(rec["memory"], bool)
+                    and isinstance(rec["sha"], str) and cs.SHA_RE.match(rec["sha"])):
+                return None
+            return {"sha": rec["sha"], "memory": rec["memory"]}
+        sha = "d" * 64
+        cs.set_prompt_start(self.base, self.cid, sha, True)
+        path = self.base / "chat-prompt" / f"{self.cid}.json"
+        self.assertEqual(v0252_judges(json.loads(path.read_text())), {"sha": sha, "memory": True}, "a file written without the paragraph is read by v0.25.2 as before")
+        cs.set_prompt_start(self.base, self.cid, sha, True, with_identity=True)
+        self.assertEqual(set(json.loads(path.read_text())), {"v", "sha", "memory", "identity"})
+        self.assertIsNone(v0252_judges(json.loads(path.read_text())), "a file with the identity key: nothing, not an error")
 
 
 class BoundaryTests(unittest.TestCase):
@@ -189,9 +204,10 @@ class BoundaryTests(unittest.TestCase):
         self.assertEqual(a.MAX_CHAT_APPEND_PROMPT - 9000, 500)
         self.assertLessEqual(mr.MAX_IDENTITY_BLOCK + 4, 500, "the sentence and the blank lines around it fit the 500 more characters")
 
-    def test_the_chat_record_gained_one_optional_field_and_no_kind(self):
+    def test_the_chat_record_gained_no_field_and_no_kind(self):
         self.assertEqual(set(cs.KINDS["process_started"]), {"mode", "budget_usd", "instructions"})
-        self.assertEqual(set(cs._OPTIONAL["process_started"]), {"identity"})
+        self.assertNotIn("process_started", cs._OPTIONAL)
+        self.assertEqual({k: sorted(v) for k, v in cs._OPTIONAL.items()}, {"turn_ended": ["estimate", "tokens"], "user_message": ["origin"]})
         self.assertEqual(len(cs.KINDS), 20)
 
 
@@ -216,7 +232,7 @@ class ClaudeIdentityTests(tcd.ChatCase):
         self.assertTrue(self.send_id(chat_id, ID)["ok"])
         self.wait_turn(chat_id, 1)
         self.assertEqual(self.appended(), mr.identity_block(ID, "claude-chat"))
-        self.assertIs(started(self, chat_id)["identity"], True)
+        self.assertNotIn("identity", started(self, chat_id))      # the record is as it was in v0.25.2
         self.assertEqual(cs.prompt_start(self.base, chat_id),
                          {"sha": mr.prompt_sha(None, None, None, mr.identity_block(ID, "claude-chat")), "memory": False, "identity": True})
 
@@ -234,7 +250,7 @@ class ClaudeIdentityTests(tcd.ChatCase):
         self.assertTrue(self.send_id(chat_id, instructions="先說結論。")["ok"])
         self.wait_turn(chat_id, 1)
         self.assertEqual(self.appended(), "先說結論。")
-        self.assertIs(started(self, chat_id)["identity"], False)
+        self.assertNotIn("identity", started(self, chat_id))      # the record is as it was in v0.25.2
         self.assertEqual(cs.prompt_start(self.base, chat_id), {"sha": mr.prompt_sha("先說結論。", None), "memory": False})
 
     def test_a_null_field_is_the_same_as_none(self):
@@ -243,7 +259,7 @@ class ClaudeIdentityTests(tcd.ChatCase):
         self.assertTrue(self.send_id(chat_id, None)["ok"])
         self.wait_turn(chat_id, 1)
         self.assertIsNone(self.appended())
-        self.assertIs(started(self, chat_id)["identity"], False)
+        self.assertNotIn("identity", started(self, chat_id))      # the record is as it was in v0.25.2
 
     def test_a_field_that_is_not_the_closed_clean_shape_is_refused_before_anything_starts(self):
         chat_id = self.open_chat()
@@ -286,7 +302,7 @@ class CodexIdentityTests(tcx.CodexCase):
         self.wait_turn(chat_id, 1)
         self.assertEqual(self.developer(), mr.combine("先說結論。", mr.block(ENTRIES), None, identity_block=EXPECTED_CODEX))
         self.assertTrue(self.developer().startswith(EXPECTED_CODEX))
-        self.assertIs(started(self, chat_id)["identity"], True)
+        self.assertNotIn("identity", started(self, chat_id))      # the record is as it was in v0.25.2
         self.assertTrue(cs.prompt_start(self.base, chat_id)["identity"])
 
     def test_alone_it_is_all_of_it(self):
@@ -302,7 +318,7 @@ class CodexIdentityTests(tcx.CodexCase):
         self.assertTrue(self.send(chat_id, "hello", instructions="先說結論。")["ok"])
         self.wait_turn(chat_id, 1)
         self.assertEqual(self.developer(), "先說結論。")
-        self.assertIs(started(self, chat_id)["identity"], False)
+        self.assertNotIn("identity", started(self, chat_id))      # the record is as it was in v0.25.2
         self.assertNotIn("identity", cs.prompt_start(self.base, chat_id))
 
     def test_a_bad_field_is_refused_before_anything_starts(self):
@@ -325,7 +341,7 @@ class AgyIdentityTests(tag.AgyCase):
         want = mr.identity_block(ID, "agy-chat")
         self.assertEqual(self.session_prompt(), mr.combine("先說結論。", mr.block(ENTRIES), None, identity_block=want))
         self.assertIn("用 AGY 運作", want)
-        self.assertIs(started(self, chat_id)["identity"], True)
+        self.assertNotIn("identity", started(self, chat_id))      # the record is as it was in v0.25.2
         self.assertTrue(cs.prompt_start(self.base, chat_id)["identity"])
         self.assertEqual(self.unexpected(), [])
 
@@ -335,7 +351,7 @@ class AgyIdentityTests(tag.AgyCase):
         self.assertTrue(self.send(chat_id, "hello")["ok"])
         self.wait_turn(chat_id, 1)
         self.assertIsNone(self.session_prompt())
-        self.assertIs(started(self, chat_id)["identity"], False)
+        self.assertNotIn("identity", started(self, chat_id))      # the record is as it was in v0.25.2
 
     def test_a_bad_field_is_refused_before_anything_starts(self):
         chat_id = self.open_chat()
@@ -403,15 +419,17 @@ class ServiceTests(tca.ApiCase):
         self.talk(chat_id, 1)
         self.assertNotIn("[VBear 身分]", self.appended())
         recs = self.view(chat_id)["records"]
-        self.assertIs(next(r for r in recs if r["kind"] == "process_started")["identity"], False)
+        self.assertNotIn("identity", next(r for r in recs if r["kind"] == "process_started"))
 
-    def test_the_record_says_the_paragraph_went(self):
+    def test_the_record_does_not_say_whether_the_paragraph_went_but_the_fingerprint_file_does(self):
         pid = self.card(NAME, position="planner")
         self.configure([clean("text", 0)])
         chat_id = self.open_http(pid)
         self.talk(chat_id, 1)
         recs = self.view(chat_id)["records"]
-        self.assertIs(next(r for r in recs if r["kind"] == "process_started")["identity"], True)
+        self.assertNotIn("identity", next(r for r in recs if r["kind"] == "process_started"))
+        self.assertEqual(set(next(r for r in recs if r["kind"] == "process_started")) - {"seq", "at", "kind"}, {"mode", "budget_usd", "instructions"})
+        self.assertIs(cs.prompt_start(self.base, chat_id)["identity"], True)
 
     def test_a_chat_started_now_is_not_changed_until_the_name_or_the_position_is(self):
         pid = self.card(NAME, position="planner")

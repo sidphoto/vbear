@@ -193,8 +193,6 @@ KINDS = {
 # Fields a kind may have besides its own, all or none of them (a Claude turn's end has neither): what a Codex chat's
 # turn end says about its cost, which Codex gives as tokens and VBear turns into money.
 _OPTIONAL = {"turn_ended": {"estimate": _bool, "tokens": _int_or_none(0, MAX_TOKENS)},
-             # whether the new process was told the employee's name and position (P58, ADR 0020); a record of before has none
-             "process_started": {"identity": _bool},
              # a message VBear sent for a dispatch (P40-3) says which; one the person typed has none, and a record of before has none
              "user_message": {"origin": origin_ok}}
 # Fields of which a kind has exactly one: the version of the CLI that started the session.

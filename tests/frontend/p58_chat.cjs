@@ -1,6 +1,6 @@
-// P58 (v0.25.3 員工知道自己的名字, ADR 0020): the "employee goes online" line of the chat page says whether the new process was told its own name and position.
-// The words come from the record's `identity` flag (the daemon wrote it); a record from before the upgrade has none and the line says nothing about names.
-// The changed-notice also names the name and the position. The real web/app.js on a synthetic DOM and a fetch stub; it is NOT a browser test. Nothing here runs a model.
+// P58 (v0.25.3 員工知道自己的名字, ADR 0020): the "employee goes online" line of the chat page does NOT say whether the employee was told its name (the chat record gained no field, so v0.25.2
+// can still read a chat started in v0.25.3); the changed-notice does name the name and the position. The real web/app.js on a synthetic DOM and a fetch stub; it is NOT a browser test.
+// Nothing here runs a model.
 // Run: node tests/frontend/p58_chat.cjs   (exit code 0 = pass)
 "use strict";
 
@@ -93,7 +93,7 @@ const dataOf = (n) => n.getAttribute("data-chat");
 const inFold = (n, stop) => { for (let p = n.parentNode; p && p !== stop; p = p.parentNode) if (p.tag === "details") return true; return false; };
 
 
-// ---- P58: the line that says the employee was told its name ---------------------------------------------------------------------------------------------
+// ---- P58: the line that goes with a process start says nothing about names ---------------------------------------------------------------------------------------------
 
 const processLine = async (extra) => {
   seqNo = 0;
@@ -105,48 +105,38 @@ const processLine = async (extra) => {
   return lines[0];
 };
 
-test("a process that was told its name and position says so, and keeps the sentence about the card's own instructions", async () => {
-  const line = await processLine({ identity: true });
-  const words = text(line);
-  assert(words.includes("員工上線，帶著名字和職位，帶著員工自己寫的指示"), words);
-});
-
-test("a process that was not told says so in the open, in the same place", async () => {
-  const words = text(await processLine({ identity: false, instructions: false }));
-  assert(words.includes("員工上線，沒有帶名字和職位，沒有帶指示（員工設定上沒有自己寫的）"), words);
-});
-
-test("a record from before the upgrade (no identity field) says nothing about names and reads as it did", async () => {
+test("the process line is as it was in v0.25.2 and says nothing about names", async () => {
   const words = text(await processLine({}));
   assert(words.includes("員工上線，帶著員工自己寫的指示"), words);
   assert(!words.includes("名字"), words);
 });
 
-test("a value that is not a plain true or false says nothing about names", async () => {
-  for (const bad of ["yes", 1, null, {}]) {
-    const words = text(await processLine({ identity: bad }));
-    assert(!words.includes("名字"), String(bad) + ": " + words);
+test("even a record with an identity field (there is none) does not make the line talk about names", async () => {
+  for (const v of [true, false, "yes", 1, null]) {
+    const words = text(await processLine({ identity: v }));
+    assert(!words.includes("名字"), String(v) + ": " + words);
   }
 });
 
-test("a resumed process keeps its own sentence and still says whether the name went", async () => {
-  const words = text(await processLine({ mode: "resume", identity: false }));
-  assert(words.includes("員工接續上次的對話上線，沒有帶名字和職位"), words);
+test("a resumed process keeps its own sentence", async () => {
+  const words = text(await processLine({ mode: "resume", instructions: false }));
+  assert(words.includes("員工接續上次的對話上線，沒有帶指示（員工設定上沒有自己寫的）"), words);
 });
 
 test("the notice that the chat is not as it was started names the name and the position", async () => {
   seqNo = 0;
-  withDetail([rec("process_started", { mode: "new", budget_usd: "0.5", instructions: false, identity: true })], { memory: { on: true, count: 0, readable: true, changed: true, started_with_memory: true } });
+  withDetail([rec("process_started", { mode: "new", budget_usd: "0.5", instructions: false })], { memory: { on: true, count: 0, readable: true, changed: true, started_with_memory: true } });
   const main = await open("#/chat/" + CID);
   const box = main.find((n) => n.getAttribute && n.getAttribute("data-memory") === "chat-changed");
   assert(box, "the notice");
   assert(text(box).includes("名字、職位、固定指示") && text(box).includes("請開新聊天"), text(box));
 });
 
-test("the source: the new code has no innerHTML and no emoji and adds no storage key or address", () => {
-  const at = SOURCE.indexOf("function chatIdentityWords");
+test("the source: the page has no helper for the name on the process line, and the new notice words have no innerHTML and no emoji", () => {
+  assert(!SOURCE.includes("chatIdentityWords"), "no helper that reads an identity field of the record");
+  const at = SOURCE.indexOf("const MEMORY_CHANGED_TEXT");
   assert(at > 0);
-  const mine = SOURCE.slice(at, SOURCE.indexOf("function chatLine", at));
+  const mine = SOURCE.slice(at, SOURCE.indexOf("function memoryChangedNote", at));
   assert(mine.length > 100);
   assert(!/innerHTML|insertAdjacentHTML|outerHTML|localStorage|sessionStorage|https?:\/\//.test(mine));
   assert(!/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}]/u.test(mine), "no emoji");
