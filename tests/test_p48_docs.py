@@ -155,11 +155,12 @@ class SecurityModelTests(unittest.TestCase):
         self.assertEqual(self.model.count("## Easy start 2 (v0.22)"), 1)
         self.assertNotIn(" ## ", self.section[len("## Easy start 2 (v0.22)"):])
         after = self.model[self.model.index("## New versions of the AI tools (v0.22.1)") + 3:]
-        self.assertEqual(after.count(" ## "), 3, "v0.22.1's section is followed by three sections only: v0.23's, v0.24's and v0.25's")        # (v0.23.0 added 「Chat-first home (v0.23)」, v0.24.0 「Chat reads like text (v0.24)」, v0.25.0 「First run on one page (v0.25)」)
+        self.assertEqual(after.count(" ## "), 4, "v0.22.1's section is followed by four sections only: v0.23's, v0.24's, v0.25's and v0.25.1's")        # (v0.23.0 added 「Chat-first home (v0.23)」, v0.24.0 「Chat reads like text (v0.24)」, v0.25.0 「First run on one page (v0.25)」, v0.25.1 「A new version of AGY (v0.25.1)」)
         self.assertIn(" ## Chat-first home (v0.23) ", after)
         self.assertIn(" ## Chat reads like text (v0.24)", after)
         self.assertIn(" ## First run on one page (v0.25)", after)
-        self.assertNotIn(" ## ", after[after.index("## First run on one page (v0.25)") + 3:])          # v0.25's is the last one
+        self.assertIn(" ## A new version of AGY (v0.25.1)", after)
+        self.assertNotIn(" ## ", after[after.index("## A new version of AGY (v0.25.1)") + 3:])          # v0.25.1's is the last one
         for word in ("does not move any start-up boundary", "`vbear/agent_launch.py`", "`vbear/cli_versions.py`", "`vbear/admin_policy.py`", "No route (API path), no key of `config.json` and no kind of chat event",
                      "`vbear-setup-pick` and `vbear-notify`", "rule 16", "rules 1 to 15 were not loosened", "Residual risks", "Going back to v0.21.0"):
             self.assertIn(word, self.section, word)

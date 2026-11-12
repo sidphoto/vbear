@@ -31,6 +31,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 from .. import admin_policy
 from . import agy_chat_protocol as acp, cli_versions, review_codex, review_store
@@ -49,7 +50,12 @@ POLICY_ROOT = "/"                              # where the administrator policy 
 # must not be in the chat folder and at the top of a work folder. The names below are that table's own objects, not copies; a test
 # (tests/test_p46_agy_chat_launch.py) holds them to it, and so does rule 14b of tests/test_autonomy_guard.py.
 CONFIG_DIR = "config"
-_NEWEST = acp.VERSIONS[tuple(acp.VERSIONS)[-1]]
+NEWEST_VERSION = max(acp.VERSIONS, key=cli_versions._version_key)
+_NEWEST = acp.VERSIONS[NEWEST_VERSION]
+# The tables below are the newest version's. They are the same in every version VBear knows (the settings VBear writes, the names it
+# never writes, the names AGY makes by itself, the names refused in a work folder): a test (tests/test_p46_agy_chat_env.py) and rule 20 of
+# tests/test_autonomy_guard.py hold every version to that, so that a table that starts to differ is made per version before it is used.
+# The one table that does differ between versions, AGY's own built-in content, is read per version (``builtin_table``).
 SETTINGS = _NEWEST.settings
 SETTINGS_BYTES = acp.settings_bytes(_NEWEST)
 # Names VBear never writes in the chat folder: finding one means another program put it there. (name as shown, where it sits)
@@ -68,10 +74,25 @@ CLI_MAX_ENTRIES = 20_000
 CREATED_CLI = tuple(n.split("/", 1)[1] for n in _NEWEST.home_created if n.startswith(CLI_DIR + "/"))
 CLI_CLOSED = {name: frozenset(allowed) for name, allowed in _NEWEST.cli_closed}   # folders of antigravity-cli with a closed list of names
 BUILTIN_NAME = "builtin"
-BUILTIN_PATHS = frozenset(_NEWEST.builtin_paths)       # exact paths, below antigravity-cli/builtin; nothing else is let through there
-BUILTIN_DIRS = frozenset(p for p in BUILTIN_PATHS if any(q.startswith(p + "/") for q in BUILTIN_PATHS))
-BUILTIN_SHA = dict(_NEWEST.builtin_sha256)             # path -> sha256 hex of the file (a test patches it)
-BUILTIN_RUNNABLE = tuple(_NEWEST.builtin_runnable)
+
+
+class BuiltinTable(NamedTuple):
+    """AGY's own built-in content (``antigravity-cli/builtin``) as one version of AGY writes it, from the protocol's table: the exact paths
+    (nothing else is let through there), which of them are folders, the SHA-256 of every file and the endings of files that can run."""
+    version: str
+    paths: frozenset
+    dirs: frozenset
+    sha: dict                                          # path -> sha256 hex of the file
+    runnable: tuple
+
+
+def _builtin_table(consts) -> BuiltinTable:
+    paths = frozenset(consts.builtin_paths)
+    return BuiltinTable(consts.version, paths, frozenset(p for p in paths if any(q.startswith(p + "/") for q in paths)),
+                        dict(consts.builtin_sha256), tuple(consts.builtin_runnable))
+
+
+BUILTIN_TABLES = {version: _builtin_table(consts) for version, consts in acp.VERSIONS.items()}      # (a test patches it)
 BUILTIN_HASH_MAX = 4 << 20                             # a pinned file is read up to this many bytes
 LETTERS_DIFFER = object()                              # table_folder: it is spelled with other letters than the table's
 MCP_CONFIG_NAME = "mcp_config.json"
@@ -216,9 +237,27 @@ def _check_projects(cfd) -> None:
             raise _foreign("projects/" + where)
 
 
+def builtin_table(version=None) -> BuiltinTable:
+    """The built-in table of the AGY ``version`` (the newest known one when None). AgyRefused ``unsupported`` for a version VBear has no
+    table for: the folder is never checked against another version's paths."""
+    key = NEWEST_VERSION if version is None else version
+    table = BUILTIN_TABLES.get(key) if isinstance(key, str) else None
+    if table is None:
+        raise AgyRefused("unsupported", f"AGY {str(key)[:32]} 沒有內建檔案的表，所以不使用聊天用的 AGY 設定資料夾。")
+    return table
+
+
+def pinned_hashes(rel: str) -> frozenset:
+    """Every SHA-256 that any AGY version VBear knows pins for the built-in file ``rel``, none when no version pins it. AGY's own
+    files only: a folder an older AGY wrote is still AGY's own after AGY updated itself (ADR 0018). A hash in no table is in none."""
+    return frozenset(table.sha[rel] for table in BUILTIN_TABLES.values() if rel in table.sha)
+
+
 def builtin_executable_like(rel: str) -> bool:
-    """Whether a built-in file can run or be run by something, by the ending of its name (any letters)."""
-    return rel.casefold().endswith(BUILTIN_RUNNABLE)
+    """Whether a built-in file can run or be run by something, by the ending of its name (any letters): the endings of every known
+    version together, so that an ending one version names is enough to need a pinned hash."""
+    endings = tuple(sorted({e for table in BUILTIN_TABLES.values() for e in table.runnable}))
+    return rel.casefold().endswith(endings)
 
 
 def table_folder(where: str):
@@ -266,32 +305,33 @@ def _file_sha256(fd: int, parts) -> str | None:
                 pass
 
 
-def _check_builtin_entry(fd, where: str, mode: int) -> None:
-    """One path below ``antigravity-cli/builtin`` (``where`` starts with ``builtin/``): it must be a path of the table, a folder where the
-    table has something below it and a plain file otherwise; a plain file with a pinned hash must have it, and one that can run and has
-    none is refused. AgyRefused (naming ``where``) when not."""
+def _check_builtin_entry(fd, where: str, mode: int, table: BuiltinTable) -> None:
+    """One path below ``antigravity-cli/builtin`` (``where`` starts with ``builtin/``): it must be a path of ``table`` (the AGY version that
+    is about to start), a folder where the table has something below it and a plain file otherwise; a plain file with a pinned hash must
+    have one of the hashes any known version pins for that path (``pinned_hashes``), and one that can run and has none is refused.
+    AgyRefused (naming ``where``) when not."""
     rel = where[len(BUILTIN_NAME) + 1:]
-    is_dir = rel in BUILTIN_DIRS
-    if rel not in BUILTIN_PATHS or not (stat.S_ISDIR(mode) if is_dir else stat.S_ISREG(mode)):
+    is_dir = rel in table.dirs
+    if rel not in table.paths or not (stat.S_ISDIR(mode) if is_dir else stat.S_ISREG(mode)):
         raise _foreign(CLI_DIR + "/" + where)
     if is_dir:
         return
-    pinned = BUILTIN_SHA.get(rel)
-    if pinned is None:
+    pinned = pinned_hashes(rel)
+    if not pinned:
         if builtin_executable_like(rel):
             raise _foreign(CLI_DIR + "/" + where)
         return
-    if _file_sha256(fd, (*where.split("/"),)) != pinned:
+    if _file_sha256(fd, (*where.split("/"),)) not in pinned:
         raise _foreign(CLI_DIR + "/" + where)
 
 
-def _check_cli_dir(fd) -> None:
+def _check_cli_dir(fd, table: BuiltinTable) -> None:
     """``antigravity-cli`` (AGY's own working folder, with VBear's ``settings.json`` in it), when it is there: a plain folder whose
     top level holds only the names of ``CREATED_CLI``. Below the top level nothing is allowed that is named like a hook, rule,
     workflow, skill, plugin, setting or instruction file, at any depth (so an AGY that puts such a thing in its cache folders is
     refused by name and a person decides), and nothing but folders and plain files. The one exception is ``builtin``: AGY's own
-    built-in skills and plugin, named like the things refused elsewhere. Inside it only the exact paths of ``BUILTIN_PATHS`` (the
-    table) pass and any other path is refused, so what is not on the table is never let in by its name."""
+    built-in skills and plugin, named like the things refused elsewhere. Inside it only the exact paths of ``table.paths`` (the table of the
+    version about to start) pass and any other path is refused, so what is not on the table is never let in by its name."""
     try:
         st = os.lstat(CLI_DIR, dir_fd=fd)
     except FileNotFoundError:
@@ -313,7 +353,7 @@ def _check_cli_dir(fd) -> None:
             raise _foreign(CLI_DIR + "/" + where)
         if folder == BUILTIN_NAME:                         # AGY's own built-in content: only the paths of the table, exactly
             if depth >= 1:
-                _check_builtin_entry(fd, where, mode)
+                _check_builtin_entry(fd, where, mode, table)
         elif folder is not None:                           # a folder AGY made whose content nobody knows: only the listed names
             if depth >= 1 and (where.split("/", 1)[1] not in CLI_CLOSED[folder] or not (stat.S_ISREG(mode) or stat.S_ISDIR(mode))):
                 raise _foreign(CLI_DIR + "/" + where)
@@ -433,11 +473,15 @@ def _tree_size(path) -> int | None:
                 pass
 
 
-def check_chat_home(base, *, size: bool = True, home=None) -> Path:
+def check_chat_home(base, *, size: bool = True, home=None, version=None) -> Path:
     """The folder is usable: ours, 0700, no link on its path, none of ``FORBIDDEN_TOP`` at its top and none of
     ``FORBIDDEN_CONFIG`` in its config folder (whatever kind of entry, a link included; compared without regard to case,
     as the Mac's file system does), an MCP configuration that is missing or says nothing, and within the size threshold
-    (``size=False`` leaves the count out). AgyRefused otherwise. Only names are looked at, and the MCP file is read."""
+    (``size=False`` leaves the count out). AgyRefused otherwise. Only names are looked at, and the MCP file is read.
+
+    ``version`` is the AGY that is about to start (the newest known one when None): its built-in table gives the paths that may be
+    in ``antigravity-cli/builtin``, and a file there passes with the hash of any known version (``pinned_hashes``)."""
+    table = builtin_table(version)
     path, fd = _open_checked(base, home)
     try:
         try:
@@ -450,7 +494,7 @@ def check_chat_home(base, *, size: bool = True, home=None) -> Path:
             if name.casefold() in folded:
                 raise _foreign(name)
         _refuse_strangers(top, CREATED_TOP)
-        _check_cli_dir(fd)
+        _check_cli_dir(fd, table)
         cfd = _config_fd(fd)
         if cfd is not None:
             try:
@@ -477,8 +521,9 @@ def check_chat_home(base, *, size: bool = True, home=None) -> Path:
     return path
 
 
-def ensure_chat_home(base, *, size: bool = True) -> Path:
-    """Make the folder (0700) when it is not there, then check it. An existing folder is never repaired or changed."""
+def ensure_chat_home(base, *, size: bool = True, version=None) -> Path:
+    """Make the folder (0700) when it is not there, then check it (for the AGY ``version``). An existing folder is never repaired or changed."""
+    builtin_table(version)                          # a version without a table makes nothing
     try:
         parent = review_store.open_dir_chain(chat_home_path(base).parent)       # a link anywhere on the way is refused before anything is made
     except (OSError, ValueError) as exc:
@@ -499,10 +544,10 @@ def ensure_chat_home(base, *, size: bool = True) -> Path:
                 os.close(fd)
     finally:
         os.close(parent)
-    return check_chat_home(base, size=size)
+    return check_chat_home(base, size=size, version=version)
 
 
-def home_state(base, home=None) -> tuple[str, str]:
+def home_state(base, home=None, version=None) -> tuple[str, str]:
     """("missing" | "ok" | "refused", why): a look that makes nothing. A folder that is not there yet is not a problem."""
     try:
         os.lstat(Path(home) if home else chat_home_path(base))
@@ -511,7 +556,7 @@ def home_state(base, home=None) -> tuple[str, str]:
     except OSError as exc:
         return "refused", f"無法確認聊天用的 AGY 設定資料夾（{exc.strerror or type(exc).__name__}）"
     try:
-        check_chat_home(base, home=home)
+        check_chat_home(base, home=home, version=version)
     except AgyRefused as exc:
         return "refused", str(exc)
     return "ok", ""
@@ -519,15 +564,15 @@ def home_state(base, home=None) -> tuple[str, str]:
 
 # ---- settings.json ---------------------------------------------------------------------------------------------------
 
-def write_settings(base, home=None) -> Path:
+def write_settings(base, home=None, version=None) -> Path:
     """Write ``antigravity-cli/settings.json`` with the fixed content, before every process starts (and make the folder and
     ``antigravity-cli/`` first when they are not there). The file is written to a new name in the same folder and renamed over
     the old one: a link or a file someone left in its place is replaced, never followed or written through. 0600. A link or a
     file in place of ``antigravity-cli``, or a folder in place of the file, is refused. AgyRefused otherwise."""
     if home is None:
-        ensure_chat_home(base, size=False)         # the size is the status's business: a big folder must not keep the file from being repaired
+        ensure_chat_home(base, size=False, version=version)         # the size is the status's business: a big folder must not keep the file from being repaired
     else:
-        check_chat_home(base, home=home, size=False)
+        check_chat_home(base, home=home, size=False, version=version)
     path, hfd = _open_checked(base, home)
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     try:
@@ -894,7 +939,7 @@ def _look(base, home, root, search_path) -> dict:
     if hooks != "absent":
         out.update(state="hooks", why=why)
         return out
-    folder, why = home_state(base)
+    folder, why = home_state(base, version=pinned.version)
     if folder == "refused":
         out.update(state="folder", why=why)
         return out

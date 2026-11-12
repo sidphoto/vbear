@@ -1112,7 +1112,7 @@ def _run_shared(s: AgySession, ctx: dict, steps: dict, obs: dict) -> None:
         not errors and len(ended) == 4 and not s.facts("violation") and all(x["reason"] == "result" for x in ended),
         errors=[x["message"] for x in errors][:3], note="共用資料夾這段沒有錯誤紀錄；四個回合都正常結束")
     s.close_idle()
-    state_home, _why = agy_chat_env.home_state(state)
+    state_home, _why = agy_chat_env.home_state(state, version=s.version)
     texts = [s.text_of()]
     found = leaks("\n".join(texts), (str(ctx["real_home"]),))
     steps["shared_home_clean"] = check(
@@ -1135,12 +1135,13 @@ def _home_names(home: Path) -> list[str]:
     return out
 
 
-def _home_deep_names(home: Path, limit: int = 60) -> dict:
+def _home_deep_names(home: Path, limit: int = 60, version: str | None = None) -> dict:
     """What a person needs to decide on AGY's own folders: how many names each folder holds, and every place below the top that is named
     like a hook, rule, workflow, skill, plugin, setting or instruction file (the names the chat refuses at any depth). Names only,
     nothing followed; a name that is a long id is written ``<id>``."""
     out = {"counts": {}, "forbidden_named": []}
     seen = 0
+    on_table = agy_chat_env.builtin_table(version).paths           # (the AGY version that ran)
     for top in ("antigravity-cli", "config/projects"):
         base = home / top
         if not base.is_dir() or base.is_symlink():
@@ -1155,20 +1156,21 @@ def _home_deep_names(home: Path, limit: int = 60) -> dict:
                 if seen > 20_000:
                     return out
                 if rel == "antigravity-cli/builtin" or rel.startswith("antigravity-cli/builtin/"):
-                    if (rel + "/" + name)[len("antigravity-cli/builtin/"):] in agy_chat_env.BUILTIN_PATHS:
+                    if (rel + "/" + name)[len("antigravity-cli/builtin/"):] in on_table:
                         continue                              # AGY's own, on the table: listed by ``builtin_names``
                 if agy_chat_env._is_forbidden_name(name) and len(out["forbidden_named"]) < limit and (rel != "antigravity-cli" or name != "settings.json"):
                     out["forbidden_named"].append(rel + "/" + ("<id>" if re.search(r"[0-9a-f]{8}-[0-9a-f]{4}", name) else name))
     return out
 
 
-def _builtin_names(home: Path, limit: int = 400) -> dict:
+def _builtin_names(home: Path, limit: int = 400, version: str | None = None) -> dict:
     """The names (relative to ``antigravity-cli/builtin``, nothing of any content) AGY's own built-in folder holds, so that the table of
     ``builtin_paths`` can be written from a real run: ``{"paths": [...], "more": number left out, "not_in_table": [...]}``."""
     base = home / "antigravity-cli" / "builtin"
     out = {"paths": [], "more": 0, "not_in_table": []}
     if not base.is_dir() or base.is_symlink():
         return out
+    on_table = agy_chat_env.builtin_table(version).paths
     for dirpath, dirs, files in os.walk(base, followlinks=False):
         rel = os.path.relpath(dirpath, base)
         for name in sorted(dirs + files):
@@ -1177,19 +1179,22 @@ def _builtin_names(home: Path, limit: int = 400) -> dict:
                 out["more"] += 1
                 continue
             out["paths"].append(path)
-            if path not in agy_chat_env.BUILTIN_PATHS:
+            if path not in on_table:
                 out["not_in_table"].append(path)
     out["paths"].sort()
     out["not_in_table"].sort()
     return out
 
 
-def _builtin_hashes(home: Path, limit: int = 400) -> dict:
+def _builtin_hashes(home: Path, limit: int = 400, version: str | None = None) -> dict:
     """The SHA-256 of every plain file below ``antigravity-cli/builtin`` by its relative path (nothing of the content; a file over 4 MiB or
-    that cannot be read is ``null``): ``{"files": {path: hex}, "pinned_differ": [paths whose pinned hash is another], "more": n}``. A real
-    run's answer is what goes into the version table's ``builtin_sha256``."""
+    that cannot be read is ``null``): ``{"table_version": the AGY version whose table the files are compared with, "files": {path: hex},
+    "pinned_differ": [paths whose hash is not the one that table pins], "other_version": {path: the older version whose table pins this
+    hash, for a file that differs from that table but is a file another known version pins}, "more": n}``. A real run's answer is what goes
+    into the version table's ``builtin_sha256``."""
     base = home / "antigravity-cli" / "builtin"
-    out = {"files": {}, "pinned_differ": [], "more": 0}
+    table = agy_chat_env.builtin_table(version)
+    out = {"table_version": table.version, "files": {}, "pinned_differ": [], "other_version": {}, "more": 0}
     if not base.is_dir() or base.is_symlink():
         return out
     for dirpath, dirs, files in os.walk(base, followlinks=False):
@@ -1207,8 +1212,11 @@ def _builtin_hashes(home: Path, limit: int = 400) -> dict:
             except OSError:
                 pass
             out["files"][path] = digest
-            if path in agy_chat_env.BUILTIN_SHA and agy_chat_env.BUILTIN_SHA[path] != digest:
+            if path in table.sha and table.sha[path] != digest:
                 out["pinned_differ"].append(path)
+                elsewhere = sorted(v for v, t in agy_chat_env.BUILTIN_TABLES.items() if v != table.version and t.sha.get(path) == digest)
+                if elsewhere:
+                    out["other_version"][path] = elsewhere[0]
     out["pinned_differ"].sort()
     return out
 
@@ -1233,7 +1241,7 @@ def _persistent_names(home: Path, limit: int = 40) -> dict:
     return out
 
 
-def _builtin_manifest(home: Path) -> dict:
+def _builtin_manifest(home: Path, version: str | None = None) -> dict:
     """What ``antigravity-cli/builtin/.manifest`` says, compared with the names that are there, by names only (never enforced: the table
     ``builtin_paths`` decides): its format, how many names it lists, the names it lists that are not there and the names there that it
     does not list. A name is any string in it (a JSON string, or a word of a text) that looks like a relative path."""
@@ -1296,22 +1304,22 @@ def _builtin_manifest(home: Path) -> dict:
         if name in there:
             own[name] = digest
     out["hashes_listed"] = len(own)
-    actual = _builtin_hashes(home)["files"]
+    table = agy_chat_env.builtin_table(version)
+    actual = _builtin_hashes(home, version=version)["files"]
     out["hashes_differ_from_files"] = sorted(n for n, d in own.items() if actual.get(n) != d)[:40]
-    out["hashes_differ_from_pinned"] = sorted(n for n, d in own.items() if n in agy_chat_env.BUILTIN_SHA
-                                              and agy_chat_env.BUILTIN_SHA[n] != d)[:40]
+    out["hashes_differ_from_pinned"] = sorted(n for n, d in own.items() if n in table.sha and table.sha[n] != d)[:40]
     return out
 
 
 def _final_checks(s: AgySession, ctx: dict, checks: dict, obs: dict) -> None:
     state, real_home = ctx["state"], ctx["real_home"]
-    status, why = agy_chat_env.home_state(state)
+    status, why = agy_chat_env.home_state(state, version=s.version)
     home = agy_chat_env.chat_home_path(state)
     obs["home_items"] = _home_names(home)
-    obs["home_deep"] = _home_deep_names(home)
-    obs["builtin_names"] = _builtin_names(home)
-    obs["builtin_manifest"] = _builtin_manifest(home)
-    obs["builtin_hashes"] = _builtin_hashes(home)
+    obs["home_deep"] = _home_deep_names(home, version=s.version)
+    obs["builtin_names"] = _builtin_names(home, version=s.version)
+    obs["builtin_manifest"] = _builtin_manifest(home, s.version)
+    obs["builtin_hashes"] = _builtin_hashes(home, version=s.version)
     obs["persistent_terminals"] = _persistent_names(home)
     checks["home_clean"] = check(
         status == "ok", state=status, reason=None if status == "ok" else why,

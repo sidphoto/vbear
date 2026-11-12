@@ -639,8 +639,8 @@ class ChatOps:
             agy_chat_env.check_workdir(workdir)
             if shared is not None:
                 agy_chat_env.check_workdir(shared, code="shared_unsafe", label="共用資料夾")
-            agy_chat_env.ensure_chat_home(self.base)
-            agy_chat_env.write_settings(self.base)          # AGY reads its settings from here: written before every process
+            agy_chat_env.ensure_chat_home(self.base, version=version)      # (checked against this AGY version's built-in table)
+            agy_chat_env.write_settings(self.base, version=version)          # AGY reads its settings from here: written before every process
         except agy_chat_env.AgyRefused as exc:
             log.close()
             return _err(rid, {"unsafe_path": "agy_home", "foreign_settings": "agy_home", "too_big": "agy_home"}.get(exc.code, exc.code),

@@ -70,9 +70,11 @@ class CheckCase(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
         # the real AGY's built-in hashes are not the fake's: its files hold "made-up" and the test pins that for all of them
-        pinned = {rel: hashlib.sha256(b"made-up").hexdigest() for rel in agy_chat_env.BUILTIN_PATHS
-                  if rel not in agy_chat_env.BUILTIN_DIRS and rel != ".manifest"}       # (the fake writes its own .manifest)
-        patch = mock.patch.object(agy_chat_env, "BUILTIN_SHA", pinned)
+        table = agy_chat_env.builtin_table(VERSION)
+        pinned = {rel: hashlib.sha256(b"made-up").hexdigest() for rel in table.paths
+                  if rel not in table.dirs and rel != ".manifest"}       # (the fake writes its own .manifest)
+        # (every known version's table: a hash any of them pins counts, and no real one is the fake's)
+        patch = mock.patch.dict(agy_chat_env.BUILTIN_TABLES, {v: t._replace(sha=dict(pinned)) for v, t in agy_chat_env.BUILTIN_TABLES.items()})
         patch.start()
         self.addCleanup(patch.stop)
         self.conf_path = self.home / "fake-agy.json"
@@ -298,11 +300,29 @@ class RealMachineShapeTests(CheckCase):
         code, report = self.check()
         self.assertEqual(code, 0, report.get("error"))
         got = report["observations"]["builtin_hashes"]
-        self.assertEqual(set(got["files"]), {p for p in agy_chat_env.BUILTIN_PATHS if p not in agy_chat_env.BUILTIN_DIRS})
+        self.assertEqual(set(got["files"]), {p for p in agy_chat_env.builtin_table(VERSION).paths if p not in agy_chat_env.builtin_table(VERSION).dirs})
+        self.assertEqual(got["table_version"], VERSION, "the report says which version's table the hashes were compared with")
         want = hashlib.sha256(b"made-up").hexdigest()
         self.assertEqual(got["files"]["plugins/swarm/plugin.json"], want)
         self.assertEqual(got["pinned_differ"], [])
         self.assertNotIn("made-up", json.dumps(report["observations"]), "the content itself is never in the report")
+
+    def test_a_built_in_file_that_another_known_version_pins_passes_and_the_report_says_which_table_it_was_compared_with(self):
+        """P56-1: the hashes are compared with the table of the version that ran; a file that is another known version's passes the
+        folder check (AGY's own file, ADR 0018) and is named in ``other_version``."""
+        rel = "plugins/swarm/plugin.json"
+        here = agy_chat_env.BUILTIN_TABLES[VERSION]
+        there = agy_chat_env.BUILTIN_TABLES["1.5.6"]
+        patch = mock.patch.dict(agy_chat_env.BUILTIN_TABLES, {
+            VERSION: here._replace(sha={**here.sha, rel: hashlib.sha256(b"what-this-version-pins").hexdigest()}),
+            "1.5.6": there._replace(sha={**there.sha, rel: hashlib.sha256(b"made-up").hexdigest()})})
+        patch.start()
+        self.addCleanup(patch.stop)
+        code, report = self.check()
+        self.assertEqual(code, 0, report.get("error"))
+        got = report["observations"]["builtin_hashes"]
+        self.assertEqual((got["table_version"], got["pinned_differ"], got["other_version"]), (VERSION, [rel], {rel: "1.5.6"}))
+        self.assertTrue(report["checks"]["home_clean"]["pass"])
 
     def test_a_built_in_file_that_changed_since_the_pin_fails_home_clean_and_is_named_in_the_hash_observation(self):
         code, report = self.check({"builtin_changed": True})

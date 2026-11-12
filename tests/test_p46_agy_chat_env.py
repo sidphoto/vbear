@@ -16,6 +16,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from vbear import admin_policy
 from vbear.runtime import agy_chat_env as env, cli_versions
 
 VERSION = "1.5.3"
@@ -388,8 +389,13 @@ class ChatHomeTests(FolderCase):
 
     def hashed(self, text="x", only=None):
         """Patch the table's pinned hashes with the hash of ``text`` for every built-in file that counts as executable (or ``only``)."""
-        paths = only if only is not None else [p for p in env.BUILTIN_PATHS if env.builtin_executable_like(p)]
-        patch = mock.patch.object(env, "BUILTIN_SHA", {p: hashlib.sha256(text.encode()).hexdigest() for p in paths})
+        paths = only if only is not None else [p for p in env.builtin_table().paths if env.builtin_executable_like(p)]
+        self.pin_hashes({p: hashlib.sha256(text.encode()).hexdigest() for p in paths})
+
+    def pin_hashes(self, hashes, versions=None):
+        """Replace the pinned hashes of the built-in tables (of ``versions``, else of every known version) with ``hashes``: path -> hex."""
+        tables = {v: (t._replace(sha=dict(hashes)) if versions is None or v in versions else t) for v, t in env.BUILTIN_TABLES.items()}
+        patch = mock.patch.dict(env.BUILTIN_TABLES, tables)
         patch.start()
         self.addCleanup(patch.stop)
 
@@ -397,7 +403,7 @@ class ChatHomeTests(FolderCase):
         base = self.chat_home / "antigravity-cli" / "builtin"
         for rel in paths:
             path = base / rel
-            if any(other.startswith(rel + "/") for other in env.BUILTIN_PATHS):          # a folder: something is below it
+            if any(other.startswith(rel + "/") for other in env.builtin_table().paths):          # a folder: something is below it
                 path.mkdir(parents=True, exist_ok=True)
             else:
                 self.write_private(path, "x")
@@ -405,14 +411,14 @@ class ChatHomeTests(FolderCase):
 
     def test_the_built_in_content_of_agy_passes_only_by_the_exact_paths_of_the_table(self):
         self.make_home()
-        self.assertEqual(len(env.BUILTIN_PATHS), 62, "every path of the real AGY 1.5.3 (the fourth real run), one by one")
+        self.assertEqual(len(env.builtin_table().paths), 62, "every path of the real AGY 1.5.3 (the fourth real run), one by one")
         for name in (".checksum", ".manifest", "keep.txt", "plugins/swarm/plugin.json", "plugins/swarm/sidecars/swarm_board/main.mjs",
                      "skills/agy-customizations/docs/skills.md", "skills/agy-customizations/docs/rules.md", "skills/native_swarm/logo.svg"):
-            self.assertIn(name, env.BUILTIN_PATHS)
-        self.assertEqual(sum(1 for p in env.BUILTIN_PATHS if p.startswith("skills/") and p.count("/") == 1), 13, "13 skill folders")
-        self.assertFalse(any(set(p) & set("*?[") for p in env.BUILTIN_PATHS), "no pattern, only names")
+            self.assertIn(name, env.builtin_table().paths)
+        self.assertEqual(sum(1 for p in env.builtin_table().paths if p.startswith("skills/") and p.count("/") == 1), 13, "13 skill folders")
+        self.assertFalse(any(set(p) & set("*?[") for p in env.builtin_table().paths), "no pattern, only names")
         self.hashed()
-        for rel in sorted(env.BUILTIN_PATHS):                  # all of the table, though named skills, plugins, hooks and rules
+        for rel in sorted(env.builtin_table().paths):                  # all of the table, though named skills, plugins, hooks and rules
             self.make_builtin(rel)
         self.assertEqual(env.check_chat_home(self.state), self.chat_home)
         base = self.chat_home / "antigravity-cli" / "builtin"
@@ -432,10 +438,8 @@ class ChatHomeTests(FolderCase):
 
     def test_a_built_in_file_that_can_run_is_refused_until_its_hash_is_pinned_whatever_its_name(self):
         self.make_home()
-        patch = mock.patch.object(env, "BUILTIN_SHA", {})           # (the case of a file nobody pinned: the table has them all now)
-        patch.start()
-        self.addCleanup(patch.stop)
-        runnable = [p for p in env.BUILTIN_PATHS if env.builtin_executable_like(p)]
+        self.pin_hashes({})                                           # (the case of a file nobody pinned: the tables have them all now)
+        runnable = [p for p in env.builtin_table().paths if env.builtin_executable_like(p)]
         self.assertIn("plugins/swarm/plugin.json", runnable)
         self.assertIn("plugins/swarm/sidecars/swarm_board/main.mjs", runnable)
         self.assertIn("plugins/swarm/sidecars/swarm_board/narrator_bootstrap.js", runnable)
@@ -454,17 +458,19 @@ class ChatHomeTests(FolderCase):
         self.assertEqual(env.check_chat_home(self.state), self.chat_home, "documents pass by their exact names")
 
     def test_the_table_pins_every_built_in_file_and_no_folder_with_a_real_sha256(self):
-        files = {p for p in env.BUILTIN_PATHS if p not in env.BUILTIN_DIRS}
-        self.assertEqual(len(files), 41)
-        self.assertEqual(set(env.BUILTIN_SHA), files, "every file of the real AGY 1.5.3 (the fifth real run), not only the ones that run")
-        for rel, digest in env.BUILTIN_SHA.items():
-            self.assertRegex(digest, r"^[0-9a-f]{64}$", rel)
-        self.assertEqual(len(set(env.BUILTIN_SHA.values())), 41 - 1, "one empty file (keep.txt) shares nothing but its own hash")
-        self.assertEqual(env.BUILTIN_SHA["keep.txt"], hashlib.sha256(b"").hexdigest(), "keep.txt is empty")
+        for version, table in env.BUILTIN_TABLES.items():
+            with self.subTest(version=version):
+                files = {p for p in table.paths if p not in table.dirs}
+                self.assertEqual(len(files), 41)
+                self.assertEqual(set(table.sha), files, "every file of the real AGY (the fifth real run of 1.5.3; the folder a real 1.5.6 wrote), not only the ones that run")
+                for rel, digest in table.sha.items():
+                    self.assertRegex(digest, r"^[0-9a-f]{64}$", rel)
+                self.assertEqual(len(set(table.sha.values())), 41 - 1, "one empty file (keep.txt) shares nothing but its own hash")
+                self.assertEqual(table.sha["keep.txt"], hashlib.sha256(b"").hexdigest(), "keep.txt is empty")
 
     def test_with_the_real_table_a_file_of_any_kind_with_other_bytes_is_refused_by_its_path(self):
         self.make_home()
-        for rel in sorted(p for p in env.BUILTIN_PATHS if p not in env.BUILTIN_DIRS):
+        for rel in sorted(p for p in env.builtin_table().paths if p not in env.builtin_table().dirs):
             with self.subTest(rel=rel):
                 base = self.make_builtin(rel)
                 (base / rel).write_text("other bytes")
@@ -491,6 +497,129 @@ class ChatHomeTests(FolderCase):
         path.unlink()
         path.mkdir()                                                  # a folder where the pinned file belongs
         self.refused(env.check_chat_home, self.state, code="foreign_settings")
+
+    # ---- P56-1: the built-in table is read for the AGY version that is about to start, and a hash any known version pins is let through
+    def two_versions(self, old="old", new="new"):
+        """Two made-up tables with the real paths: 1.5.3 pins the hash of ``old`` and 1.5.6 the hash of ``new`` for every file that can run
+        (the real hashes cannot be made from here, and the path table is the point)."""
+        paths = [p for p in env.builtin_table().paths if env.builtin_executable_like(p)]
+        tables = {"1.5.3": env.BUILTIN_TABLES["1.5.3"]._replace(sha={p: hashlib.sha256(old.encode()).hexdigest() for p in paths}),
+                  "1.5.6": env.BUILTIN_TABLES["1.5.6"]._replace(sha={p: hashlib.sha256(new.encode()).hexdigest() for p in paths})}
+        patch = mock.patch.dict(env.BUILTIN_TABLES, tables)
+        patch.start()
+        self.addCleanup(patch.stop)
+        return paths
+
+    def test_a_folder_an_older_known_agy_wrote_still_passes_when_a_newer_one_is_about_to_start_and_the_other_way_round(self):
+        self.make_home()
+        paths = self.two_versions()
+        base = self.make_builtin(*paths)
+        for rel in paths:
+            (base / rel).write_text("old")                              # what 1.5.3 wrote
+        for version in ("1.5.3", "1.5.6", None):
+            with self.subTest(version=version):
+                self.assertEqual(env.check_chat_home(self.state, version=version), self.chat_home)
+        self.assertEqual(env.home_state(self.state, version="1.5.6"), ("ok", ""))
+        for rel in paths:
+            (base / rel).write_text("new")                              # what 1.5.6 wrote
+        for version in ("1.5.3", "1.5.6"):
+            with self.subTest(version=version):
+                self.assertEqual(env.check_chat_home(self.state, version=version), self.chat_home)
+        (base / paths[0]).write_text("old")                             # some of each (AGY rewrote only part of the folder)
+        self.assertEqual(env.check_chat_home(self.state, version="1.5.6"), self.chat_home)
+
+    def test_a_hash_that_no_known_version_pins_is_refused_for_every_version_and_named(self):
+        self.make_home()
+        paths = self.two_versions()
+        base = self.make_builtin(*paths)
+        for rel in paths:
+            (base / rel).write_text("old")
+        victim = "plugins/swarm/sidecars/swarm_board/main.mjs"
+        (base / victim).write_text("something else")
+        for version in ("1.5.3", "1.5.6"):
+            with self.subTest(version=version):
+                self.assertIn("antigravity-cli/builtin/" + victim, self.refused(env.check_chat_home, self.state, code="foreign_settings",
+                                                                               version=version))
+        (base / victim).write_text("")
+        self.refused(env.check_chat_home, self.state, code="foreign_settings", version="1.5.6")
+
+    def test_a_file_that_can_run_with_no_hash_in_any_table_is_refused_whatever_version_wrote_it(self):
+        """The old version's hash is no free pass: only the hash of a file of AGY's, in some table, at that very path."""
+        self.make_home()
+        paths = self.two_versions()
+        victim = "plugins/swarm/sidecars/swarm_board/hive.js"
+        tables = {v: t._replace(sha={p: h for p, h in t.sha.items() if p != victim}) for v, t in env.BUILTIN_TABLES.items()}
+        patch = mock.patch.dict(env.BUILTIN_TABLES, tables)
+        patch.start()
+        self.addCleanup(patch.stop)
+        base = self.make_builtin(victim)
+        for text in ("old", "new", "anything"):
+            (base / victim).write_text(text)
+            self.assertIn(victim, self.refused(env.check_chat_home, self.state, code="foreign_settings", version="1.5.6"))
+        # and a hash another version pins at ANOTHER path does not pass at this one
+        other = "plugins/swarm/sidecars/swarm_board/main.mjs"
+        tables = {v: t._replace(sha={**t.sha, victim: hashlib.sha256(b"belongs-to-main").hexdigest(),
+                                     other: hashlib.sha256(b"belongs-to-main").hexdigest()}) for v, t in env.BUILTIN_TABLES.items()}
+        with mock.patch.dict(env.BUILTIN_TABLES, tables):
+            (base / victim).write_text("old")
+            self.assertIn(victim, self.refused(env.check_chat_home, self.state, code="foreign_settings", version="1.5.6"))
+
+    def test_the_path_table_is_the_one_of_the_version_about_to_start_and_matches_exactly(self):
+        self.make_home()
+        keep = "skills/native_swarm/logo.svg"
+        tables = {v: t._replace(sha={}) for v, t in env.BUILTIN_TABLES.items()}
+        tables["1.5.6"] = tables["1.5.6"]._replace(paths=frozenset(p for p in tables["1.5.6"].paths if p != keep))
+        patch = mock.patch.dict(env.BUILTIN_TABLES, tables)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.make_builtin(keep)
+        self.assertIn(keep, self.refused(env.check_chat_home, self.state, code="foreign_settings", version="1.5.6"),
+                      "a path only the older table has is not let in for the newer version")
+        self.assertEqual(env.check_chat_home(self.state, version="1.5.3"), self.chat_home)
+
+    def test_a_version_without_a_table_checks_nothing_and_makes_nothing(self):
+        for version in ("1.5.5", "1.5.4", "9.9.9", "", 5, ["1.5.3"]):
+            with self.subTest(version=version):
+                self.refused(env.builtin_table, version, code="unsupported")
+                self.refused(env.check_chat_home, self.state, code="unsupported", version=version)
+                self.refused(env.ensure_chat_home, self.state, code="unsupported", version=version)
+                self.assertEqual(env.home_state(self.state, version=version)[0] in ("missing", "refused"), True)
+        self.assertFalse(self.chat_home.exists(), "no folder was made for a version without a table")
+        self.assertEqual(env.builtin_table().version, env.NEWEST_VERSION, "no version means the newest known one")
+        self.assertEqual(env.NEWEST_VERSION, "1.5.6")
+
+    def test_the_real_tables_of_both_versions_let_the_empty_file_pass_and_refuse_other_bytes_by_path(self):
+        self.make_home()
+        for version, table in env.BUILTIN_TABLES.items():
+            for rel in sorted(p for p in table.paths if p not in table.dirs):
+                with self.subTest(version=version, rel=rel):
+                    base = self.make_builtin(rel)
+                    if rel == "keep.txt":
+                        (base / rel).write_bytes(b"")
+                        self.assertEqual(env.check_chat_home(self.state, version=version), self.chat_home)
+                    (base / rel).write_text("other bytes")
+                    self.assertIn("antigravity-cli/builtin/" + rel,
+                                  self.refused(env.check_chat_home, self.state, code="foreign_settings", version=version))
+                    shutil.rmtree(base)
+
+    def test_the_real_tables_of_the_two_versions_differ_in_the_hashes_of_exactly_fifteen_files_and_any_of_them_passes(self):
+        old, new = env.BUILTIN_TABLES["1.5.3"], env.BUILTIN_TABLES["1.5.6"]
+        self.assertEqual(old.paths, new.paths)
+        differ = sorted(p for p in old.sha if old.sha[p] != new.sha[p])
+        self.assertEqual(len(differ), 15)
+        for rel in differ:
+            self.assertEqual(env.pinned_hashes(rel), frozenset({old.sha[rel], new.sha[rel]}), rel)
+        self.assertEqual(env.pinned_hashes("keep.txt"), frozenset({hashlib.sha256(b"").hexdigest()}))
+        self.assertEqual(env.pinned_hashes("not/a/file"), frozenset())
+
+    def test_the_hash_of_an_older_version_does_not_make_a_stranger_in_the_folder_pass(self):
+        self.make_home()
+        self.pin_hashes({})
+        base = self.make_builtin("keep.txt")
+        (base / "keep.txt").write_bytes(b"")
+        self.assertEqual(env.check_chat_home(self.state, version="1.5.6"), self.chat_home)
+        (base / "skills" / "made-up-skill").mkdir(parents=True)
+        self.assertIn("made-up-skill", self.refused(env.check_chat_home, self.state, code="foreign_settings", version="1.5.6"))
 
     def test_a_file_with_a_pinned_hash_is_looked_at_by_what_is_in_it_not_by_a_link(self):
         self.make_home()
@@ -1087,13 +1216,13 @@ class PinnedTests(BinaryCase):
             self.refused(self.pin, code="version_unreadable")
 
     def test_a_version_not_in_the_table_is_unsupported_and_the_sentence_lists_what_is(self):
-        for version in ("1.5.4", "1.5.2", "2.0.0", "0.0.1"):
+        for version in ("1.5.4", "1.5.5", "1.5.2", "2.0.0", "0.0.1"):
             with self.subTest(version=version):
                 self.install_agy(version)
                 exc = self.refused(self.pin, code="unsupported")
                 self.assertEqual(exc.version, version)
                 self.assertIn(version, str(exc))
-                self.assertIn("1.5.3", str(exc))
+                self.assertIn("1.5.3、1.5.6。", str(exc), "the sentence lists the known versions in order")
 
     def test_a_known_version_that_never_passed_the_check_is_unverified(self):
         self.install_agy()
@@ -1114,11 +1243,31 @@ class PinnedTests(BinaryCase):
         self.assertEqual(path.read_text().count("1.5.4"), 1)
 
     def test_the_known_versions_are_the_ones_the_plan_names(self):
-        self.assertEqual(env.KNOWN_VERSIONS, ("1.5.3",))
+        self.assertEqual(env.KNOWN_VERSIONS, ("1.5.3", "1.5.6"))
         with mock.patch.object(env, "KNOWN_VERSIONS", ("1.5.3", "1.5.4")):
             self.install_agy("1.5.4")
             self.record_pass("1.5.4")
             self.assertEqual(self.pin().version, "1.5.4")
+
+    def test_1_5_6_is_pinned_only_with_a_record_of_its_own_and_1_5_3s_does_not_count_for_it(self):
+        """P56-1: ``agy-chat-verified.json`` is kept per version (and each record names a report of that very version)."""
+        path = self.install_agy("1.5.6")
+        self.refused(self.pin, code="unverified")                              # setUp recorded a pass for 1.5.3 only
+        self.assertEqual(cli_versions.agy_chat_verified_versions(), ("1.5.3",))
+        exc = self.refused(self.pin, code="unverified")
+        self.assertEqual(exc.version, "1.5.6")
+        self.assertIn("1.5.3", str(exc), "the sentence says which version did pass")
+        # a record whose report is the 1.5.3 report does not make 1.5.6 pass either
+        record_path = self.state / cli_versions.LOCAL_AGY_CHAT_VERIFIED_FILE
+        versions = json.loads(record_path.read_text())["versions"]
+        versions["1.5.6"] = dict(versions["1.5.3"])
+        self.write_private(record_path, json.dumps({"versions": versions}))
+        self.assertEqual(cli_versions.agy_chat_verified_versions(), ("1.5.3",))
+        self.refused(self.pin, code="unverified")
+        self.record_pass("1.5.6")
+        pinned = self.pin()
+        self.assertEqual((pinned.binary, pinned.version), (os.path.realpath(path), "1.5.6"))
+        self.assertEqual(cli_versions.agy_chat_verified_versions(), ("1.5.3", "1.5.6"))
 
 
 class StatusTests(BinaryCase):
@@ -1190,6 +1339,30 @@ class StatusTests(BinaryCase):
         self.assertIn("AGENTS.md", out["why"])
         (self.state / "agy-chat-home" / "AGENTS.md").unlink()
         self.assert_state("ready", why=False)
+
+    def test_the_folder_is_looked_at_with_the_table_of_the_version_that_is_installed(self):
+        """P56-1: the status asks about the AGY it found (``agy --version``), so a path only another version's table has is refused for it."""
+        keep = "skills/native_swarm/logo.svg"
+        tables = {v: t._replace(sha={}) for v, t in env.BUILTIN_TABLES.items()}
+        tables["1.5.6"] = tables["1.5.6"]._replace(paths=frozenset(p for p in tables["1.5.6"].paths if p != keep))
+        patch = mock.patch.dict(env.BUILTIN_TABLES, tables)
+        patch.start()
+        self.addCleanup(patch.stop)
+        sources = mock.patch.dict(admin_policy.AGY_SOURCES, {"1.5.6": admin_policy.AGY_SOURCES["1.5.3"]})   # (this test is about the folder)
+        sources.start()
+        self.addCleanup(sources.stop)
+        home = self.state / "agy-chat-home"
+        for path in (home / "antigravity-cli" / "builtin" / "skills" / "native_swarm",):
+            path.mkdir(parents=True, mode=0o700)
+        (home / "antigravity-cli" / "builtin" / keep).write_text("x")
+        os.chmod(home, 0o700)
+        self.record_pass("1.5.3")
+        self.record_pass("1.5.6")
+        self.install_agy("1.5.3")
+        self.assert_state("ready", why=False, version="1.5.3", verified_versions=["1.5.3", "1.5.6"])
+        self.install_agy("1.5.6")
+        out = self.assert_state("folder", version="1.5.6")
+        self.assertIn(keep, out["why"])
 
     def test_a_hooks_file_that_cannot_be_told_is_hooks_too(self):
         self.ready()

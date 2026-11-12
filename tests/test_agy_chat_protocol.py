@@ -28,10 +28,10 @@ def parsed(line: bytes):
 
 
 class ConstantsTests(unittest.TestCase):
-    def test_1_5_3_is_the_one_version_of_the_table(self):
+    def test_1_5_3_and_1_5_6_are_the_versions_of_the_table(self):
         c = acp.VERSIONS["1.5.3"]
         self.assertEqual(c.version, "1.5.3")
-        self.assertEqual(sorted(acp.VERSIONS), ["1.5.3"])
+        self.assertEqual(sorted(acp.VERSIONS), ["1.5.3", "1.5.6"])
         self.assertIs(acp.constants_for("1.5.3"), c)
         self.assertIsNone(acp.constants_for("1.5.2"))
         self.assertIsNone(acp.constants_for(None))
@@ -117,6 +117,76 @@ class ConstantsTests(unittest.TestCase):
             if bad is not None:                  # no shared folder is the ordinary case
                 with self.assertRaises(ValueError, msg=repr(bad)):
                     acp.argv_for(c, "/s/agy-chat-home", shared=bad)
+
+
+# The 15 files of AGY 1.5.6's built-in folder that differ from 1.5.3's table (docs/evidence/agy-1.5.6-chat.md): path -> SHA-256 of the
+# file as AGY 1.5.6 wrote it in an empty folder. The other 26 are the very same bytes as 1.5.3's, so the 1.5.3 hashes stand.
+CHANGED_IN_1_5_6 = {
+    ".checksum": "e782de0629db6d169f8d63d77491ae145dd3a3c6a79dd78f9c6b8154b789cc9f",
+    "plugins/swarm/assets/logo.svg": "424d3cd0c6765a1d4cf2a7ebcd62bceb7e9ca1cbfa8429696618e708f73cf11a",
+    "plugins/swarm/sidecars/swarm_board/README.md": "66d43bfe5bad2576563adde2985f4c805e59b548ab9de94b732739f1a943f380",
+    "plugins/swarm/sidecars/swarm_board/app.js": "14f74dd4478dbf2098c5ce86c12bd413139ac751ed8bcdfc0e3172bd6472fbc2",
+    "plugins/swarm/sidecars/swarm_board/hive.css": "1cbb6af0908454e468ee3d240fc4c54477bb02357a87b227a3f3aae253643e82",
+    "plugins/swarm/sidecars/swarm_board/hive.js": "f388b02911e2812d36db6e833db5871f56d8d4c4586573d58a525b6e709aa436",
+    "plugins/swarm/sidecars/swarm_board/index.html": "16faae3b703f62cebd2b226678cfec173975333e64e8b707b356e352d8fff2ec",
+    "plugins/swarm/sidecars/swarm_board/main.mjs": "18775901de1c90b99b7bd9ba6ea4dde89bd906efc31dc17b55843e066528c424",
+    "plugins/swarm/sidecars/swarm_board/sidecar.json": "025741e4fcff65af30ef0be5fd823a77387d636827e9582e7ff715242a8c2ca4",
+    "plugins/swarm/sidecars/swarm_board/styles.css": "5752c74d5aecd40945552836025a6a28e7543e7c084586bfa0acfcd045f408c3",
+    "skills/agy-customizations/docs/hooks.md": "2c3603854bcfd8e662cd44d2c1ddecb8621f2a65d5e823baace037588198df5a",
+    "skills/generative_ui/SKILL.md": "d073ec25e2091c3f76fbaa4fe345e54c2ea2377a08b3a330619b075d371c5987",
+    "skills/native_swarm/SKILL.md": "61f7913ff8ada9c87b52674083e20499ddad610e6262323d14b4ab60ca4542a0",
+    "skills/native_swarm/logo.svg": "424d3cd0c6765a1d4cf2a7ebcd62bceb7e9ca1cbfa8429696618e708f73cf11a",
+    "skills/swarm_narrator/SKILL.md": "afb8c8a99776110b1140123eea9df58879cbb0d7dd64c03e7305966155659688",
+}
+
+
+class Version156Tests(unittest.TestCase):
+    """P56-1: AGY 1.5.6 has a table of its own. Every protocol constant is 1.5.3's (the help and the strings of the real 1.5.6 name the same
+    flags, methods, option kinds and settings words; what a signed-in 1.5.6 sends is for the chat check to show); what differs is the
+    SHA-256 of 15 of the 41 built-in files, read from a real 1.5.6 that wrote its folder."""
+
+    def test_the_table_has_both_versions_and_each_knows_its_own_number(self):
+        self.assertEqual(sorted(acp.VERSIONS), ["1.5.3", "1.5.6"])
+        for version, consts in acp.VERSIONS.items():
+            self.assertEqual(consts.version, version)
+            self.assertIs(acp.constants_for(version), consts)
+        self.assertIsNone(acp.constants_for("1.5.4"))
+        self.assertIsNone(acp.constants_for("1.5.5"), "1.5.5 was not added (docs/evidence/agy-1.5.5-not-added.md)")
+        self.assertIsNone(acp.constants_for("1.5.7"))
+
+    def test_only_the_number_and_the_built_in_hashes_differ_from_1_5_3(self):
+        import dataclasses
+        old, new = acp.VERSIONS["1.5.3"], acp.VERSIONS["1.5.6"]
+        differ = sorted(f.name for f in dataclasses.fields(acp.AgyConstants) if getattr(old, f.name) != getattr(new, f.name))
+        self.assertEqual(differ, ["builtin_sha256", "version"])
+
+    def test_the_built_in_paths_are_those_of_1_5_3_and_each_file_has_a_hash(self):
+        old, new = acp.VERSIONS["1.5.3"], acp.VERSIONS["1.5.6"]
+        self.assertEqual(new.builtin_paths, old.builtin_paths)
+        self.assertEqual(len(new.builtin_paths), 62)
+        self.assertEqual(new.builtin_runnable, old.builtin_runnable)
+        files = {p for p in new.builtin_paths if not any(q.startswith(p + "/") for q in new.builtin_paths)}
+        self.assertEqual(len(files), 41)
+        self.assertEqual(len(new.builtin_sha256), 41)
+        self.assertEqual({p for p, _ in new.builtin_sha256}, files)
+        for path, digest in new.builtin_sha256:
+            self.assertRegex(digest, r"^[0-9a-f]{64}$", path)
+
+    def test_fifteen_files_have_the_hash_a_real_1_5_6_wrote_and_twenty_six_keep_1_5_3s(self):
+        old, new = dict(acp.VERSIONS["1.5.3"].builtin_sha256), dict(acp.VERSIONS["1.5.6"].builtin_sha256)
+        self.assertEqual({p for p in new if new[p] != old[p]}, set(CHANGED_IN_1_5_6))
+        for path, digest in CHANGED_IN_1_5_6.items():
+            self.assertEqual(new[path], digest, path)
+            self.assertNotEqual(old[path], digest, path)
+        self.assertEqual(sum(1 for p in new if new[p] == old[p]), 26)
+        self.assertEqual(new["keep.txt"], "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "the empty file")
+
+    def test_a_runnable_built_in_file_of_1_5_6_has_a_hash(self):
+        new = acp.VERSIONS["1.5.6"]
+        pinned = {p for p, _ in new.builtin_sha256}
+        runnable = [p for p in new.builtin_paths if p.casefold().endswith(new.builtin_runnable)]
+        self.assertTrue(runnable)
+        self.assertEqual([p for p in runnable if p not in pinned and not any(q.startswith(p + "/") for q in new.builtin_paths)], [])
 
 
 class LineTests(unittest.TestCase):

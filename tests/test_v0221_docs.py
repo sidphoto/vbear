@@ -59,7 +59,7 @@ class TablesTests(unittest.TestCase):
 
     def test_agy_1_5_5_is_not_added_anywhere(self):
         self.assertEqual(sorted(ap.AGY_SOURCES), ["1.5.3"])
-        self.assertEqual(sorted(acp.VERSIONS), ["1.5.3"])
+        self.assertEqual(sorted(acp.VERSIONS), ["1.5.3", "1.5.6"])             # (v0.25.1 added 1.5.6; 1.5.5 is still not a version VBear knows)
         self.assertIsNone(acp.constants_for("1.5.5"))
         self.assertFalse(ap.check_agy("1.5.5", "/nonexistent-root-for-vbear-test").ok)
 
