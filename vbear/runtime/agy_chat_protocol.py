@@ -259,13 +259,13 @@ _V1_5_3 = AgyConstants(
                    "skills/swarm_monitor/SKILL.md", "skills/swarm_narrator", "skills/swarm_narrator/SKILL.md",
                    "skills/ui-plugin-navigation", "skills/ui-plugin-navigation/SKILL.md"),
     forbidden_anywhere=("hooks", "rules", "workflows", "global_workflows", "skills", "plugins", "settings", "gemini", "agents",
-                        "agent", "mcp_config"),
-    workdir_forbidden=(".agents", ".agent", ".gemini", "GEMINI.md", "AGENTS.md"))
+                        "agent", "_agents", "_agent", "mcp_config"),
+    workdir_forbidden=(".agents", ".agent", "_agents", "_agent", ".gemini", "GEMINI.md", "AGENTS.md"))
 
 
 VERSIONS = {
     "1.5.3": _V1_5_3,
-    # AGY 1.5.6 (v0.25.1): every constant is 1.5.3's. The real 1.5.6 was looked at on 2026-11-12 without logging in (docs/evidence/agy-1.5.6-chat.md):
+    # AGY 1.5.6 (v0.25.2): every constant is 1.5.3's. The real 1.5.6 was looked at on 2026-11-12 without logging in (docs/evidence/agy-1.5.6-chat.md):
     # its help names the same flags, its strings the same methods, option kinds and settings words, and the folder it wrote has the very same 62
     # paths. What differs is the bytes of 15 of the 41 built-in files, so the SHA-256 table is its own (the other 26 are 1.5.3's, byte for byte).
     # Not shown without a login, and left to the chat check on the person's Mac: the answer of a signed-in ``session/new``, the permission
@@ -540,7 +540,8 @@ Judgement = cp.Judgement
 
 # No file change may touch these: a folder of that name at any depth (any case: a Mac's filesystem does not tell "A" from "a"),
 # or a file of one of those names. They are the settings and rules AGY, the other tools and git read for themselves.
-PROTECTED_DIRS = frozenset({".git", ".agents", ".agent", ".gemini", ".codex", ".claude"})
+# ``_agents`` and ``_agent`` (P56-2): AGY's own guide names them beside ``.agents`` and ``.agent`` as folders it reads hooks, plugins, rules and skills from.
+PROTECTED_DIRS = frozenset({".git", ".agents", ".agent", "_agents", "_agent", ".gemini", ".codex", ".claude"})
 PROTECTED_FILES = frozenset({"gemini.md", "agents.md"})
 
 

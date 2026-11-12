@@ -1382,7 +1382,7 @@ def run(binary: str, version: str, out: str | None, *, tmp_root: str | None = No
         report["error"] = policy.reason()
         return _stop(report, out_path, 1)
     hooks, why = agy_chat_env.home_hooks_state()
-    report["checks"]["no_home_hooks"] = check(hooks == "absent", note="你自己的 AGY 設定裡沒有 hooks（只看存不存在，不讀內容）")
+    report["checks"]["no_home_hooks"] = check(hooks == "absent", note="你自己的 AGY 設定裡沒有 hooks 或外掛（只看存不存在，不讀內容）")
     if hooks != "absent":
         report["error"] = why
         return _stop(report, out_path, 2)

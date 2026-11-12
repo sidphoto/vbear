@@ -180,6 +180,23 @@ class PrepareTests(LaunchCase):
         with self.assertRaises(asess.LaunchRefused):
             asess.agy_chat_env(m, dict(source, HOME="relative"))
 
+    def test_the_names_the_strings_of_1_5_6_hold_never_reach_any_version(self):
+        """P56-2: the strings of the real 1.5.6 name variables that could move the settings folder or hold a key; the environment is a
+        whitelist of six, so none of them is passed, whatever version the launch is for."""
+        names = ("ANTIGRAVITY_GEMINI_DIR", "ANTIGRAVITY_APP_DATA_DIR", "ANTIGRAVITY_CONFIG_REL_DIR", "ANTIGRAVITY_PLUGIN_SHIM_DIR",
+                 "ANTIGRAVITY_EXECUTABLE_DATA_DIR", "ANTIGRAVITY_NODE_PATH", "ANTIGRAVITY_PERM_GRANTS", "ANTIGRAVITY_LS_ADDRESS",
+                 "ANTIGRAVITY_CSRF_TOKEN", "ANTIGRAVITY_SIDECAR_WEB_PORT", "ANTIGRAVITY_DISABLE_EMBEDDED_RIPGREP", "GEMINI_API_KEY",
+                 "GEMINI_BASE_URL", "GEMINI_CLI", "GOOGLE_API_KEY")
+        source = {"PATH": "/usr/bin:/bin", "USER": "someone", "LOGNAME": "someone", "LANG": "C", "TMPDIR": "/var/tmp/x", "HOME": "/real/home"}
+        source.update({name: "must-not-pass" for name in names})
+        self.assertIn("1.5.6", acp.VERSIONS)
+        for version in acp.VERSIONS:
+            with self.subTest(version=version):
+                got = asess.agy_chat_env({"cli_version": version}, source)
+                self.assertEqual(sorted(got), sorted(["PATH", "USER", "LOGNAME", "LANG", "TMPDIR", "HOME"]))
+                self.assertNotIn("must-not-pass", json.dumps(got))
+        self.assertEqual(asess.agy_chat_env({"cli_version": "1.5.6"}, source), asess.agy_chat_env({"cli_version": "1.5.3"}, source))
+
     def test_refused_before_anything_is_made(self):
         other = self.tmp / "elsewhere"
         other.mkdir(mode=0o700)

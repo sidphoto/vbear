@@ -92,7 +92,15 @@ CODEX_SOURCES = {"0.160.0": _CODEX, "0.163.0": _CODEX, "0.167.0": _CODEX}
 # person nothing when it is not a real source. "Better to refuse too much" is the rule here. AGY's own user-level
 # hooks (~/.agents/hooks.json) are not a policy source and are checked by agy_chat_env.home_hooks_state. Method and result:
 # docs/evidence/agy-1.5.3-chat.md, section 8.
-AGY_SOURCES = {"1.5.3": {"paths": ("etc/antigravity",), "domain": "com.google.antigravity", "home_paths": ()}}
+# 1.5.6 (P56-2, v0.25.2): the 1.5.3 list and one more place. The strings of the real 1.5.6 (counted on 2026-11-12, the program was
+# not run for them) still hold /etc/antigravity (once), admin_settings (7), AdminSettings (18) and com.google.antigravity (6), and
+# nothing named managed-settings or policy.json. They also hold /Library/Application Support/Antigravity once, a path the 1.5.3
+# reading met too and left out as unexplained. The strings cannot show what it is, so for 1.5.6 the whole folder is a source: if it
+# is there the launch is refused (only stricter than 1.5.3, and a Mac without that folder is not affected). 1.5.3's entry did not
+# change. Method and result: docs/evidence/agy-1.5.6-chat.md, section 3.
+AGY_SOURCES = {"1.5.3": {"paths": ("etc/antigravity",), "domain": "com.google.antigravity", "home_paths": ()},
+               "1.5.6": {"paths": ("etc/antigravity", "Library/Application Support/Antigravity"), "domain": "com.google.antigravity",
+                         "home_paths": ()}}
 
 
 @dataclass

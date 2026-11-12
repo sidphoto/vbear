@@ -98,8 +98,8 @@ class ConstantsTests(unittest.TestCase):
         self.assertTrue(all(e == e.lower() and e.startswith(".") for e in c.builtin_runnable))
         self.assertEqual(c.project_entries, (), "nothing is known to be made inside a project folder yet (a real run must show it)")
         self.assertEqual(c.forbidden_anywhere, ("hooks", "rules", "workflows", "global_workflows", "skills", "plugins", "settings",
-                                                "gemini", "agents", "agent", "mcp_config"))
-        self.assertEqual(c.workdir_forbidden, (".agents", ".agent", ".gemini", "GEMINI.md", "AGENTS.md"))
+                                                "gemini", "agents", "agent", "_agents", "_agent", "mcp_config"))        # (P56-2 added _agents and _agent)
+        self.assertEqual(c.workdir_forbidden, (".agents", ".agent", "_agents", "_agent", ".gemini", "GEMINI.md", "AGENTS.md"))        # (P56-2 added _agents and _agent)
 
     def test_argv_is_the_fixed_tail_and_nothing_else(self):
         c = acp.VERSIONS["1.5.3"]
@@ -425,6 +425,25 @@ class JudgeFileChangeTests(Folders):
             self.assertEqual(self.judge([os.path.join(self.work, name)]).action, "deny", name)
         for name in ("GEMINI.md.bak", "my-AGENTS.md", "agents.txt", ".gitignore", ".agents-notes.txt", "gemini"):
             self.assertEqual(self.judge([os.path.join(self.work, name)]).action, "ask", name)
+
+    def test_the_underscore_spellings_of_the_customization_roots_are_refused_too(self):
+        """P56-2: AGY's own guide (the same bytes in 1.5.3 and 1.5.6) names ``.agents``, ``.agent``, ``_agents`` and ``_agent`` as the
+        folders it reads hooks, plugins, rules and skills from; a file tool may not change any of the four, at any depth, in any case."""
+        for part in ("_agents", "_agent", "_AGENTS", "_Agent"):
+            for rel in (os.path.join(part, "x"), os.path.join("a", part, "x"), os.path.join("a", "b", part, "c", "d"), part):
+                got = self.judge([os.path.join(self.work, rel)])
+                self.assertEqual(got.action, "deny", rel)
+                self.assertIn("聊天裡不能改", got.reason)
+        for name in ("_agents.txt", "my_agents", "agents_", "_agentsx", "_agent-notes.md"):
+            self.assertEqual(self.judge([os.path.join(self.work, name)]).action, "ask", name)
+
+    def test_every_version_refuses_the_same_names(self):
+        for version, consts in acp.VERSIONS.items():
+            with self.subTest(version=version):
+                for name in (".agents", ".agent", "_agents", "_agent", ".gemini", "GEMINI.md", "AGENTS.md"):
+                    self.assertIn(name, consts.workdir_forbidden)
+                for name in ("_agents", "_agent"):
+                    self.assertIn(name, consts.forbidden_anywhere)
 
     def test_a_file_with_another_hard_link_is_refused(self):
         a = self.touch(self.work, "a.txt")

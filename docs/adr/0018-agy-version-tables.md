@@ -1,6 +1,6 @@
 # 0018 AGY 的版本表依版本取值：認得 1.5.6；內建檔的雜湊認所有已知版本在同一個路徑釘的值（AGY 自己更新後，舊版寫的資料夾不用刪）
 
-日期：2026-11-12　狀態：已決定（v0.25.1「認得 AGY 1.5.6」；使用者要求支援 Gemini（AGY）新版，細節由協調者決定。依據 ADR 0012、`docs/evidence/agy-1.5.3-chat.md`、`docs/evidence/agy-1.5.5-not-added.md`、`docs/evidence/agy-1.5.6-chat.md` 與 `docs/SECURITY-MODEL.md` 的「A new version of AGY (v0.25.1)」）
+日期：2026-11-12　狀態：已決定（v0.25.2「認得 AGY 1.5.6」；使用者要求支援 Gemini（AGY）新版，細節由協調者決定。依據 ADR 0012、`docs/evidence/agy-1.5.3-chat.md`、`docs/evidence/agy-1.5.5-not-added.md`、`docs/evidence/agy-1.5.6-chat.md` 與 `docs/SECURITY-MODEL.md` 的「A new version of AGY (v0.25.2)」）
 
 ## 背景
 

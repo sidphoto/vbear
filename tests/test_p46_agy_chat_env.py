@@ -16,7 +16,6 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from vbear import admin_policy
 from vbear.runtime import agy_chat_env as env, cli_versions
 
 VERSION = "1.5.3"
@@ -272,6 +271,8 @@ class ChatHomeTests(FolderCase):
             "a gemini file deep down": "p-0001/a/GEMINI.md",
             "an agents file": "p-0002/AGENTS.md",
             "an agent folder": "p-0002/.agents",
+            "an underscore agents folder": "p-0002/_agents",
+            "an underscore agent folder deep down": "p-0001/a/_AGENT",
             "plugins": "p-0001/plugins",
         }
         for what, name in bad.items():
@@ -932,7 +933,7 @@ class HooksTests(TempCase):
         with mock.patch("os.lstat", side_effect=OSError(5, "Input/output error")):
             self.assertEqual(env.home_hooks_state(self.home)[0], "unreadable")
 
-    def test_only_that_one_name_is_looked_at(self):
+    def test_only_the_named_places_are_looked_at_and_nothing_is_listed_or_opened(self):          # (P56-2: it was "only that one name", ~/.agents/hooks.json)
         calls = []
         real = os.lstat
 
@@ -940,9 +941,54 @@ class HooksTests(TempCase):
             calls.append(os.fspath(path))
             return real(path, *a, **k)
 
-        with mock.patch("os.lstat", watch), mock.patch("os.scandir", side_effect=AssertionError("listed")):
+        with mock.patch("os.lstat", watch), mock.patch("os.scandir", side_effect=AssertionError("listed")), \
+                mock.patch("builtins.open", side_effect=AssertionError("opened")):
             env.home_hooks_state(self.home)
-        self.assertEqual(calls, [str(self.home / ".agents" / "hooks.json")])
+        self.assertEqual(calls, [str(self.home / root / item) for root in (".agents", ".agent", "_agents", "_agent")
+                                 for item in ("hooks.json", "plugins.json", "plugins")])
+
+    def test_the_hooks_and_plugins_of_every_customization_root_in_the_home_folder_refuse(self):
+        """P56-2: AGY's own guide (the same in 1.5.3 and 1.5.6) reads ``hooks.json``, ``plugins.json`` and ``plugins/`` (a plugin may carry
+        hooks and an MCP server it starts) from ``.agents``, ``.agent``, ``_agents`` and ``_agent``; any of the twelve stops the chat."""
+        for root in (".agents", ".agent", "_agents", "_agent"):
+            for item in ("hooks.json", "plugins.json", "plugins"):
+                for kind in ("file", "dir", "link"):
+                    with self.subTest(root=root, item=item, kind=kind):
+                        path = self.home / root / item
+                        path.parent.mkdir(exist_ok=True)
+                        {"file": lambda: path.write_text("{}"), "dir": lambda: path.mkdir(),
+                         "link": lambda: path.symlink_to(self.tmp / "nowhere")}[kind]()
+                        state, why = env.home_hooks_state(self.home)
+                        self.assertEqual(state, "present")
+                        self.assertIn(f"~/{root}/{item}", why)
+                        self.assertIn("hooks", why)
+                        self.assertNotIn(str(self.home), why)
+                        path.rmdir() if kind == "dir" else path.unlink()
+                path.parent.rmdir()
+        self.assertEqual(env.home_hooks_state(self.home), ("absent", ""))
+
+    def test_the_other_things_the_person_keeps_in_those_folders_are_not_hooks(self):
+        for root in (".agents", ".agent", "_agents", "_agent"):
+            for name in ("skills", "skills.json", "rules", "workflows", "agents", "teamwork"):
+                (self.home / root).mkdir(exist_ok=True)
+                (self.home / root / name).write_text("x")
+        (self.home / "agents").mkdir()
+        (self.home / "agents" / "hooks.json").write_text("{}")                   # a folder that only looks like the root
+        self.assertEqual(env.home_hooks_state(self.home), ("absent", ""))
+
+    def test_a_failure_to_tell_in_the_other_roots_refuses_too(self):
+        for root in (".agent", "_agents", "_agent"):
+            with self.subTest(root=root):
+                path = self.home / root
+                path.mkdir()
+                path.chmod(0o000)
+                state, why = env.home_hooks_state(self.home)
+                path.chmod(0o700)
+                self.assertEqual(state, "unreadable")
+                self.assertIn("無法確認", why)
+                path.rmdir()
+        (self.home / "_agent").write_text("a file where the folder should be")
+        self.assertEqual(env.home_hooks_state(self.home)[0], "unreadable")
 
 
 class WorkdirTests(TempCase):
@@ -970,7 +1016,7 @@ class WorkdirTests(TempCase):
         self.write_private(self.work / "docs" / "GEMINI.md", "x")             # below the top level they are not read as rules
         self.assertEqual(env.check_workdir(self.work), self.work)
 
-    def test_the_five_names_at_the_top_refuse_whatever_they_are_and_however_they_are_cased(self):
+    def test_the_seven_names_at_the_top_refuse_whatever_they_are_and_however_they_are_cased(self):          # (P56-2: five names, then seven)
         for name in env.WORKDIR_FORBIDDEN:
             for variant in (name, name.swapcase(), name.lower()):
                 for kind in ("file", "dir", "link"):
@@ -986,7 +1032,7 @@ class WorkdirTests(TempCase):
                         else:
                             path.unlink()
         self.assertEqual(env.check_workdir(self.work), self.work)
-        self.assertEqual(tuple(env.WORKDIR_FORBIDDEN), (".agents", ".agent", ".gemini", "GEMINI.md", "AGENTS.md"))
+        self.assertEqual(tuple(env.WORKDIR_FORBIDDEN), (".agents", ".agent", "_agents", "_agent", ".gemini", "GEMINI.md", "AGENTS.md"))
 
     def test_a_link_to_the_outside_refuses_at_any_depth(self):
         outside = self.tmp / "outside"
@@ -1348,9 +1394,6 @@ class StatusTests(BinaryCase):
         patch = mock.patch.dict(env.BUILTIN_TABLES, tables)
         patch.start()
         self.addCleanup(patch.stop)
-        sources = mock.patch.dict(admin_policy.AGY_SOURCES, {"1.5.6": admin_policy.AGY_SOURCES["1.5.3"]})   # (this test is about the folder)
-        sources.start()
-        self.addCleanup(sources.stop)
         home = self.state / "agy-chat-home"
         for path in (home / "antigravity-cli" / "builtin" / "skills" / "native_swarm",):
             path.mkdir(parents=True, mode=0o700)
@@ -1363,6 +1406,18 @@ class StatusTests(BinaryCase):
         self.install_agy("1.5.6")
         out = self.assert_state("folder", version="1.5.6")
         self.assertIn(keep, out["why"])
+
+    def test_1_5_6_is_held_back_by_the_application_support_folder_and_1_5_3_is_not(self):
+        """P56-2: the strings of 1.5.6 name /Library/Application Support/Antigravity, so for 1.5.6 it is an administrator source."""
+        self.install_agy("1.5.6")
+        self.record_pass("1.5.6")
+        self.assert_state("ready", why=False, version="1.5.6", admin_policy_ok=True)
+        (self.policy_root / "Library" / "Application Support" / "Antigravity").mkdir(parents=True)
+        out = self.assert_state("policy", version="1.5.6", admin_policy_ok=False, hooks_ok=None)
+        self.assertIn("管理員", out["why"])
+        self.install_agy("1.5.3")
+        self.record_pass("1.5.3")
+        self.assert_state("ready", why=False, version="1.5.3", admin_policy_ok=True)
 
     def test_a_hooks_file_that_cannot_be_told_is_hooks_too(self):
         self.ready()

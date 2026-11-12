@@ -757,6 +757,15 @@ class BeforeAnythingStartsTests(AgyCase):
         self.refused("agy_hooks")
         self.assertEqual((hooks.stat().st_mtime_ns, hooks.read_bytes()), before)
 
+    def test_the_person_has_a_plugin_in_another_customization_root(self):          # P56-2
+        plugins = self.home / "_agents" / "plugins"
+        plugins.mkdir(parents=True)
+        (plugins / "p").mkdir()
+        before = plugins.stat().st_mtime_ns
+        self.refused("agy_hooks")
+        self.assertEqual(plugins.stat().st_mtime_ns, before)
+        self.assertEqual(sorted(os.listdir(plugins)), ["p"], "nothing was moved or deleted")
+
     def test_a_chat_folder_with_something_that_is_not_ours(self):
         home = env.chat_home_path(self.base)
         home.mkdir(mode=0o700)
@@ -768,6 +777,10 @@ class BeforeAnythingStartsTests(AgyCase):
         home.mkdir(mode=0o700)
         os.chmod(home, 0o755)
         self.refused("agy_home")
+
+    def test_an_underscore_agents_in_the_work_folder(self):          # P56-2
+        os.mkdir(os.path.join(self.work(), "_agents"))
+        self.refused("agy_workdir")
 
     def test_a_dot_agents_in_the_work_folder(self):
         os.mkdir(os.path.join(self.work(), ".agents"))

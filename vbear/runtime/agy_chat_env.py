@@ -10,9 +10,10 @@ them). The folder is not Codex's ``codex-chat-home``: the two share nothing. AGY
 (``antigravity-cli/conversations/``) are never deleted by VBear.
 
 Two things outside this folder can still reach AGY and are looked at here, by name only and never read: the person's
-``~/.agents/hooks.json`` (commands AGY runs by itself; its presence refuses the chat, ``home_hooks_state``) and the top level of a
-chat's work folder (``.agents``, ``.agent``, ``.gemini``, ``GEMINI.md`` and ``AGENTS.md`` there are read by AGY as project
-settings and rules; ``check_workdir``). The person's skills in ``~/.agents/skills`` are loaded by AGY anyway: the person
+``~/.agents/hooks.json`` and the other hooks and plugins places of the four customization roots (commands and programs AGY
+starts by itself; their presence refuses the chat, ``home_hooks_state``) and the top level of a chat's work folder (``.agents``,
+``.agent``, ``_agents``, ``_agent``, ``.gemini``, ``GEMINI.md`` and ``AGENTS.md`` there are read by AGY as project settings and
+rules; ``check_workdir``). The person's skills in ``~/.agents/skills`` are loaded by AGY anyway: the person
 accepted that (ADR 0012), and the screen says so.
 
 Every check either returns a value that was checked or says why not. ``agy --version`` is the only program run, and it
@@ -102,6 +103,12 @@ MCP_CONFIG_MAX = 64 << 10
 WORKDIR_FORBIDDEN = _NEWEST.workdir_forbidden
 WORKDIR_SCAN_MAX = 10_000
 HOOKS_FILE = ".agents/hooks.json"             # under the person's HOME; looked for, never read
+# The places in the person's HOME where AGY reads hooks or plugins from (a plugin may carry hooks and an MCP server it starts). AGY's own
+# guide (``skills/agy-customizations``, the same bytes in 1.5.3 and 1.5.6) names four folder spellings as the "customization root"; each is
+# only looked at (``lstat``), never opened, for these three names (P56-2).
+HOOKS_ROOTS = (".agents", ".agent", "_agents", "_agent")
+HOOKS_ITEMS = ("hooks.json", "plugins.json", "plugins")
+HOOKS_PLACES = tuple(f"{root}/{item}" for root in HOOKS_ROOTS for item in HOOKS_ITEMS)
 
 # Versions this code knows how to run: the protocol table's keys. The binary's version is matched against this list.
 KNOWN_VERSIONS = tuple(acp.VERSIONS)
@@ -655,18 +662,22 @@ def settings_intact(base, home=None) -> bool:
 # ---- the person's hooks ----------------------------------------------------------------------------------------------
 
 def home_hooks_state(home=None) -> tuple[str, str]:
-    """("absent" | "present" | "unreadable", why): ``lstat`` of ~/.agents/hooks.json and nothing else; the file is never opened.
-    "absent" only when the system says the name is not there. Anything there (a file, a folder, a link, a dangling link) and
-    any other failure to tell is a refusal: hooks are commands AGY runs by itself, which VBear can neither ask about nor stop."""
+    """("absent" | "present" | "unreadable", why): ``lstat`` of each of ``HOOKS_PLACES`` (hooks.json, plugins.json and plugins in
+    ~/.agents, ~/.agent, ~/_agents and ~/_agent) and nothing else; nothing is opened or listed.
+    "absent" only when the system says every name is not there. Anything there (a file, a folder, a link, a dangling link) and
+    any other failure to tell is a refusal: hooks are commands AGY runs by itself, and a plugin may carry hooks and an MCP server
+    AGY starts, which VBear can neither ask about nor stop."""
     root = os.fspath(home) if home else str(Path.home())
-    try:
-        os.lstat(os.path.join(root, HOOKS_FILE))
-    except FileNotFoundError:
-        return "absent", ""
-    except OSError as exc:
-        return "unreadable", (f"無法確認 ~/{HOOKS_FILE} 存不存在（{exc.strerror or type(exc).__name__}），所以不啟動 AGY 聊天。")
-    return "present", ("你自己的 AGY 設定裡有 hooks（AGY 會自動執行的指令）。AGY 聊天會載入它們，VBear 管不到，所以不啟動。"
-                       f"把 ~/{HOOKS_FILE} 移走（VBear 不會替你動）才能用 AGY 聊天。")
+    for place in HOOKS_PLACES:
+        try:
+            os.lstat(os.path.join(root, place))
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            return "unreadable", (f"無法確認 ~/{place} 存不存在（{exc.strerror or type(exc).__name__}），所以不啟動 AGY 聊天。")
+        return "present", ("你自己的 AGY 設定裡有 hooks 或外掛（hooks 是 AGY 會自動執行的指令，外掛可以帶 hooks 或自己啟動的程式）。"
+                           f"AGY 聊天會載入它們，VBear 管不到，所以不啟動。把 ~/{place} 移走（VBear 不會替你動）才能用 AGY 聊天。")
+    return "absent", ""
 
 
 # ---- the work folder -------------------------------------------------------------------------------------------------
@@ -676,10 +687,10 @@ def check_workdir(path, *, code: str = "agy_workdir", label: str = "工作資料
     ``label="共用資料夾"``) holds nothing AGY would read as settings or rules, and no link that leads out of it. A folder that is
     not there yet passes (it is made later). Names and links only: no file is opened, no link is followed (a link is
     resolved as a name, to see where it ends), and at most ``WORKDIR_SCAN_MAX`` entries are looked at. AgyRefused (``code``)
-    otherwise, with a sentence that names the entry (one of the five fixed names) but no path.
+    otherwise, with a sentence that names the entry (one of the fixed names) but no path.
 
-    - the top level has none of ``WORKDIR_FORBIDDEN`` (compared without regard to case): AGY reads ``.agents`` (skills, hooks,
-      workflows, agents), ``.gemini``, ``GEMINI.md`` and ``AGENTS.md`` as project settings and rules;
+    - the top level has none of ``WORKDIR_FORBIDDEN`` (compared without regard to case): AGY reads ``.agents`` and its spellings ``.agent``, ``_agents``, ``_agent`` (skills, hooks,
+      plugins, workflows, agents), ``.gemini``, ``GEMINI.md`` and ``AGENTS.md`` as project settings and rules;
     - no link in the tree ends outside the folder: a read AGY does by itself inside the work folder would otherwise reach out.
     This is a look before the start. A link made while AGY runs is the tracker's business (agy_chat_protocol)."""
     path = Path(path)
