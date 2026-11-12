@@ -9,8 +9,19 @@ a small budget; Codex runs without the person's config and rules, read-only, wit
 fewer tools that has been checked, so it gets only the sentence (see docs/evidence).
 
 What comes back is read for one thing, whether the tool answered, and then dropped: the reply, and anything a tool prints
-about the account, are never kept, logged or passed on. What the page gets is one of success, not_logged_in, timeout,
-not_found, bad_reply (or not_ended, the group could not be confirmed gone), with a plain sentence.
+about the account, are never kept, logged or passed on. What the page gets is one of success, not_logged_in, limit, network,
+failed, timeout, not_found, bad_reply (or not_ended, the group could not be confirmed gone), with a plain sentence.
+
+What is read of a failed try (v0.25.1): a program that exits with an error used to be told as "not logged in" whatever
+the reason, which sent people with a good login to log in again. Now the last 4 KiB of what it printed on its error
+output (``STDERR_TAIL``, read all the way while it runs so it cannot block, only the end kept, in memory) are looked at
+once, by ``classify_failure``, for a few well-known phrases: a login one (401 Unauthorized, missing bearer, not logged in,
+authentication required, please run ... login), a plan limit (usage limit, rate limit, 429, quota) or a connection one
+(failed to connect, DNS, timed out, connection refused ...), in that order of weight; anything else is ``failed``, said
+as "VBear cannot see the reason". Only the word of the class and the program's exit code (a number) leave this module:
+the tail itself is passed to ``classify_failure`` and to nothing else, is not kept in a variable, a record, a log, the
+result or the message, and is gone when the call ends (guard rule 21d). The error output of a try that succeeds is not
+read for anything. A reply on the output (stdout) is still looked at only for "did it answer" and dropped.
 
 The cost goes on the day's limit (``try_spend``, the same day as the meetings, the staffing meetings and the chats): what
 Claude Code reports, else a fixed ``CHARGE`` (US$0.01). A try that has started a program is booked even if it fails; a try
@@ -21,6 +32,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 from decimal import Decimal
@@ -32,6 +44,7 @@ from .jsonstore import StoreError
 TRY_SENTENCE = "請只回答 OK"
 TRY_TIMEOUT_S = 60.0
 MAX_OUTPUT = 1 << 20
+STDERR_TAIL = 4096                      # bytes of the end of a failed program's error output that are looked at (and dropped)
 CHARGE = Decimal("0.01")                # booked for a tool that reports no cost, and the most a try is counted at
 CLAUDE_MODEL = "claude-haiku-5-5"       # the model the translations use: the cheapest one this build already depends on
 CLAUDE_BUDGET = "0.02"
@@ -41,6 +54,9 @@ ESTIMATE_TEXT = "大約花不到 US$0.01"
 RESULT_WORDS = {
     "success": "{name} 回應了，這個 AI 工具可以用。",
     "not_logged_in": "{name} 沒有成功回應，看起來還沒登入。請先按「登入」，登入好了再試一次。",
+    "limit": "{name} 說你的方案現在用量到上限了，晚一點再試。",
+    "network": "連不上 {name} 的伺服器，可能是網路問題，稍後再試。",
+    "failed": "{name} 沒有成功回應（原因 VBear 看不出來）。可以再試一次；如果上面的登入檢查沒過，先登入。",
     "timeout": "等了 {secs} 秒，{name} 都沒有回應。可能是網路不通或它正在忙，稍後再試一次。",
     "not_found": "找不到 {name}。請先按「安裝」；剛裝好的話，可能要重新打開 VBear。",
     "bad_reply": "{name} 有回應，但回應的樣子 VBear 看不懂，沒辦法確認它正常。",
@@ -54,6 +70,32 @@ class TryRefused(Exception):
     def __init__(self, status: int, message: str):
         self.status = status
         super().__init__(message)
+
+
+# The phrases a failed program's error output is told apart by. Only clear, general phrases; each class is looked for in the
+# order below and the first class with a hit wins: the server's own answer (login, then limit) outranks the retry noise of a
+# connection that came before it (Codex 0.167.0 with no login prints many "failed to connect" lines and then a 401).
+# Only Codex has a real sample (docs/evidence); Claude Code, AGY, Grok and MCODE have no phrase of their own and are
+# judged by the same general ones, else they are ``failed``. No phrase here was made up for a tool nobody has seen fail.
+_FAILURE_PHRASES = (
+    ("not_logged_in", re.compile(r"\b401\b[^\n]{0,40}\bunauthorized\b|\bmissing bearer\b|\bnot logged in\b|\bauthentication required\b"
+                                 r"|\bplease run [^\n]{0,60}\blogin\b")),
+    ("limit", re.compile(r"\busage limit\b|\brate[- ]limit|\b429\b|\bquota\b")),
+    ("network", re.compile(r"failed to connect|(?:could not|can[’']?t|cannot|unable to) connect|could not resolve|\bdns\b"
+                           r"|connection (?:refused|reset|timed out)|network is unreachable|timed out|name or service not known"
+                           r"|nodename nor servname")),
+)
+
+
+def classify_failure(tool_id: str, tail: bytes) -> str:
+    """Which of not_logged_in, limit, network or failed a program that exited with an error was, from the end of its
+    error output. The bytes are looked at here and nowhere else; only the word comes back. ``tool_id`` is for a tool-specific
+    phrase if one is ever seen for real (none is today)."""
+    text = (tail or b"").decode("utf-8", "replace").lower()
+    for code, rule in _FAILURE_PHRASES:
+        if rule.search(text):
+            return code
+    return "failed"
 
 
 def argv_for(tool_id: str, binary: str, scratch: str) -> list[str]:
@@ -100,10 +142,11 @@ def _reply(tool_id: str, out: bytes) -> tuple[bool, Decimal | None]:
     return bool(out.decode("utf-8", "replace").strip()), None
 
 
-def _result(tool: ai_tools.Tool, code: str, spent: Decimal) -> dict:
+def _result(tool: ai_tools.Tool, code: str, spent: Decimal, exit_code: int | None = None) -> dict:
+    """``exit_code``: the program's exit code (a number, for the page's 「技術細節」) when it ended with an error, else None."""
     words = RESULT_WORDS[code].format(name=tool.short, secs=int(TRY_TIMEOUT_S))
     return {"ok": True, "tool": tool.id, "success": code == "success", "result": code, "message": words,
-            "spent_usd": mt.fmt(spent)}
+            "spent_usd": mt.fmt(spent), "exit_code": exit_code if isinstance(exit_code, int) and not isinstance(exit_code, bool) else None}
 
 
 def attempt(tool_id: str, ledger: Callable[[], dict], clock: Callable[[], float] = time.time) -> dict:
@@ -138,11 +181,11 @@ def attempt(tool_id: str, ledger: Callable[[], dict], clock: Callable[[], float]
             key = try_spend.start(tool.id, clock(), CHARGE)
         except StoreError as exc:
             raise TryRefused(409, f"{exc}。為了不超過每天上限，現在不試。") from None
-        code, cost = "bad_reply", CHARGE
+        code, cost, exit_code = "bad_reply", CHARGE, None
         try:
             run = headless_cli.run(lambda scratch: argv_for(tool.id, binary, scratch), stdin_for(tool.id), threading.Event(),
                                    timeout=TRY_TIMEOUT_S, max_output=MAX_OUTPUT, blocked_name=f"{WORKER}.blocked",
-                                   prefix="vbear-setup-try-")
+                                   prefix="vbear-setup-try-", stderr_tail=STDERR_TAIL)
             answered, reported = _reply(tool.id, run.output)
             code = "success" if answered else "bad_reply"
             if answered and reported is not None:
@@ -151,7 +194,7 @@ def attempt(tool_id: str, ledger: Callable[[], dict], clock: Callable[[], float]
             if exc.code == "timeout":
                 code = "timeout"
             elif exc.code == "cli_failed":                  # a non-zero exit, or it ended before it read the sentence
-                code = "not_logged_in"
+                code, exit_code = classify_failure(tool.id, exc.stderr_tail), exc.returncode
             elif exc.code == "process_unconfirmed":
                 code = "not_ended"
             else:
@@ -161,6 +204,6 @@ def attempt(tool_id: str, ledger: Callable[[], dict], clock: Callable[[], float]
         except StoreError:
             pass                    # the entry stays as a try that is still running: counted at its cap, never less
         ai_tool_status.invalidate()
-        return _result(tool, code, cost)
+        return _result(tool, code, cost, exit_code)
     finally:
         os.close(fd)

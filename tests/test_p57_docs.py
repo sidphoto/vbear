@@ -32,8 +32,9 @@ class AdrTests(unittest.TestCase):
                      "不多讀任何 API", "`card_tool_changed`", "資料流向", "不自動檢查", "`policy`", "`unsupported`", "沒有新增 API 路徑", "`homeChatsOf`"):
             self.assertIn(part, self.adr, part)
 
-    def test_the_rules_21a_to_21c_are_named_with_their_file_and_20_and_0018_are_not_taken(self):
-        for part in ("21a 換工具的寫入只由確認鈕的 click 送出", "21b 那個寫入的 body 只有 `model`", "21c 確認區一定有資料流向那一句", "tests/frontend/p57_switch.cjs"):
+    def test_the_rules_21a_to_21d_are_named_with_their_file_and_20_and_0018_are_not_taken(self):
+        for part in ("21a 換工具的寫入只由確認鈕的 click 送出", "21b 那個寫入的 body 只有 `model`", "21c 確認區一定有資料流向那一句", "tests/frontend/p57_switch.cjs",
+                     "21d 「試一下」失敗時，工具印在錯誤輸出的東西看過就丟", "SetupTryStderrRules", "tests/test_setup_try_failures.py"):
             self.assertIn(part, self.adr, part)
         self.assertNotIn("守門規則 20", self.adr)
         self.assertFalse(list((ROOT / "docs" / "adr").glob("0018-*")), "0018 belongs to another release")
@@ -63,6 +64,21 @@ class DocumentsTests(unittest.TestCase):
                      "Money.", "Not tried on a real Mac", "Going back to v0.25.0"):
             self.assertIn(part, self.first, part)
 
+    def test_the_changelog_says_a_failed_try_is_no_longer_always_not_logged_in(self):
+        for part in ("no longer says \"not logged in\" for every failure", "last 4 KiB", "never stored, logged or shown", "a login answer outranks a limit, which outranks a connection problem",
+                     "登入檢查是通過的，不用再登入", "exit code (a number) is behind 「技術細節」", "Only Codex has a real sample", "Guard rule 21d", "`vbear/setup_try.py`", "`vbear/headless_cli.py`",
+                     "The cost booking, the confirmation, the 60 seconds and the one-at-a-time lock are unchanged", "is not known (the new sentence and the exit code are there"):
+            self.assertIn(part, self.first, part)
+
+    def test_the_security_model_says_the_error_output_tail_is_read_only_to_tell_failures_apart(self):
+        for part in ("reads the tail of the tool's error output, only to tell a few failures apart", "guard rule 21d", "`headless_cli.run(stderr_tail=4096)`", "never block on a full pipe",
+                     "keeps in memory only its last 4 KiB", "`setup_try.classify_failure`", "to nothing else", "first class that matches in that order wins", "not stored, logged, written to a file",
+                     "the error output of a try that succeeds is not read for anything", "Only Codex has a real sample", "unchanged"):
+            self.assertIn(part, self.model, part)
+        older = flat(section(raw("docs", "SECURITY-MODEL.md"), "**A try is isolated and booked.**", "**The daily limit the person picks only ever lowers other limits.**"))
+        self.assertIn("also the last 4 KiB of the error output", older)
+        self.assertIn("dropped", older)
+
     def test_the_security_model_says_it_is_only_the_screen_and_one_confirmed_write(self):
         for part in ("only what the screen shows", "no route (API path), no kind of request", "rule 21", "Nothing about the hold is loosened", "Only 「確認，改用 …」 sends", "guard rule 21a",
                      "The data flow changes", "21c", "Residual risks"):
@@ -73,8 +89,10 @@ class DocumentsTests(unittest.TestCase):
         for name in ("chatSwitchOptions", "switchToolNode", "switchToolConfirmNode", "switchToolHost", "switchToolConfirm", "switchToolUi", "homeChatsOf"):
             self.assertIn(name, self.arch, name)
             self.assertRegex(self.app, rf"(function|const) {name}\b", f"web/app.js has {name}")
-        for part in ("21a to 21c", "15b"):
+        for part in ("21a to 21c", "15b", "setupTryWords", "setupLoginPasses", "classify_failure", "stderr_tail", "21d"):
             self.assertIn(part, self.arch, part)
+        for name in ("setupTryWords", "setupLoginPasses"):
+            self.assertRegex(self.app, rf"function {name}\b", f"web/app.js has {name}")
         self.assertEqual(problems(self.arch, "ARCHITECTURE v0.25.1"), [])
 
     def test_the_glossary_has_the_new_word_and_the_page_says_it(self):
@@ -91,8 +109,18 @@ class GuardFilesTests(unittest.TestCase):
         for rule in ("21a", "21b", "21c"):
             self.assertIn(rule, spec, rule)
         guard = raw("tests", "test_autonomy_guard.py")
-        for part in ("class Guard21FilesAreThere", "     21a  ", "     21b  ", "     21c  "):
+        for part in ("class Guard21FilesAreThere", "class SetupTryStderrRules", "     21a  ", "     21b  ", "     21c  ", "     21d  "):
             self.assertIn(part, guard, part)
+        self.assertIn("21d", raw("tests", "test_setup_try_failures.py"))
+
+    def test_the_words_of_the_server_for_a_failed_try_are_the_page_s(self):
+        from vbear import setup_try
+        app = raw("web", "app.js")
+        self.assertIn(setup_try.RESULT_WORDS["failed"].replace("{name}", "${name}"), app, "the page says the same unknown-reason sentence as the server")
+        self.assertIn("登入檢查是通過的，不用再登入", app)
+        for code in ("limit", "network", "failed"):
+            self.assertIn(code, setup_try.RESULT_WORDS)
+            self.assertNotIn("請先按「登入」", setup_try.RESULT_WORDS[code], code)
 
     def test_rules_15b_to_19_are_still_there(self):
         guard = raw("tests", "test_autonomy_guard.py")

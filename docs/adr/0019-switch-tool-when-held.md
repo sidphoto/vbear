@@ -25,7 +25,7 @@ ADR 0017 讓「AI 工具不能用的原因」用白話說，並在沒有員工�
 
 ## 沒有改的
 
-- `policy`、`unsupported`、聊天安全檢查、`admin_policy` 的任何判斷；`vbear/` 底下除了版本號一個字沒改。沒有新增 API 路徑、請求種類、設定鍵、聊天事件、`localStorage` 鍵。
+- `policy`、`unsupported`、聊天安全檢查、`admin_policy` 的任何判斷；換工具這件事在 `vbear/` 底下除了版本號一個字沒改（同一版另有一處與換工具無關的追加：「試一下」失敗時不再一律說「還沒登入」，只動 `vbear/setup_try.py` 與 `vbear/headless_cli.py`，見 CHANGELOG v0.25.1 最後一項與守門規則 21d）。沒有新增 API 路徑、請求種類、設定鍵、聊天事件、`localStorage` 鍵。
 - 每一步仍然是使用者自己按：頁面不替人選一家（不預選、不標建議；順序只依「現在能不能聊」）、不自動換、不自動檢查。
 - 員工編輯表單、開始設定頁、員工頁、守門 1–19 一個字沒改。
 
@@ -50,5 +50,6 @@ ADR 0017 讓「AI 工具不能用的原因」用白話說，並在沒有員工�
 - **21a 換工具的寫入只由確認鈕的 click 送出**（`tests/frontend/p57_switch.cjs`）：第一下、「先不要」、重畫、5 秒更新、Enter 都不送；程式裡這一段只有 `switchToolConfirm` 一個寫入，它只被確認鈕的 click 呼叫。壞樣本：另一個函式裡多一個請求、在確認函式裡多寫一次、用 keydown 或計時器呼叫確認、確認前就寫、確認後沒寫或寫兩次，都會被抓到。
 - **21b 那個寫入的 body 只有 `model`**（同一個檔）：`{model: {tool, model_id: ""}}`，tool 是畫面上列出的另一家；多一個欄位（名字、啟動方式、說明、技能、`enabled`）、指定模型名、換成不是按的那一家、換成原本的工具、寫到別的路徑，都會被抓到。
 - **21c 確認區一定有資料流向那一句，而且不在摺疊裡**（同一個檔）：「之後跟他說的話會送到 {公司}」與確認鈕在同一個區域；壞樣本：少了那一句、公司不對、放進 `details`、沒有確認鈕。
+- **21d 「試一下」失敗時，工具印在錯誤輸出的東西看過就丟**（`tests/test_autonomy_guard.py` 的 `SetupTryStderrRules`，與 `tests/test_setup_try_failures.py`）：`headless_cli.run(stderr_tail=…)` 保留的最後 4 KiB 只以 `HeadlessError.stderr_tail` 交出；`vbear/setup_try.py` 只把它交給 `classify_failure`，不放進變數、結果、訊息、檔案或日誌，`classify_failure` 只回固定的詞。壞樣本：存進變數、放進結果（值或鍵名）、寫日誌、組成文字、分類函式回傳原文或印出來、執行器把尾巴寫檔、印出、放進例外訊息、回傳、複製，都會被抓到；執行時的測試用一段編造的錯誤輸出，檢查結果、日誌和程式寫下的每個檔案都找不到它。
 
 守門 15、16 系列一個字沒改；`tests/test_autonomy_guard.py` 只加了第 21 條的說明與檢查檔案存在、帶有規則編號的 `Guard21FilesAreThere`（20 與 ADR 0018 是另一版的）。

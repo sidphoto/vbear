@@ -124,6 +124,10 @@ Never, whatever the person ticked in 「自己動手」:
           write, in ``switchToolConfirm``, called by nothing else (P57, tests/frontend/p57_switch.cjs).
      21b  the body of that write is only ``{model: {tool, model_id: ""}}`` for one of the other tools offered: no name, mode, instructions, skills or ``enabled``, no model name (P57, tests/frontend/p57_switch.cjs).
      21c  the confirmation always says where the words go from now on (「之後跟他說的話會送到 …」), outside any fold and in the same area as the confirm button (P57, tests/frontend/p57_switch.cjs).
+     21d  what a tool printed on its error output is looked at and dropped: the tail that ``headless_cli.run(stderr_tail=...)`` keeps leaves only as ``HeadlessError.stderr_tail``, and ``vbear/setup_try.py``
+          hands it to ``classify_failure`` and to nothing else (no variable, no result, no message, no file, no log, no call that writes); ``classify_failure`` returns only a fixed word; in ``headless_cli.run``
+          the tail is only counted, cut and handed to the error (this file, ``SetupTryStderrRules``, with a bad sample for each way out, and tests/test_setup_try_failures.py, which looks for the words of a
+          made-up error output in the result, in the logs and in every file the program wrote).
      15b is not changed and still passes: v0.25.1 uses no ``/api/`` path that v0.20.0 did not. P57's rule: this file, ``Guard21FilesAreThere``, checks that these files exist and carry the number of their rule.
 
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
@@ -3338,19 +3342,149 @@ class Guard19FilesAreThere(unittest.TestCase):
         self.assertRegex(words, r"19c[^\n]*(catches|bad)")
 
 
+# ---- 21d: what a tool printed on its error output is looked at and dropped (P57 follow-up, v0.25.1) ------------------------------------------------
+
+_WRITING_CALLS = {"print", "open", "write_private", "write_text", "write_bytes", "write", "dump", "dumps", "info", "warning", "error", "debug",
+                  "exception", "critical", "log", "format", "append", "extend", "update", "setdefault", "send", "sendall", "put", "set", "add"}
+
+
+def _parents(tree):
+    parents = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+    return parents
+
+
+def _call_name(call):
+    f = call.func
+    return f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else ""
+
+
+def setup_try_stderr_problems(source, label="vbear/setup_try.py"):
+    """21d on setup_try: ``.stderr_tail`` of a headless error is read only as a direct argument of ``classify_failure``; ``classify_failure`` returns a fixed word only; the result has no key that
+    names the error output."""
+    tree = ast.parse(source)
+    parents = _parents(tree)
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr == "stderr_tail":
+            parent = parents.get(node)
+            if not (isinstance(parent, ast.Call) and _call_name(parent) == "classify_failure" and node in parent.args):
+                found.append(f"{label}: .stderr_tail is used outside a direct argument of classify_failure (line {node.lineno})")
+        elif isinstance(node, ast.Constant) and node.value == "stderr_tail":
+            parent = parents.get(node)
+            if not isinstance(parent, ast.keyword):
+                found.append(f"{label}: the name 'stderr_tail' is built as text (line {node.lineno})")
+        elif isinstance(node, ast.Dict):
+            for key in node.keys:
+                if isinstance(key, ast.Constant) and isinstance(key.value, str) and re.search(r"stderr|tail|error_output|raw", key.value, re.I):
+                    found.append(f"{label}: a dict has the key {key.value!r} (line {node.lineno})")
+    funcs = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "classify_failure"]
+    if len(funcs) != 1:
+        return found + [f"{label}: there is not exactly one classify_failure"]
+    for ret in (n for n in ast.walk(funcs[0]) if isinstance(n, ast.Return)):
+        v = ret.value
+        if not ((isinstance(v, ast.Constant) and isinstance(v.value, str)) or (isinstance(v, ast.Name) and v.id == "code")):
+            found.append(f"{label}: classify_failure returns something other than a fixed word (line {ret.lineno})")
+    for call in (n for n in ast.walk(funcs[0]) if isinstance(n, ast.Call)):
+        if _call_name(call) in _WRITING_CALLS:
+            found.append(f"{label}: classify_failure calls {_call_name(call)} (line {call.lineno})")
+    return found
+
+
+def headless_stderr_problems(source, label="vbear/headless_cli.py"):
+    """21d on the runner: the kept tail (``tail``) is only counted, cut, appended to and handed to ``HeadlessError`` as ``bytes(tail)``; no call that writes sees it."""
+    tree = ast.parse(source)
+    parents = _parents(tree)
+    found = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Name) and node.id == "tail" and isinstance(node.ctx, (ast.Load, ast.Del))):
+            continue
+        parent = parents.get(node)
+        grand = parents.get(parent)
+        ok = (isinstance(parent, ast.Attribute) and parent.attr == "extend") or isinstance(parent, ast.Subscript) \
+            or (isinstance(parent, ast.Call) and _call_name(parent) == "len") \
+            or (isinstance(parent, ast.Call) and _call_name(parent) == "bytes" and isinstance(grand, ast.Call) and _call_name(grand) == "HeadlessError")
+        if not ok:
+            found.append(f"{label}: the tail is used somewhere other than count, cut, extend or HeadlessError(bytes(tail)) (line {node.lineno})")
+    for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
+        if _call_name(call) in _WRITING_CALLS - {"extend", "append"} and any(isinstance(x, ast.Name) and x.id == "tail" for a in call.args for x in ast.walk(a)):
+            found.append(f"{label}: {_call_name(call)} is given the tail (line {call.lineno})")
+    return found
+
+
+class SetupTryStderrRules(unittest.TestCase):
+    """21d: the real sources are clean, and each way out is caught on a made-up bad source."""
+
+    ROOT = Path(__file__).resolve().parents[1]
+    GOOD_TRY = (
+        "def classify_failure(tool_id, tail):\n    text = (tail or b'').decode('utf-8', 'replace').lower()\n"
+        "    for code, rule in RULES:\n        if rule.search(text):\n            return code\n    return 'failed'\n"
+        "def attempt():\n    try:\n        run()\n    except HeadlessError as exc:\n"
+        "        code, exit_code = classify_failure(tool.id, exc.stderr_tail), exc.returncode\n"
+        "    return {'ok': True, 'result': code, 'exit_code': exit_code}\n")
+    GOOD_RUN = (
+        "def run():\n    tail = bytearray()\n    def drain():\n        tail.extend(chunk)\n        if len(tail) > 9:\n            del tail[:1]\n"
+        "    raise HeadlessError('cli_failed', 1, bytes(tail))\n")
+
+    def test_21d_the_real_sources_are_clean(self):
+        self.assertEqual(setup_try_stderr_problems((self.ROOT / "vbear" / "setup_try.py").read_text(encoding="utf-8")), [])
+        self.assertEqual(headless_stderr_problems((self.ROOT / "vbear" / "headless_cli.py").read_text(encoding="utf-8")), [])
+
+    def test_21d_the_good_samples_pass(self):
+        self.assertEqual(setup_try_stderr_problems(self.GOOD_TRY), [])
+        self.assertEqual(headless_stderr_problems(self.GOOD_RUN), [])
+
+    def test_21d_setup_try_catches_each_way_the_error_output_could_leave(self):
+        bad = {
+            "kept in a variable": self.GOOD_TRY.replace("code, exit_code = classify_failure(tool.id, exc.stderr_tail), exc.returncode",
+                                                         "raw = exc.stderr_tail\n        code, exit_code = classify_failure(tool.id, raw), exc.returncode"),
+            "put in the result": self.GOOD_TRY.replace("'exit_code': exit_code}", "'exit_code': exit_code, 'detail': exc.stderr_tail}"),
+            "put in the result under a key": self.GOOD_TRY.replace("'exit_code': exit_code}", "'exit_code': exit_code, 'stderr': 1}"),
+            "logged": self.GOOD_TRY.replace("    return {", "    log.warning(exc.stderr_tail)\n    return {"),
+            "decoded and kept": self.GOOD_TRY.replace("code, exit_code = classify_failure(tool.id, exc.stderr_tail), exc.returncode",
+                                                      "code, exit_code = classify_failure(tool.id, b''), exc.stderr_tail.decode()"),
+            "read by name": self.GOOD_TRY.replace("exc.stderr_tail), exc.returncode", "exc.stderr_tail), getattr(exc, 'stderr_tail')"),
+            "returned by the classifier": self.GOOD_TRY.replace("    return 'failed'\n", "    return text\n"),
+            "written by the classifier": self.GOOD_TRY.replace("    for code, rule in RULES:", "    print(text)\n    for code, rule in RULES:"),
+            "classifier gone": "def attempt():\n    return 1\n",
+        }
+        for what, source in bad.items():
+            self.assertNotEqual(setup_try_stderr_problems(source), [], what)
+
+    def test_21d_the_runner_catches_each_way_the_tail_could_leave(self):
+        bad = {
+            "written to a file": self.GOOD_RUN.replace("    raise", "    write_private(path, tail)\n    raise"),
+            "logged": self.GOOD_RUN.replace("    raise", "    print(bytes(tail))\n    raise"),
+            "in the message": self.GOOD_RUN.replace("raise HeadlessError('cli_failed', 1, bytes(tail))", "raise HeadlessError(bytes(tail).decode())"),
+            "returned": self.GOOD_RUN.replace("    raise HeadlessError('cli_failed', 1, bytes(tail))", "    return tail"),
+            "copied elsewhere": self.GOOD_RUN.replace("    raise", "    out = tail\n    raise"),
+        }
+        for what, source in bad.items():
+            self.assertNotEqual(headless_stderr_problems(source), [], what)
+
+
 class Guard21FilesAreThere(unittest.TestCase):
-    """21: the three rules of v0.25.1 are kept where the description above says, and the file carries the number of each rule and a judge with a bad sample for it."""
+    """21: the four rules of v0.25.1 are kept where the description above says, and the files carry the number of each rule and a judge with a bad sample for it."""
 
     ROOT = Path(__file__).resolve().parents[1]
 
     def read(self, *parts):
         return self.ROOT.joinpath(*parts).read_text(encoding="utf-8")
 
-    def test_21_the_description_names_all_three_rules_and_their_file(self):
+    def test_21_the_description_names_all_four_rules_and_their_files(self):
         text = self.read("tests", "test_autonomy_guard.py")
-        for rule in "abc":
+        for rule in "abcd":
             self.assertIn(f"     21{rule}  ", text, rule)
         self.assertIn("p57_switch.cjs", text)
+        self.assertIn("test_setup_try_failures.py", text)
+        self.assertIn("class SetupTryStderrRules", text)
+
+    def test_21d_the_runtime_test_is_there_and_carries_its_number(self):
+        spec = self.read("tests", "test_setup_try_failures.py")
+        self.assertIn("21d", spec)
+        self.assertIn("test_nothing_the_tool_printed_is_in_the_result_a_log_or_a_file", spec)
 
     def test_21_the_file_exists_and_carries_the_number_of_each_rule(self):
         spec = self.read("tests", "frontend", "p57_switch.cjs")

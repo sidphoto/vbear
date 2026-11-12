@@ -14306,7 +14306,9 @@ function setupTryView(row, st) {
   if (s.phase === "running") {
     return { show: true, buttons: [], result: null, note: `正在試 ${name}……最多等一分鐘，請不要關掉這一頁。` };
   }
-  const result = s.phase === "done" ? { text: String(s.message || ""), ok: s.success === true } : null;
+  let result = null;
+  if (s.phase === "done" && s.success === true) result = { text: String(s.message || ""), ok: true, next: "", detail: "" };
+  else if (s.phase === "done") { const w = setupTryWords(s, r.short || r.name || name, setupLoginPasses(r)); result = { text: w.say, ok: false, next: w.next, detail: w.raw }; }
   return { show: true, buttons: [{ key: "try", label: s.phase === "done" ? "再試一次" : "試一下", kind: "" }], result,
     note: `試一下會送一句很短的話給 ${name}，確認它真的會回應，${SETUP_TRY_ESTIMATE}，並計入花費上限。` };
 }
@@ -14567,6 +14569,28 @@ function setupPlainLine(raw) {
   return { text: w.text + w.next, raw: w.known ? w.detail : "" };
 }
 
+// The words of a try that did not pass (v0.25.1). `t`: what the page remembers of the server's one answer ({ message, result, exit_code }); `name`: the tool as the server
+// names it; `loginPasses`: every login check of this tool on this page passes. The server says "not logged in" only when what the tool printed said so; when the page itself
+// shows that the login checks pass, that sentence would send a person with a good login to log in again, so the page says the plain unknown-reason sentence instead (the same
+// sentence the server says for `failed`) and that the login check passed. The exit code (a number the server sends, never the tool's own text) goes behind 「技術細節」.
+// -> { say, next, raw }  (`say` is the sentence)
+const SETUP_TRY_LOGIN_PASSED = "登入檢查是通過的，不用再登入。";
+function setupTryWords(t, name, loginPasses) {
+  const x = t && typeof t === "object" ? t : {};
+  const code = Number.isSafeInteger(x.exit_code) ? `結束代碼：${x.exit_code}` : "";
+  if (x.result === "not_logged_in" && loginPasses) {
+    return { say: `${name} 沒有成功回應（原因 VBear 看不出來）。可以再試一次；如果上面的登入檢查沒過，先登入。`, next: SETUP_TRY_LOGIN_PASSED, raw: code };
+  }
+  const line = setupPlainLine(x.message);
+  return { say: line.text, next: "", raw: [line.raw, code].filter(Boolean).join("\n") };
+}
+// Whether every login check of the tool passes on this page (the row of /api/setup/tools): installed and ready, and for Codex the chat login too.
+function setupLoginPasses(row) {
+  const r = row && typeof row === "object" ? row : {};
+  if (!(r.installed === true && r.state === "ready")) return false;
+  return r.id !== "codex" || !!(r.chat_login && r.chat_login.state === "logged_in");
+}
+
 // The list of the checks of one tool and the one button. row: the tool's row of /api/setup/tools; chats: /api/chats (null: not read); st: what this page
 // did with it ({ phase: "confirm" | "trying" | "verifying" | "done", try, verifyError, version }).
 // -> { items: [{ key, label, result, text, next, raw }], canGo, needsVerify, goLabel }
@@ -14595,8 +14619,8 @@ function setupCheckView(id, row, chats, st) {
   if (s.phase === "trying") add("try", "會回話（試一下）", "running", `正在試 ${tool}……最多等一分鐘，請不要關掉這一頁。`);
   else if (s.try && s.try.success === true) add("try", "會回話（試一下）", "pass", String(s.try.message || ""));
   else if (s.try) {
-    const line = setupPlainLine(s.try.message);
-    add("try", "會回話（試一下）", "fail", line.text, { raw: line.raw });
+    const w = setupTryWords(s.try, r.short || r.name || tool, loggedIn && chatLoginOk);
+    add("try", "會回話（試一下）", "fail", w.say, { raw: w.raw, next: w.next });
   } else add("try", "會回話（試一下）", "todo", "");
   // the chat safety check
   let chatLabel = "聊天安全檢查";
@@ -14774,6 +14798,8 @@ function setupKit(ctx) {
     });
     return el("div", { class: "setup-try", "data-setup": "try" },
       v.result ? el("p", { class: `setup-text setup-try-result ${v.result.ok ? "ok" : "bad"}`, "data-setup": "try-result", "data-ok": v.result.ok ? "yes" : "no" }, v.result.text) : null,
+      v.result && v.result.next ? el("p", { class: "small muted setup-text", "data-setup": "try-next" }, v.result.next) : null,
+      v.result && v.result.detail ? plainTechFold(v.result.detail) : null,
       el("p", { class: "small muted setup-text", "data-setup": "try-note" }, v.note),
       buttons.length ? el("div", { class: "setup-actions" }, buttons) : null);
   };
@@ -14783,7 +14809,7 @@ function setupKit(ctx) {
     draw();
     try {
       const r = await api.post(`/api/setup/tools/${encodeURIComponent(row.id)}/try`, { confirmed: true });
-      setupTry.set(row.id, { phase: "done", success: r.success === true, message: r.message || "" });
+      setupTry.set(row.id, { phase: "done", success: r.success === true, message: r.message || "", result: typeof r.result === "string" ? r.result : "", exit_code: Number.isSafeInteger(r.exit_code) ? r.exit_code : null });
     } catch (e) {
       setupTry.set(row.id, { phase: "done", success: false, message: e.message });
     } finally { busy = false; }
@@ -14805,7 +14831,7 @@ function setupKit(ctx) {
       try {
         try {
           const r = await api.post(`/api/setup/tools/${encodeURIComponent(id)}/try`, { confirmed: true });
-          st.try = { success: r.success === true, message: String(r.message || "") };
+          st.try = { success: r.success === true, message: String(r.message || ""), result: typeof r.result === "string" ? r.result : "", exit_code: Number.isSafeInteger(r.exit_code) ? r.exit_code : null };
         } catch (e) { st.try = { success: false, message: e.message }; }
         if (ctx.alive() && st.try.success) {
           st.phase = "verifying";
