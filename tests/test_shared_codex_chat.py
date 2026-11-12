@@ -15,6 +15,7 @@ from unittest import mock
 from tests import chat_fixtures as cf
 from tests import test_chat_api as tca
 from tests import test_p38_codex_chat_api as cxa
+from tests.chat_fixtures import without_identity
 from tests.test_chat_daemon import clean
 from tests.test_p38_codex_chat_daemon import VERSION as CODEX_VERSION
 from vbear import chat_service, config as cfg
@@ -118,10 +119,11 @@ class ChatTests(CodexCase):
         self.talk(chat_id, 1)
         self.assertEqual(self.configs()[-1], ccp.shared_root_setting(self.shared))
         begin = next(x for x in self.stdin() if x.get("method") == "thread/start")
-        self.assertEqual(begin["params"]["developerInstructions"], mr.combine(None, mr.block([]), sr.block(self.shared)))
+        self.assertEqual(without_identity(begin["params"]["developerInstructions"]), mr.combine(None, mr.block([]), sr.block(self.shared)))
         turn = next(x for x in self.stdin() if x.get("method") == "turn/start")
         self.assertEqual(turn["params"]["sandboxPolicy"]["writableRoots"], [self.shared])
-        self.assertEqual(cs.prompt_start(cfg.state_dir(), chat_id)["sha"], mr.prompt_sha(None, mr.block([]), sr.block(self.shared)))
+        self.assertEqual(cs.prompt_start(cfg.state_dir(), chat_id)["sha"], mr.prompt_sha(None, mr.block([]), sr.block(self.shared),
+                                                                                         mr.identity_block({"name": "虛構的 Codex 員工", "position": "PM"}, "codex-chat")))      # P58: plus the name's sentence
 
     def test_with_the_switch_off_nothing_of_it_is_there(self):
         self.configure(start=[0])
@@ -129,7 +131,7 @@ class ChatTests(CodexCase):
         self.talk(chat_id, 1)
         self.assertNotIn("writable_roots", json.dumps(self.starts()))
         begin = next(x for x in self.stdin() if x.get("method") == "thread/start")
-        self.assertEqual(begin["params"]["developerInstructions"], mr.block([]))
+        self.assertEqual(without_identity(begin["params"]["developerInstructions"]), mr.block([]))
         self.assertFalse(os.path.lexists(self.shared))
 
     def test_a_message_through_the_group_and_dispatch_doors_follows_the_same_switch(self):

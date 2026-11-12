@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from tests import test_chat_api as tca
+from tests.chat_fixtures import without_identity
 from tests.test_chat_daemon import clean
 from vbear import agent_profiles as ap, chat_service, config as cfg, memory
 from vbear.runtime import chat_store as cs, memory_rules as mr
@@ -32,7 +33,7 @@ class RoutesCase(tca.ApiCase):
     def appended(self, index=0):
         starts = [x for x in self.fake_log() if x["event"] == "start"]
         argv = starts[index]["argv"]
-        return argv[argv.index("--append-system-prompt") + 1] if "--append-system-prompt" in argv else None
+        return without_identity(argv[argv.index("--append-system-prompt") + 1] if "--append-system-prompt" in argv else None)      # P58: the name's sentence is tests/test_p58_identity.py's
 
 
 class ListAddDeleteTests(RoutesCase):

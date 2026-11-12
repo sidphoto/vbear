@@ -185,7 +185,7 @@ test("the notice about a chat not as it was started now names the shared folder,
   const main = await open("#/chat/" + CID);
   const box = main.find((n) => attr(n, "data-memory") === "chat-changed");
   assert(box, "the notice");
-  assert(text(box).includes("記憶、這位員工的固定指示或共用資料夾") && text(box).includes("還是用開始時的內容") && text(box).includes("請開新聊天"));
+  assert(text(box).includes("記憶、這位員工的名字、職位、固定指示或共用資料夾") && text(box).includes("還是用開始時的內容") && text(box).includes("請開新聊天"));
   const more = q(box, "changed-shared");
   assert(more, "the sentence about the shared folder");
   assert(text(more).includes("能不能寫進共用資料夾，從下一句話起就照現在的開關") && text(more).includes("員工知不知道有這個資料夾，要看聊天是什麼時候開始的"));
@@ -203,7 +203,7 @@ test("a chat that is as it was started says nothing of change, and a server with
   setPage({ detail: d });
   main = await open("#/chat/" + CID);
   const box = main.find((n) => attr(n, "data-memory") === "chat-changed");
-  assert(text(box).includes("你改過記憶（或這位員工的固定指示），這個聊天還是用開始時的內容。要用新的，請開新聊天。"));
+  assert(text(box).includes("你改過記憶（或這位員工的名字、職位、固定指示），這個聊天還是用開始時的內容。要用新的，請開新聊天。"));
   assert.strictEqual(q(box, "changed-shared"), null);
 });
 

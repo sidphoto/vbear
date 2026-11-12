@@ -18553,11 +18553,11 @@ function memoryChatLine(state, engine) {
 // changed after that reaches only a NEW chat. When the server says the chat is not as it was started, the page says so and offers a
 // new chat with the same employee (`onNewChat`; null for a chat a group opened: a new chat would not be in the group). It promises
 // nothing for the next message. A card switched off cannot take back what the chat was already given: said.
-const MEMORY_CHANGED_TEXT = "你改過記憶（或這位員工的固定指示），這個聊天還是用開始時的內容。要用新的，請開新聊天。";
+const MEMORY_CHANGED_TEXT = "你改過記憶（或這位員工的名字、職位、固定指示），這個聊天還是用開始時的內容。要用新的，請開新聊天。";
 const MEMORY_CHANGED_SENT = "這個聊天開始時已經帶著記憶，已送出的內容收不回來。";
 // P43-4: the server's fingerprint now counts the shared folder's paragraph too, so a server that tells about the shared folder
 // (`shared` on the chat) says so here as well; one that does not keeps the words above.
-const MEMORY_CHANGED_SHARED = "你改過記憶、這位員工的固定指示或共用資料夾，這個聊天還是用開始時的內容。要用新的，請開新聊天。";
+const MEMORY_CHANGED_SHARED = "你改過記憶、這位員工的名字、職位、固定指示或共用資料夾，這個聊天還是用開始時的內容。要用新的，請開新聊天。";
 const MEMORY_CHANGED_SHARED_MORE = "共用資料夾的開關是另一回事：能不能寫進共用資料夾，從下一句話起就照現在的開關；員工知不知道有這個資料夾，要看聊天是什麼時候開始的。";
 function memoryChangedNote(state, onNewChat, shared) {
   if (!state || state.readable === false || state.changed !== true || !onNewChat) return null;

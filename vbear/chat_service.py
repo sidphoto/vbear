@@ -10,7 +10,9 @@ decides the things the console decides:
     one cannot go on in the old chat: ``card_tool_changed``); a card of another tool, or a disabled one, is refused with
     the reason, never started;
   * what of the card goes into the chat: only the instructions the person wrote on the card (never the position's
-    default text), passed to the daemon, which adds them to Claude Code's system prompt;
+    default text), passed to the daemon, which adds them to Claude Code's system prompt; and (P58, ADR 0020) the card's name and the
+    label of its position, cleaned (``identity``), from which the daemon makes the one fixed sentence that tells the employee who it
+    is. Both go to the company of the AI tool the employee runs on, with the conversation;
   * which Claude Code, Codex or AGY runs it (the pinned one), and whether that version may chat at all (``support``): the
     version has a chat-mode source list and a pass of the chat check, and no administrator policy is in the way; for
     Codex also the login of its own folder (vbear/runtime/codex_chat_env.py), for AGY its own settings folder and the
@@ -51,6 +53,7 @@ DELETE_PAUSE = 0.5
 # The AI tools that can chat, and the engine each one's chats run on (fixed when the chat is opened), are the rows of
 # runtime/chat_engines.TABLE.
 CODEX_MONEY = chat_engines.CODEX_MONEY
+POSITION_LABELS = {row["id"]: row["label"] for row in agent_profiles.POSITION_TABLE}
 TOOL_LABEL = {**{t.id: t.name for t in ai_tools.REGISTRY if t.id not in ("claude", "codex", "agy", "shared")},
               "claude": "Claude Code", "codex": "Codex", "agy": "Antigravity（AGY）", "shared": "共用（不限工具）"}
 
@@ -293,6 +296,16 @@ class ChatService:
         got = agent_profiles.instructions_of(profile)
         text = got["text"] if got["source"] == "custom" else None
         return text if isinstance(text, str) and agent_sessions.append_prompt_problem(text) is None else None
+
+    @staticmethod
+    def _identity(profile) -> dict | None:
+        """``{"name", "position"}`` of the card as the employee is to be told (memory_rules.identity_parts: the name cleaned to one line and
+        64 characters, the position's label from the table, never a custom word), or None when the name has nothing usable left. The
+        daemon builds the sentence; this is only the two words."""
+        if not isinstance(profile, dict):
+            return None
+        pos = agent_profiles.position_of(profile)
+        return memory_rules.identity_parts(profile.get("name"), POSITION_LABELS.get(pos))
 
     # ---- support: may this Claude Code chat at all ----------------------------------------------------------------
 
@@ -574,7 +587,14 @@ class ChatService:
         if start is None or profile is None:
             return False, None
         block = memory_rules.block(given.entries) if given.readable and given.on else None
-        return start["sha"] != memory_rules.prompt_sha(self._instructions(profile), block, self._shared_block(profile)), start["memory"]
+        # P58: the employee's name counts only for a session that was told it (the file says so). A session started before the upgrade, or
+        # without a usable name, was fingerprinted without the paragraph, so it is compared without it and is not "changed" for it.
+        named = None
+        if start.get("identity") is True:
+            parts, engine = self._identity(profile), engine_of(profile)
+            named = memory_rules.identity_block(parts, engine) if parts is not None and engine is not None else None
+        return (start["sha"] != memory_rules.prompt_sha(self._instructions(profile), block, self._shared_block(profile), named),
+                start["memory"])
 
     def _shared_block(self, profile) -> str | None:
         """The shared folder's paragraph a new session of this card would be started with now, or None (the switch is off, or this
@@ -651,6 +671,9 @@ class ChatService:
         given = self._memory(chat["profile_id"], engine)
         if given.readable and given.on:               # a card with memory off, or a file that cannot be read: not a word is sent
             fields["memory"] = given.entries
+        identity = self._identity(profile)                 # the employee's name and position; nothing usable: the field is left out
+        if identity is not None:
+            fields["identity"] = identity
         if self._shared(chat["profile_id"], engine):          # off (the default), unreadable settings, an AI tool without it: the field is left out
             if not self._shared_verified(engine, fields["cli"]["version"]):      # the daemon asks again; this is the sentence for a person
                 raise ApiError(CODE_TEXT["shared_unverified"][0], "shared_unverified",

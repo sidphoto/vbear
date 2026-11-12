@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest import mock
 
 from tests import chat_fixtures as cf
+from tests.chat_fixtures import without_identity
 from tests.test_chat_daemon import MODEL, SECRETS_OF_INIT, ChatCase, clean
 from vbear import agent_profiles as ap, chat_service, config as cfg, server
 from vbear.index import Store
@@ -304,7 +305,9 @@ class InstructionsApiTests(ApiCase):
         self.wait_http_turn(chat_id, 1)
         argv = self.argv()
         # P42-1: the card's own words, then VBear's memory paragraph (an empty memory here), and nothing of the position's
-        self.assertEqual(argv[argv.index("--append-system-prompt") + 1], "先說結論，再說理由。\n\n" + mr.block([]))
+        carried = argv[argv.index("--append-system-prompt") + 1]
+        self.assertTrue(carried.startswith("[VBear 身分] "), "P58: the sentence that tells the employee its name comes first")
+        self.assertEqual(without_identity(carried), "先說結論，再說理由。\n\n" + mr.block([]))
 
     def test_a_position_default_is_not_sent_as_the_cards_own(self):
         # a PM card without instructions of its own: instructions_of() offers the position's text as the default
@@ -314,7 +317,7 @@ class InstructionsApiTests(ApiCase):
         self.assertEqual(self.say(chat_id)[0], 202)
         self.wait_http_turn(chat_id, 1)
         argv = self.argv()
-        self.assertEqual(argv[argv.index("--append-system-prompt") + 1], mr.block([]), "P42-1: only the memory paragraph, no card text")
+        self.assertEqual(without_identity(argv[argv.index("--append-system-prompt") + 1]), mr.block([]), "P42-1: only the memory paragraph, no card text (P58: and the name's sentence before it)")
         self.assertNotIn(ap.instructions_of(ap.get_profile(self.emp))["default"], json.dumps(self.fake_log()))
 
 

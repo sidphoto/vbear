@@ -16,6 +16,7 @@ import re
 import unittest
 from decimal import Decimal
 
+from tests.chat_fixtures import without_identity
 from tests.test_chat_daemon import clean
 from tests.test_memory_api import RoutesCase
 from tests.test_memory_suggest_api import EVIDENCE, VERSION, item
@@ -189,13 +190,15 @@ class WalkTests(RoutesCase):
         self.turn(chat_id, 4)
         third = self.starts()[2]
         self.assertIn("--resume", third["argv"])
-        self.assertNotIn("--append-system-prompt", third["argv"])
+        self.assertNotIn("BEGIN_VBEAR_MEMORY_JSON", third["argv"][third["argv"].index("--append-system-prompt") + 1], "P58: only the sentence that tells the employee its name is sent; no memory at all")
+        self.assertEqual(without_identity(third["argv"][third["argv"].index("--append-system-prompt") + 1]), None)
         self.assertIn(SHOP, third["system_prompt"], "the session keeps what it was started with")
         # a chat started now carries not a word; on again: it says that it started without, and a new one has the memory
         third_chat = self.open_http()
         self.turn(third_chat, 1)
-        self.assertNotIn("--append-system-prompt", self.starts()[3]["argv"])
-        self.assertIsNone(self.starts()[3]["system_prompt"])
+        started = self.starts()[3]
+        self.assertIsNone(without_identity(started["argv"][started["argv"].index("--append-system-prompt") + 1]), "P58: only the name's sentence, not a word of memory")
+        self.assertIsNone(without_identity(started["system_prompt"]))
         self.assertEqual(self.view(third_chat)["memory"]["started_with_memory"], False)
         self.assertEqual(self.call("/api/memory/cards", "POST", {"profile_id": self.emp, "on": True})[0], 200)
         self.assertTrue(self.view(third_chat)["memory"]["changed"])

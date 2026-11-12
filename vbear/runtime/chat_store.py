@@ -763,17 +763,20 @@ def _load_spend(base, chat_id: str) -> dict:
 SHA_RE = re.compile(r"^[0-9a-f]{64}\Z")
 
 
-def set_prompt_start(base, chat_id, sha: str, with_memory: bool) -> None:
+def set_prompt_start(base, chat_id, sha: str, with_memory: bool, with_identity: bool = False) -> None:
     """Keep the fingerprint (memory_rules.prompt_sha) of the system prompt a chat's NEW session was started with, and whether it
     carried the memory paragraph. Claude Code 2.1.319 keeps that prompt for the whole session (a ``--resume`` does not apply a new
-    one), so the page compares it with the current memory and instructions to say when they differ. Never a word of either."""
+    one), so the page compares it with the current memory and instructions to say when they differ. Never a word of either.
+    ``with_identity`` (P58, ADR 0020): the session was also told the employee's name. Only then is the file given an ``identity`` key;
+    a file without it is the one of before the upgrade (or of a session that was not told), and the page then leaves the name out of
+    the compare."""
     _check_id(chat_id)
-    if not (isinstance(sha, str) and SHA_RE.match(sha)) or not isinstance(with_memory, bool):
+    if not (isinstance(sha, str) and SHA_RE.match(sha)) or not isinstance(with_memory, bool) or not isinstance(with_identity, bool):
         raise ChatStoreError("bad_request", "指紋格式不符")
     d = _private_dir(_root(base) / PROMPT, create=True)
     tmp = f".{chat_id}.{secrets.token_hex(4)}.tmp"
     try:
-        _create_file(d / tmp, _encode({"v": 1, "sha": sha, "memory": with_memory}))
+        _create_file(d / tmp, _encode({"v": 1, "sha": sha, "memory": with_memory, **({"identity": True} if with_identity else {})}))
         os.replace(d / tmp, d / f"{chat_id}.json")
         _fsync_dir(d)
     except OSError as exc:
@@ -785,8 +788,9 @@ def set_prompt_start(base, chat_id, sha: str, with_memory: bool) -> None:
 
 
 def prompt_start(base, chat_id) -> dict | None:
-    """``{"sha", "memory"}`` as ``set_prompt_start`` kept it, or None when there is none or it does not read cleanly (a chat
-    from before v0.17.0, a file of someone else's, a damaged one): the page then says nothing about it."""
+    """``{"sha", "memory"}`` (and ``"identity": True`` when the session was told the employee's name) as ``set_prompt_start`` kept it,
+    or None when there is none or it does not read cleanly (a chat from before v0.17.0, a file of someone else's, a damaged one): the
+    page then says nothing about it."""
     try:
         _check_id(chat_id)
         fd = _open_file(_private_dir(_root(base) / PROMPT, create=False), f"{chat_id}.json", os.O_RDONLY)
@@ -800,10 +804,11 @@ def prompt_start(base, chat_id) -> dict | None:
         os.close(fd)
     parsed = strictjson.loads_object(raw, strictjson.Limits(4096, 100, 4, 4096))
     rec = parsed.value if parsed.ok else None
-    if not (isinstance(rec, dict) and set(rec) == {"v", "sha", "memory"} and rec["v"] == 1 and isinstance(rec["memory"], bool)
-            and isinstance(rec["sha"], str) and SHA_RE.match(rec["sha"])):
+    if not (isinstance(rec, dict) and set(rec) in ({"v", "sha", "memory"}, {"v", "sha", "memory", "identity"}) and rec["v"] == 1
+            and isinstance(rec["memory"], bool) and isinstance(rec["sha"], str) and SHA_RE.match(rec["sha"])
+            and rec.get("identity", True) is True):
         return None
-    return {"sha": rec["sha"], "memory": rec["memory"]}
+    return {"sha": rec["sha"], "memory": rec["memory"], **({"identity": True} if "identity" in rec else {})}
 
 
 def _drop_prompt_start(base, chat_id) -> None:

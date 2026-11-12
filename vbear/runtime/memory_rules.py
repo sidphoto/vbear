@@ -12,6 +12,10 @@ runtime daemon uses them again before it builds the system prompt of a chat proc
     the lines as one JSON string between two markers. The wording is here and the person cannot change it.
   * ``prepare(memory)``: the daemon's check of the ``memory`` field of ``chat_send``: the shape is closed, every line is
     checked again, and one refused line refuses the whole message (nothing is silently left out).
+  * ``identity_parts(name, position)``, ``identity_block(parts, engine)``, ``prepare_identity(identity, engine)`` (P58, ADR 0020):
+    the one fixed sentence that tells an employee its own name and position. The name is text the person typed, so it is cleaned
+    first (one line, no control or invisible characters, no quote marks of the frame, at most 64 characters) and a name that would
+    be refused as a line of memory is not sent at all. The wording is here and the person cannot change it.
 
 Nothing here writes a file, starts a program, reads a setting or answers a question: a line of memory is data for the model
 and VBear never reads it as an instruction.
@@ -225,24 +229,112 @@ def block(entries) -> str:
     return f"{HEAD}\n{BEGIN_MARK}\n{outer}\n{END_MARK}"
 
 
-def combine(instructions: str | None, memory_block: str | None, shared_block: str | None = None) -> str | None:
-    """What a chat's system prompt gets from the card, the memory and the shared folder (P43-1): the card's own instructions, then the
-    memory paragraph, then the shared folder's, each only when there is one, joined by a blank line. Without a shared paragraph this
-    is what v0.17.0 made."""
-    parts = [x for x in (instructions, memory_block, shared_block) if x is not None]
+def combine(instructions: str | None, memory_block: str | None, shared_block: str | None = None,
+            identity_block: str | None = None) -> str | None:
+    """What a chat's system prompt gets from the employee's name, the card, the memory and the shared folder: the identity paragraph
+    FIRST (P58, ADR 0020: who the employee is comes before anything it is told to do), then the card's own instructions, the memory
+    paragraph and the shared folder's (P43-1), each only when there is one, joined by a blank line. Without an identity paragraph
+    this is what v0.25.2 made."""
+    parts = [x for x in (identity_block, instructions, memory_block, shared_block) if x is not None]
     return "\n\n".join(parts) if parts else None
 
 
-def prompt_sha(instructions: str | None, memory_block: str | None, shared_block: str | None = None) -> str:
+def prompt_sha(instructions: str | None, memory_block: str | None, shared_block: str | None = None,
+               identity_block: str | None = None) -> str:
     """A fingerprint of what a chat process was given as its system prompt (the card's instructions, the memory paragraph and, when the
     shared folder is on, its paragraph; None and "" are the same). The daemon keeps it (chat_store.set_prompt_start) when a chat's NEW
     session is started, and the chat page compares it with the current one: Claude Code 2.1.319 keeps a session's system prompt, so a
     difference is shown to the person and never answered with a new process (P42-6). Without a shared paragraph the value is the one
-    v0.17.0 computed, so a chat started before the upgrade is not shown as changed (P43-1)."""
+    v0.17.0 computed, so a chat started before the upgrade is not shown as changed (P43-1). The same holds for the identity paragraph
+    (P58): it is part of the value only when there is one, after the shared folder's under a label of its own, so that without it the
+    value is the one v0.25.2 computed."""
     text = f"{instructions or ''}\0{memory_block or ''}"
     if shared_block is not None:
         text += f"\0{shared_block}"
+    if identity_block is not None:
+        text += f"\0identity\0{identity_block}"
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+# ---- who the employee is (P58, ADR 0020) --------------------------------------------------------------------------------
+
+MAX_IDENTITY_NAME = 64               # characters of the name that is sent
+MAX_IDENTITY_POSITION = 32           # characters of the position's label that is sent
+MAX_IDENTITY_BLOCK = 400             # characters of the whole paragraph (agent_sessions.MAX_CHAT_APPEND_PROMPT has the room)
+# What each chat engine calls the AI tool it runs on, so that the employee can say so truthfully.
+IDENTITY_TOOLS = {"claude-chat": "Claude Code", "codex-chat": "Codex", "agy-chat": "AGY"}
+IDENTITY_HEAD = "[VBear 身分] "
+IDENTITY_NAME = "你在 VBear 裡的名字是「{name}」"
+IDENTITY_POSITION = "，職位是 {position}"
+IDENTITY_LABEL = {True: "名字和職位", False: "名字"}      # what the last sentence calls the words it was given
+IDENTITY_REST = ("。使用者叫這個名字，就是在叫你；被問到你是誰時，請用這個名字介紹自己，也可以說明你是用 {tool} 運作的。"
+                 "{label}只是稱呼，不會改變你能做或不能做的事。")
+
+
+def _clean_word(value, limit: int) -> str | None:
+    """A name or a position as one clean line of at most ``limit`` characters, or None when nothing usable is left. A control,
+    line-separator or space character becomes one space (runs of them one), an invisible format character is dropped, the quote marks
+    of the frame the name stands in are turned into the other pair, and what the memory rules would refuse is not usable."""
+    if not isinstance(value, str):
+        return None
+    out = []
+    for ch in value:
+        cat = unicodedata.category(ch)
+        if cat == "Cf":
+            continue
+        if cat in ("Cc", "Zl", "Zp", "Zs") or ch.isspace():
+            out.append(" ")
+        elif ch == "「":
+            out.append("『")
+        elif ch == "」":
+            out.append("』")
+        else:
+            out.append(ch)
+    text = re.sub(r" +", " ", "".join(out)).strip()[:limit].strip()
+    if not text:
+        return None
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    plain = _fold(text)
+    if _MARKERS.search(plain) or "server.token" in plain.lower() or "x-vbear" in plain.lower() or _judge(plain)["refuse"]:
+        return None
+    return text
+
+
+def identity_parts(name, position) -> dict | None:
+    """``{"name", "position"}`` cleaned (``position`` None when it has none or nothing usable), or None when the name has nothing usable
+    left: then the employee is simply not told a name. Cleaning twice gives the same."""
+    clean_name = _clean_word(name, MAX_IDENTITY_NAME)
+    if clean_name is None:
+        return None
+    return {"name": clean_name, "position": _clean_word(position, MAX_IDENTITY_POSITION) if position is not None else None}
+
+
+def identity_block(parts, engine) -> str:
+    """The one sentence that tells an employee its name and, when there is one, its position, and names the AI tool it runs on. ``parts``
+    must be what ``identity_parts`` makes (ValueError otherwise), ``engine`` one of IDENTITY_TOOLS. The wording is fixed here; the only
+    free text is the two cleaned words, each on one line."""
+    if (not isinstance(parts, dict) or set(parts) != {"name", "position"} or engine not in IDENTITY_TOOLS
+            or identity_parts(parts["name"], parts["position"]) != parts):
+        raise ValueError("身分說明的格式不符")
+    position = IDENTITY_POSITION.format(position=parts["position"]) if parts["position"] is not None else ""
+    return (IDENTITY_HEAD + IDENTITY_NAME.format(name=parts["name"]) + position + IDENTITY_REST.format(
+        tool=IDENTITY_TOOLS[engine], label=IDENTITY_LABEL[parts["position"] is not None]))
+
+
+def prepare_identity(identity, engine) -> str:
+    """The daemon's check of the ``identity`` field of ``chat_send``: exactly ``{name, position}`` with both already clean (what the
+    console sends is what ``identity_parts`` made, so anything else is a bad request) and an engine that has a tool name. Returns the
+    paragraph. MemoryProblem (``bad_request``) otherwise; its message names a rule, never a word of the field."""
+    try:
+        text = identity_block(identity, engine)
+    except ValueError:
+        raise MemoryProblem("bad_request", "identity 必須是 {name, position}，而且是清理過的一行字") from None
+    if len(text) > MAX_IDENTITY_BLOCK:
+        raise MemoryProblem("bad_request", f"identity 編碼之後超過 {MAX_IDENTITY_BLOCK} 字")
+    return text
 
 
 def prepare(memory) -> Prepared:
