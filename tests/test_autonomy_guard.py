@@ -118,6 +118,14 @@ Never, whatever the person ticked in 「自己動手」:
      19c  the plain sentence for a tool whose version VBear does not know holds no version number that the program did not take from the server's data (P52-2, tests/frontend/p52_words.cjs).
      P52-4's rule: this file, ``Guard19FilesAreThere``, checks that these files exist and carry the number of their rule.
 
+  21. (P57, ADR 0019) v0.25.1 gives an employee whose AI tool is held back for good (the administrator's policy, a version VBear does not know) a button to use another AI, in the place that says why; it is
+      only what the screen shows and one ordinary employee write after a confirmation. Three rules, tested where the thing is (20 and ADR 0018 belong to another release):
+     21a  the write is sent only by the click of the confirm button (「確認，改用 …」): the first press, 「先不要」, a redraw, the 5-second refresh and Enter send nothing, and the switch code holds one
+          write, in ``switchToolConfirm``, called by nothing else (P57, tests/frontend/p57_switch.cjs).
+     21b  the body of that write is only ``{model: {tool, model_id: ""}}`` for one of the other tools offered: no name, mode, instructions, skills or ``enabled``, no model name (P57, tests/frontend/p57_switch.cjs).
+     21c  the confirmation always says where the words go from now on (「之後跟他說的話會送到 …」), outside any fold and in the same area as the confirm button (P57, tests/frontend/p57_switch.cjs).
+     15b is not changed and still passes: v0.25.1 uses no ``/api/`` path that v0.20.0 did not. P57's rule: this file, ``Guard21FilesAreThere``, checks that these files exist and carry the number of their rule.
+
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
 ``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py``, ``vbear/skillbook*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
 staff, of dispatch, of groups and of memory (the suggestions, P42-4) are held to it the day they are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
@@ -3328,6 +3336,41 @@ class Guard19FilesAreThere(unittest.TestCase):
         self.assertRegex(first, r"19a judge[^\n]*catches")
         self.assertRegex(first, r"19b judge[^\n]*catches")
         self.assertRegex(words, r"19c[^\n]*(catches|bad)")
+
+
+class Guard21FilesAreThere(unittest.TestCase):
+    """21: the three rules of v0.25.1 are kept where the description above says, and the file carries the number of each rule and a judge with a bad sample for it."""
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def read(self, *parts):
+        return self.ROOT.joinpath(*parts).read_text(encoding="utf-8")
+
+    def test_21_the_description_names_all_three_rules_and_their_file(self):
+        text = self.read("tests", "test_autonomy_guard.py")
+        for rule in "abc":
+            self.assertIn(f"     21{rule}  ", text, rule)
+        self.assertIn("p57_switch.cjs", text)
+
+    def test_21_the_file_exists_and_carries_the_number_of_each_rule(self):
+        spec = self.read("tests", "frontend", "p57_switch.cjs")
+        for rule in ("21a", "21b", "21c"):
+            self.assertIn(rule, spec, rule)
+
+    def test_21_each_rule_has_a_judge_and_a_bad_sample_that_it_catches(self):
+        spec = self.read("tests", "frontend", "p57_switch.cjs")
+        for needle in ("judge21a", "judge21aSource", "judge21b", "judge21bSource", "judge21c", "judge21cSource"):
+            self.assertIn(needle, spec, needle)
+        for rule in ("21a", "21b", "21c"):
+            self.assertRegex(spec, rf"{rule} judge catches", rule)
+
+    def test_21_the_judges_run_on_the_real_page(self):
+        # the page's source holds the region the judges cut out, with the one write and the sentence
+        app = self.read("web", "app.js")
+        self.assertIn("// ---- P57 switch tool", app)
+        self.assertIn("// ---- end of P57 switch tool", app)
+        self.assertEqual(len(re.findall(r"switchToolConfirm\(", app)), 2)
+        self.assertIn("之後跟他說的話會送到", app)
 
 
 if __name__ == "__main__":

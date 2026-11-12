@@ -2466,3 +2466,25 @@ here; the person tries the first run after upgrading.
 
 Going back to v0.22.1: nothing is migrated; v0.25.0 added no setting and no data. The home page shows the three step links again, the unknown-version words are the server's own sentences again, and `vbear-setup-pick` is
 still read.
+
+## Switch the AI tool of a held-back employee (v0.25.1)
+
+v0.25.1 (ADR 0019) puts a way out where the reason is said: when an employee's AI tool is held back by an administrator's policy or is a version VBear does not know, the home page and the page that prepares a chat offer
+"use another AI". **It changes only what the screen shows and where a press is.** Nothing under `vbear/` changed except the version number (no file of `agent_launch.py`, `runtime/*`, `chat_service.py`, `*_verify.py`,
+`chat_check.py`, `cli_versions.py` or `admin_policy.py`); **no route (API path), no kind of request, no key of `config.json`, no kind of chat event and no `localStorage` key was added**; guard rule 15b still holds
+unchanged. Rule 21 (21a to 21c) was added and rules 1 to 19 were not loosened.
+
+- **Nothing about the hold is loosened.** The policy check, the unknown-version check and the chat safety check are the server's and are unchanged. The button is not a way around them: the employee is moved to another
+  tool that the server's own `support` says can chat (or can be made ready by the person's own press), and that tool goes through its own checks as before. A tool that is held back too is not offered.
+- **It is the ordinary employee write, after a confirmation.** The first press only opens a confirmation (who, where the words go from now on, what happens to the old chats, the model). **Only 「確認，改用 …」 sends**: one
+  `POST /api/agent-profiles/<id>` with a body that is only `{"model": {"tool": …, "model_id": ""}}` (the write the employee form makes when the tool is changed; the server keeps every field not sent). The first press,
+  「先不要」, a redraw, the 5-second refresh and Enter send nothing (guard rule 21a); the body has no other field and the tool is one of the other tools offered (21b).
+- **The data flow changes, and the screen says so before anything is written.** From the switch on, the person's words go to the new tool's company. The confirmation always says it (「之後跟他說的話會送到 …」, with the company
+  it was set to before), outside any fold and next to the confirm button (21c). Memory and the shared folder are each employee's own switches: what the person opened before is sent to the new company from then on, and the
+  confirmation says so; nothing is switched on or off by this write. Old chats stay readable; the server already refuses a send into a chat of another engine (`card_tool_changed`), and the page does not pick such a chat as "the chat with" the employee.
+- **Reading is bounded.** The options come from the `support` of the `GET /api/chats` answer the page already has; the button adds no read and no timer. A refusal is shown in plain words and the employee stays as he was; an
+  answer that never came is said as not known, not guessed.
+- **Nothing is started by the switch.** No safety check, login, chat or message is begun by it: the page shows the new tool's own state, with its own button, confirmation and cost sentence.
+
+Residual risks: the model is the tool's own default (`model_id` empty), so a model the person had chosen for the old tool is not carried over; skills and the role label of the card stay on it (a skill the new tool does not
+read is shown and can be removed in the employee form); and, as with the employee form, the write is not tried here against a real tool, only against a stub.

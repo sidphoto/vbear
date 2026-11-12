@@ -738,3 +738,13 @@ v0.25.0 (ADR 0017) changes what the home page, the start-up page's pieces and th
 ### Looking at the pages — `tools/shots_stub.py` (P54)
 
 A developer tool, not part of the product: a stub console (`127.0.0.1` only, a port from `--port` that is not 7788, 7789 or 7795 to 7803; it serves `web/` and answers the `GET /api/...` the pages read with invented JSON; every POST, PUT, PATCH and DELETE is answered 409 and its path is listed in the result, which should be empty) and, through `qa_p47.py`'s `Browser` and `Page` (a headless Chrome over a pipe), screenshots of about 19 scenes at 1280x800 light, 1280x800 dark and 400x800 light. It imports nothing of `vbear/` and reads no state folder; `tests/test_shots_stub.py` tests its pure parts and `tests/frontend/p54_look.cjs` keeps the fixes that the pictures led to (the phone bar's height, the drawer, the single focus ring of the box, the room of the hidden buttons, the fold line).
+
+## Switch the AI tool of a held-back employee — `web/app.js`, `web/style.css` (v0.25.1)
+
+v0.25.1 (ADR 0019) changes what the home page and the page that prepares a chat show, and nothing on the server: `vbear/` changed only in the version number and there is no new route or request (guard rule 15b still passes).
+
+- **The options.** `chatPrepState` gives `switch` (options), `switchMissing` (not installed, no button) and `switchLead` when the state is `policy` or `unsupported`; `chatSwitchOptions(card, data)` works them out from the `support` of the `GET /api/chats` answer (`setupSupportOf`) and nothing else. The code is between `// ---- P57 switch tool` and `// ---- end of P57 switch tool`.
+- **The parts.** `switchToolNode(ui, ctx)` draws the list and the open confirmation (`switchToolConfirmNode`, `data-switch="confirm"`) from a state object `ui` (`switchToolUi()`) that the page keeps, so a redraw keeps it; `switchToolHost` is a block that keeps its own `ui` (the home page's box is not drawn again by the 5-second refresh). The page that prepares a chat keeps `switchUi` in `viewChat`.
+- **The one write.** `switchToolConfirm(ui, ctx, opt)` is the only request in that code; it is called only by the click of `data-switch="confirm-go"`. After it the page is read again (`refresh` on the chat page, `state.reload` on the home page).
+- **`homeChatsOf`** only picks chats whose engine is the employee's present engine, so a chat of the old tool is never the one a message is sent into.
+- Guard rules 21a to 21c are in `tests/frontend/p57_switch.cjs` (judges and broken samples), listed in `tests/test_autonomy_guard.py`.
