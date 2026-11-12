@@ -256,7 +256,8 @@ safe launch; none of it is claimed here, and the pass for a full card says so fi
   with one turn and web search, memory, plan and subagents off. AGY has no flag for fewer tools that was checked, so it gets
   the sentence only (it may use tools; the sentence asks for none). The answer is read to see whether the tool answered and
   dropped: not stored, logged or passed on; neither is anything it prints about the account. The page gets success, not logged
-  in (any failed exit), timeout, not found or odd answer, in plain words. The cost goes into `setup-try.json` (tool, times,
+  in, limit, connection problem, failed (reason not visible), timeout, not found or odd answer, in plain words; since v0.25.1 a failed exit is told apart by a look at the last
+  4 KiB of the tool's error output, which is then dropped (see the v0.25.1 section). The cost goes into `setup-try.json` (tool, times,
   cap, cost: nothing else) and counts toward the same day as the meetings, the staffing meetings and the chats: Claude Code's
   reported cost, else US$0.01; a try that started a program is booked even when it fails. When the day cannot take another
   US$0.01, or the record cannot be read, nothing starts.
@@ -1465,6 +1466,15 @@ No Codex version is chat-verified out of the box: no process starts until one pa
   the token count and says it is not a bill; the plan's use is one line from the last `plan_usage` record (percent per
   window as Codex reports it, and the reset time only when a limit was reached). The head of the chat says reading is not
   limited. The deletion confirmation says Codex's own copy stays in `codex-chat-home` (`sessions`) and is not deleted.
+- **A turn Codex could not finish says why (v0.25.1, follow-up 2).** Codex's `error` notification used to be dropped, and a turn that ended with an error was drawn
+  like a good one. Now the protocol reads `error.message` of that notification (else a top-level `message`; nothing else of it: not `codexErrorInfo`, not
+  `additionalDetails`) and cuts it to 4000 characters. When the turn ends in failure (or any reason other than a normal end) and Codex did not say it would retry
+  (`willRetry` not true), the session writes one ordinary `error` record (no new kind of record, no new field) before the `turn_ended`: a fixed sentence for the kind
+  of failure (`vbear/runtime/failure_words.py`: not logged in, a model the account cannot use, a plan limit, a connection problem, or "VBear cannot see the reason"),
+  then `技術細節：` and the original flattened to one line and cut to the existing excerpt limit (`MAX_EXCERPT`). This is part of the chat's own content, stored with the
+  employee's replies and covered by the same delete; it is not the "never kept" case of 「試一下」. The page draws a `turn_ended` with `is_error` true as a failed turn
+  in the open (guard rule 18e) and puts the original behind 「技術細節」. The Codex message shape is from the vendor's schema and one seen sentence (a model the ChatGPT
+  account cannot use); the top-level `message` is a guess with no sample. Claude Code and AGY chats are not changed (no sample of their failures).
 - **Residual risks.** (1) *Reading is not limited by the sandbox.* The legacy `workspace-write` sandbox does not limit reads: a command the person
   allows can read the whole machine, as a Claude chat's Bash can. What stands between the model and those files is the person reading each command; the permission profile that
   denies reading the whole disk made file changes fail on the recorded version, so it is not used. (2) *The cap is checked
@@ -2147,7 +2157,7 @@ the status reading and 「試一下」); this section is the short list of what 
 - **A try is isolated and booked.** 「試一下」 sends one fixed sentence headless, in a new empty scratch folder (removed
   afterwards), in a new process group that is ended however the call ends, with a 60 second limit, at most 1 MiB read, one at
   a time, and a plain environment. Only whether the tool answered is read; the answer and anything about the account are
-  dropped. Its cost goes into `setup-try.json` (tool, times, cap, cost) and counts toward the same daily limit as the
+  dropped (for a failed exit also the last 4 KiB of the error output: looked at once, to tell a login problem from a limit or a connection problem, and dropped; v0.25.1, rule 21d). Its cost goes into `setup-try.json` (tool, times, cap, cost) and counts toward the same daily limit as the
   meetings, staffing meetings and chats (what Claude Code reports, else US$0.01; a try that started a program is booked even
   if it fails). When the day cannot take another US$0.01, or the record cannot be read, nothing starts. Claude Code gets no
   tools and none of the person's settings; Codex runs without the person's config and rules (so no MCP servers), read-only, with its
@@ -2466,6 +2476,41 @@ here; the person tries the first run after upgrading.
 
 Going back to v0.22.1: nothing is migrated; v0.25.0 added no setting and no data. The home page shows the three step links again, the unknown-version words are the server's own sentences again, and `vbear-setup-pick` is
 still read.
+
+## Switch the AI tool of a held-back employee (v0.25.1)
+
+v0.25.1 (ADR 0019) puts a way out where the reason is said: when an employee's AI tool is held back by an administrator's policy or is a version VBear does not know, the home page and the page that prepares a chat offer
+"use another AI". **The switch changes only what the screen shows and where a press is.** For the switch, nothing under `vbear/` changed except the version number (no file of `agent_launch.py`, `runtime/*`, `chat_service.py`, `*_verify.py`,
+`chat_check.py`, `cli_versions.py` or `admin_policy.py`); **no route (API path), no kind of request, no key of `config.json`, no kind of chat event and no `localStorage` key was added**; guard rule 15b still holds
+unchanged. Rule 21 (21a to 21d) was added and rules 1 to 19 were not loosened. The other server changes of the release are the last items below (what 「試一下」 reads of a failed tool, and the reason a failed Codex turn leaves in the chat).
+
+- **Nothing about the hold is loosened.** The policy check, the unknown-version check and the chat safety check are the server's and are unchanged. The button is not a way around them: the employee is moved to another
+  tool that the server's own `support` says can chat (or can be made ready by the person's own press), and that tool goes through its own checks as before. A tool that is held back too is not offered.
+- **It is the ordinary employee write, after a confirmation.** The first press only opens a confirmation (who, where the words go from now on, what happens to the old chats, the model). **Only 「確認，改用 …」 sends**: one
+  `POST /api/agent-profiles/<id>` with a body that is only `{"model": {"tool": …, "model_id": ""}}` (the write the employee form makes when the tool is changed; the server keeps every field not sent). The first press,
+  「先不要」, a redraw, the 5-second refresh and Enter send nothing (guard rule 21a); the body has no other field and the tool is one of the other tools offered (21b).
+- **The data flow changes, and the screen says so before anything is written.** From the switch on, the person's words go to the new tool's company. The confirmation always says it (「之後跟他說的話會送到 …」, with the company
+  it was set to before), outside any fold and next to the confirm button (21c). Memory and the shared folder are each employee's own switches: what the person opened before is sent to the new company from then on, and the
+  confirmation says so; nothing is switched on or off by this write. Old chats stay readable; the server already refuses a send into a chat of another engine (`card_tool_changed`), and the page does not pick such a chat as "the chat with" the employee.
+- **Reading is bounded.** The options come from the `support` of the `GET /api/chats` answer the page already has; the button adds no read and no timer. A refusal is shown in plain words and the employee stays as he was; an
+  answer that never came is said as not known, not guessed.
+- **Nothing is started by the switch.** No safety check, login, chat or message is begun by it: the page shows the new tool's own state, with its own button, confirmation and cost sentence.
+
+- **The classifier is shared and has a model class (follow-up 2).** The phrases live in `vbear/runtime/failure_words.py` and are used by 「試一下」 and by the Codex chat's failed
+  turns (above). A new class `model` ("model ... not supported", "unsupported model") ranks after the login class and before the limit class, so a model the
+  account cannot use is said as that and not as "cannot see the reason". The tail of a try is still handled exactly as the next item says (rule 21d).
+- **A failed 「試一下」 now reads the tail of the tool's error output, only to tell a few failures apart (v0.25.1 follow-up, guard rule 21d).** Until now the try threw the error output away and every failed exit was told as "not logged in",
+  which sent people with a good login to log in again. Now `headless_cli.run(stderr_tail=4096)` reads the error output all the way while the program runs (so it can never block on a full pipe; the time limit and the process-group kill are
+  unchanged and the error pipe never keeps the call waiting) and keeps in memory only its last 4 KiB. For a failed exit those bytes go to `setup_try.classify_failure` and to nothing else: it looks for a few clear phrases (a 401
+  Unauthorized or "not logged in" is not logged in; a usage or rate limit, 429 or quota is a limit; "failed to connect", DNS or a time-out is a connection problem; the first class that matches in that order wins, so the server's own
+  answer outranks the retry noise that came before it) and returns one fixed word. Anything else is "failed" (VBear cannot see the reason). Only that word and the program's exit code (a number, shown behind 「技術細節」) leave the
+  module. The tail is not stored, logged, written to a file, put in the result or the message, or sent to the page, and it is gone when the call ends; the error output of a try that succeeds is not read for anything. The spending
+  accounting, the confirmation, the time limit, the worker lock and the answer-only look at stdout are unchanged. Only Codex has a real sample behind these phrases (Codex 0.167.0 with no login prints many "failed to connect" lines and then a
+  401); for Claude Code, AGY, Grok and MCODE only the same general phrases apply, and without one of them the result is "failed". Rule 21d reads the source of both modules and fails when the tail is kept in a variable, put
+  in a result, a message, a file or a log, or returned by the classifier, and the run-time test looks for the words of a made-up error output in the result, the logs and every file written.
+
+Residual risks: the model is the tool's own default (`model_id` empty), so a model the person had chosen for the old tool is not carried over; skills and the role label of the card stay on it (a skill the new tool does not
+read is shown and can be removed in the employee form); and, as with the employee form, the write is not tried here against a real tool, only against a stub.
 
 ## A new version of AGY (v0.25.2)
 

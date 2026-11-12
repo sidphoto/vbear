@@ -119,5 +119,61 @@ class HeadlessCliTests(unittest.TestCase):
         self.assertEqual(cm.exception.code, "process_unconfirmed")
 
 
+    # P57 follow-up: the optional tail of the error output (only a caller that asks for it gets it, only on cli_failed)
+    def test_the_error_output_is_dropped_unless_the_caller_asks_for_its_tail(self):
+        with self.assertRaises(hc.HeadlessError) as cm:
+            self.run_cli("sys.stderr.write('PRIVATE_ACCOUNT_INFO')\nsys.exit(7)")
+        self.assertEqual(cm.exception.stderr_tail, b"")
+
+    def test_the_tail_is_the_last_bytes_only_and_costs_no_deadlock(self):
+        body = ("for i in range(6000):\n    sys.stderr.write('line %05d ' % i + 'x' * 1000 + '\\n')\n"
+                "sys.stderr.write('THE-LAST-LINE\\n')\nsys.exit(1)")
+        started = time.monotonic()
+        with self.assertRaises(hc.HeadlessError) as cm:
+            self.run_cli(body, stderr_tail=4096, timeout=20)
+        self.assertLess(time.monotonic() - started, 15)
+        tail = cm.exception.stderr_tail
+        self.assertEqual((cm.exception.code, cm.exception.returncode), ("cli_failed", 1))
+        self.assertLessEqual(len(tail), 4096)
+        self.assertTrue(tail.endswith(b"THE-LAST-LINE\n"))
+        self.assertNotIn(b"line 00000", tail)
+        self.assertNotIn("THE-LAST-LINE", str(cm.exception))
+
+    def test_a_tool_that_floods_the_error_output_and_answers_is_still_a_success(self):
+        body = "for i in range(3000):\n    sys.stderr.write('e' * 1023 + '\\n')\nprint('fine')"
+        result = self.run_cli(body, stderr_tail=4096, timeout=20)
+        self.assertEqual((result.output, result.returncode), (b"fine\n", 0))
+
+    def test_reading_the_error_output_does_not_change_the_time_limit(self):
+        body = ("for i in range(3000):\n    sys.stderr.write('e' * 1023 + '\\n')\nsys.stderr.flush()\ntime.sleep(30)")
+        started = time.monotonic()
+        with self.assertRaises(hc.HeadlessError) as cm:
+            self.run_cli(body, stderr_tail=4096, timeout=1.5)
+        self.assertEqual(cm.exception.code, "timeout")
+        self.assertLess(time.monotonic() - started, 10)
+
+    def test_a_child_that_keeps_the_error_output_open_does_not_hold_the_call(self):
+        # the program ends but a child it started still holds the error pipe: the call must not wait for the child's end of it
+        body = ("import subprocess\nsubprocess.Popen(['sleep', '5'], stdout=subprocess.DEVNULL)\n"
+                "sys.stderr.write('tail-text\\n')\nsys.exit(3)")
+        started = time.monotonic()
+        with self.assertRaises(hc.HeadlessError) as cm:
+            self.run_cli(body, stderr_tail=4096, timeout=20)
+        self.assertEqual((cm.exception.code, cm.exception.returncode), ("cli_failed", 3))
+        self.assertLess(time.monotonic() - started, 4)
+        self.assertIn(b"tail-text", cm.exception.stderr_tail)
+
+    def test_a_program_that_ends_before_it_reads_the_prompt_still_gives_its_tail(self):
+        path = self.root / "early-cli"
+        path.write_text("#!{py}\nimport sys\nsys.stderr.write('early words\\n')\nsys.exit(4)\n".format(py=sys.executable))
+        path.chmod(0o700)
+        with self.assertRaises(hc.HeadlessError) as cm:
+            hc.run(lambda tmp: [str(path)], b"x" * (1 << 20), threading.Event(), timeout=10, max_output=4096,
+                   blocked_name="headless-test.blocked", stderr_tail=4096)
+        self.assertEqual(cm.exception.code, "cli_failed")
+        self.assertIn(b"early words", cm.exception.stderr_tail)
+        self.assertEqual(cm.exception.returncode, 4)
+
+
 if __name__ == "__main__":
     unittest.main()

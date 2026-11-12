@@ -418,16 +418,93 @@ test("16a: a version that has already passed is not verified again (the try alon
 
 test("16a: a try that did not pass stops there: no verify; the item says why in plain words and the original stays in the technical details", async () => {
   const main = await chosen("claude", [ready("claude", { version: WARM }), row("codex"), row("agy"), row("grok")]);
-  tryReply = () => jsonResponse({ ok: true, success: false, result: "not_logged_in", message: "Claude Code 沒有成功回應，看起來還沒登入。請先按「登入」，登入好了再試一次。" });
+  // the login really went away while it ran (the list read again afterwards says so), so the old sentence is the right one
+  tryReply = () => { page.tools = [installed("claude", { version: WARM }), row("codex"), row("agy"), row("grok")]; return jsonResponse({ ok: true, success: false, result: "not_logged_in", exit_code: 1, message: "Claude Code 沒有成功回應，看起來還沒登入。請先按「登入」，登入好了再試一次。" }); };
   await click(checkBtn(main, "go"));
   await click(checkBtn(main, "confirm"));
   assert.deepStrictEqual(posts().map((c) => c[1]), ["/api/setup/tools/claude/try"]);
   assert.strictEqual(attr(item(main, "try"), "data-result"), "fail");
   assert(text(item(main, "try")).includes("看起來還沒登入"));
   assert.strictEqual(attr(item(main, "chat"), "data-result"), "todo", "the safety check was not done");
+  assert.strictEqual(checkBtn(main, "go"), undefined, "the login went away, so the one button is gone until it is back");
+});
+
+test("16a: a try that did not pass while the login is good: it can be asked again, with the confirmation first", async () => {
+  const main = await chosen("claude", [ready("claude", { version: WARM }), row("codex"), row("agy"), row("grok")]);
+  tryReply = () => jsonResponse({ ok: true, success: false, result: "failed", exit_code: 2, message: "Claude Code 沒有成功回應（原因 VBear 看不出來）。可以再試一次；如果上面的登入檢查沒過，先登入。" });
+  await click(checkBtn(main, "go"));
+  await click(checkBtn(main, "confirm"));
+  assert.strictEqual(posts().length, 1);
   assert(checkBtn(main, "go") && text(checkBtn(main, "go")) === "再試一次", "and it can be asked again, with the confirmation first");
   await click(checkBtn(main, "go"));
   assert.strictEqual(posts().length, 1, "again: nothing is sent before the confirmation");
+});
+
+// ---- v0.25.1 follow-up: a failed try is not always "not logged in" ----------------------------------------------------------------------------
+const FAILED_WORDS = (name) => `${name} 沒有成功回應（原因 VBear 看不出來）。可以再試一次；如果上面的登入檢查沒過，先登入。`;
+const NOT_LOGGED_WORDS = (name) => `${name} 沒有成功回應，看起來還沒登入。請先按「登入」，登入好了再試一次。`;
+async function tryOnce(id, rows, reply) {
+  const main = await chosen(id, rows);
+  tryReply = () => jsonResponse(reply);
+  await click(checkBtn(main, "go"));
+  await click(checkBtn(main, "confirm"));
+  return main;
+}
+const OTHERS = ["codex", "agy", "grok"];
+
+test("try follow-up: 'not logged in' while the login checks on the same page pass says it does not know why, says the login check passed, and keeps the exit code in the technical details", async () => {
+  const main = await tryOnce("claude", [ready("claude", { version: WARM }), row("codex"), row("agy"), row("grok")],
+    { ok: true, success: false, result: "not_logged_in", exit_code: 1, message: NOT_LOGGED_WORDS("Claude Code") });
+  const it = item(main, "try");
+  assert.strictEqual(attr(it, "data-result"), "fail");
+  assert(text(it).includes("原因 VBear 看不出來"), text(it));
+  assert(text(it).includes("登入檢查是通過的"), text(it));
+  assert(!text(it).includes("請先按「登入」") && !text(it).includes("看起來還沒登入"), "no word that sends a person with a good login to log in again");
+  const fold = byAttr(it, "data-plain", "tech")[0];
+  assert(fold, "the exit code is behind 技術細節");
+  assert.strictEqual(text(fold.findAll((n) => n.className === "term-tech-raw")[0]), "結束代碼：1");
+  assert.strictEqual(attr(item(main, "login"), "data-result"), "pass");
+});
+
+test("try follow-up: 'not logged in' while a login check does not pass keeps the old words (and no 'login check passed' line)", async () => {
+  const v = app.setupCheckView("claude", installed("claude", { version: WARM }), null, { phase: "done", try: { success: false, result: "not_logged_in", exit_code: 1, message: NOT_LOGGED_WORDS("Claude Code") } });
+  const t = v.items.find((i) => i.key === "try");
+  assert(t.text.includes("請先按「登入」"), t.text);
+  assert(!t.text.includes("登入檢查是通過的") && !t.next.includes("登入檢查是通過的"));
+  // Codex: the login of the tool passes but the chat one does not: a login check is still open, so the old words stay
+  const c = app.setupCheckView("codex", ready("codex", { chat_login: { state: "not_logged_in", problem: "" } }), null, { phase: "done", try: { success: false, result: "not_logged_in", exit_code: 1, message: NOT_LOGGED_WORDS("Codex CLI") } });
+  assert(c.items.find((i) => i.key === "try").text.includes("請先按「登入」"));
+  const ok = app.setupCheckView("codex", ready("codex"), null, { phase: "done", try: { success: false, result: "not_logged_in", exit_code: 1, message: NOT_LOGGED_WORDS("Codex CLI") } });
+  const t2 = ok.items.find((i) => i.key === "try");
+  assert(t2.text.startsWith("Codex CLI 沒有成功回應（原因 VBear 看不出來）") && t2.next.includes("登入檢查是通過的"), t2.text + t2.next);
+});
+
+test("try follow-up: the server's own words for a limit, a connection problem and an unknown failure are shown as they are, with the exit code in the details", async () => {
+  const cases = [["limit", "Claude Code 說你的方案現在用量到上限了，晚一點再試。", 1], ["network", "連不上 Claude Code 的伺服器，可能是網路問題，稍後再試。", 1],
+                 ["failed", FAILED_WORDS("Claude Code"), 3],
+                 ["model", "Claude Code 說你的帳號現在不能用它預設的模型，可能是 OpenAI 正在更換模型，過幾分鐘再試一次。", 1]];
+  for (const [result, message, code] of cases) {
+    const v = app.setupCheckView("claude", ready("claude", { version: WARM }), null, { phase: "done", try: { success: false, result, exit_code: code, message } });
+    const t = v.items.find((i) => i.key === "try");
+    assert.strictEqual(t.result, "fail", result);
+    assert.strictEqual(t.text, message, result);
+    assert.strictEqual(t.raw, `結束代碼：${code}`, result);
+    assert(!t.text.includes("請先按「登入」"), result);
+  }
+});
+
+test("try follow-up: no exit code (an older answer, a timeout, a refusal) means nothing in the details and nothing made up", () => {
+  for (const tr of [{ success: false, message: "等了 60 秒，Claude Code 都沒有回應。" }, { success: false, result: "timeout", exit_code: null, message: "等了 60 秒，Claude Code 都沒有回應。" },
+                    { success: false, result: "failed", exit_code: "1; rm", message: FAILED_WORDS("Claude Code") }, { success: false, result: "failed", exit_code: 1.5, message: FAILED_WORDS("Claude Code") }]) {
+    const t = app.setupCheckView("claude", ready("claude", { version: WARM }), null, { phase: "done", try: tr }).items.find((i) => i.key === "try");
+    assert.strictEqual(t.raw, "", JSON.stringify(tr));
+    assert.strictEqual(t.text, tr.message);
+  }
+});
+
+test("try follow-up: the page sends nothing more for it (the exit code and the words come with the one answer)", async () => {
+  await tryOnce("claude", [ready("claude", { version: WARM }), row("codex"), row("agy"), row("grok")], { ok: true, success: false, result: "failed", exit_code: 1, message: FAILED_WORDS("Claude Code") });
+  assert.deepStrictEqual(posts().map((c) => c[1]), ["/api/setup/tools/claude/try"]);
 });
 
 test("16a: a try the server refuses (the day's limit) is a failure with the server's sentence; nothing else is sent", async () => {

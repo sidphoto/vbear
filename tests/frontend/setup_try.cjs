@@ -100,6 +100,22 @@ test("setupTryView: only an installed tool has it; idle, asking again, running a
   assert.strictEqual(v.result.ok, false);
 });
 
+test("v0.25.1 follow-up: setupTryView says an unknown reason (not 'log in') when the tool's own login checks pass, and keeps the exit code as a detail", () => {
+  const ready = (id, over = {}) => installed(id, { state: "ready", ready: true, login: "marked", ...over });
+  const done = { phase: "done", success: false, result: "not_logged_in", exit_code: 1, message: "AGY 沒有成功回應，看起來還沒登入。請先按「登入」，登入好了再試一次。" };
+  let v = app.setupTryView(ready("agy"), done);
+  assert(v.result.text.includes("原因 VBear 看不出來") && !v.result.text.includes("請先按「登入」"), v.result.text);
+  assert(v.result.next.includes("登入檢查是通過的"));
+  assert.strictEqual(v.result.detail, "結束代碼：1");
+  v = app.setupTryView(installed("agy", { state: "not_logged_in" }), done);
+  assert(v.result.text.includes("請先按「登入」") && v.result.next === "", "login not passing: the old words");
+  assert.strictEqual(v.result.detail, "結束代碼：1");
+  v = app.setupTryView(ready("agy"), { phase: "done", success: false, result: "limit", exit_code: 1, message: "AGY 說你的方案現在用量到上限了，晚一點再試。" });
+  assert.strictEqual(v.result.text, "AGY 說你的方案現在用量到上限了，晚一點再試。");
+  v = app.setupTryView(ready("agy"), { phase: "done", success: false, message: "等了 60 秒，AGY 都沒有回應。" });
+  assert.strictEqual(v.result.detail, "", "no exit code, nothing in the details");
+});
+
 test("the button is on the installed tools and not on the others", async () => {
   setPage();
   const main = await open("#/setup");

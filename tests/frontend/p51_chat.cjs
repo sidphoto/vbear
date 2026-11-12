@@ -174,6 +174,73 @@ test("a turn that was stopped, hit a limit or went wrong, and a process that end
   assert.strictEqual(text(qa(main, "quiet-summary")[1]), "程序結束 1 次・細節");
 });
 
+// ---- 18e (P57 follow-up 2): a turn that failed is never a quiet record ------------------------------------------------
+const FAILED_TURN = "這一回合沒有成功，員工沒有回覆。可以再說一次；如果一直這樣，開一個新對話。";
+const ended = (turn, over = {}) => rec("turn_ended", { turn, cost_usd: "0.01", reported: false, total_usd: null, reason: "result", subtype: "completed", is_error: false, ...over });
+
+test("18e: a turn that ended with reason result but is_error true says in the open that it did not work; it is not in a fold, and the cost behind its fold is still there", async () => {
+  seqNo = 0;
+  const records = [rec("user_message", { turn: 1, text: "第一則" }), rec("process_started", { mode: "new", budget_usd: "0.5", instructions: true }),
+    rec("reply", { turn: 1, text: "好的", truncated: false }), ended(1),
+    rec("user_message", { turn: 2, text: "第二則" }), ended(2, { subtype: "failed", is_error: true })];
+  withDetail(records);
+  const main = await open("#/chat/" + CID);
+  const log = q(main, "log");
+  assert.deepStrictEqual(log.children.map(dataOf), ["user", "quiet-item", "reply", "quiet-item", "user", "cost"]);
+  const failed = log.children[5];
+  assert(!inFold(failed, log), "the failed turn is outside every fold");
+  assert(text(failed).includes(FAILED_TURN), text(failed));
+  assert(qa(failed, "cost-detail").length === 1, "the money of the turn is still in the page, behind its own fold");
+  // the good turn is in a fold and its line says nothing in words
+  assert(!text(log.children[3]).includes("沒有成功"));
+  assert.strictEqual(text(qa(main, "quiet-summary")[1]), "1 回合結算・細節");
+});
+
+test("18e: the subtype goes behind 技術細節; without one there is no fold of details; a reason that already has a sentence keeps it", async () => {
+  seqNo = 0;
+  const records = [ended(1, { subtype: "failed", is_error: true }), ended(2, { subtype: null, is_error: true }),
+    ended(3, { reason: "stopped", subtype: "interrupted", is_error: true }), ended(4, { reason: "timeout", subtype: null, is_error: true }),
+    ended(5, { reason: "error", subtype: null, is_error: true }), ended(6, { reason: "process_exit", subtype: null, is_error: true })];
+  withDetail(records);
+  const main = await open("#/chat/" + CID);
+  const lines = qa(main, "cost");
+  assert.strictEqual(lines.length, 6, "every one of them is open in the page");
+  assert(text(lines[0]).includes(FAILED_TURN));
+  const raw = (n) => n.findAll((x) => x.className === "term-tech-raw").map((x) => text(x));
+  assert.deepStrictEqual(raw(lines[0]), ["failed"]);
+  assert(text(lines[1]).includes(FAILED_TURN));
+  assert.deepStrictEqual(raw(lines[1]), [], "no subtype, no details");
+  assert(text(lines[2]).includes("你按了停止") && !text(lines[2]).includes(FAILED_TURN));
+  assert(text(lines[3]).includes("超過 10 分鐘") && !text(lines[3]).includes(FAILED_TURN));
+  assert(text(lines[4]).includes("出了問題") && !text(lines[4]).includes(FAILED_TURN));
+  assert(text(lines[5]).includes("程序自己結束") && !text(lines[5]).includes(FAILED_TURN));
+  assert.strictEqual(qa(main, "quiet-group").length, 0, "nothing of them is folded");
+});
+
+test("18e: chatIsQuiet says no to a turn_ended with is_error true, whatever the reason, and yes to one that ended well", () => {
+  assert.strictEqual(app.chatIsQuiet({ kind: "turn_ended", reason: "result", is_error: true, subtype: "failed" }), false);
+  assert.strictEqual(app.chatIsQuiet({ kind: "turn_ended", reason: "result", is_error: false }), true);
+  assert.strictEqual(app.chatIsQuiet({ kind: "turn_ended", reason: "result", is_error: "yes" }), true, "only true counts as true");
+  assert.strictEqual(app.chatIsQuiet({ kind: "turn_ended", reason: "stopped", is_error: true }), false);
+  assert.strictEqual(app.chatIsQuiet({ kind: "turn_ended", reason: "result" }), true, "an old record without the field is read as it always was");
+});
+
+test("an error record shows its sentence and puts the original behind 技術細節; one without an original is shown as it was", async () => {
+  seqNo = 0;
+  const records = [rec("error", { turn: 1, message: "ChatGPT 說你的帳號現在不能用這個模型。\n技術細節：The 'gpt-0.0-example' model is not supported." }),
+    rec("error", { turn: 1, message: "這則訊息無法送給 Codex（x）" })];
+  withDetail(records);
+  const main = await open("#/chat/" + CID);
+  const errs = qa(main, "error");
+  assert.strictEqual(errs.length, 2);
+  assert(text(errs[0]).includes("不能用這個模型"));
+  assert.strictEqual(errs[0].findAll((x) => x.tag === "summary").map(text).join(), "技術細節");
+  assert.deepStrictEqual(errs[0].findAll((x) => x.className === "term-tech-raw").map(text), ["The 'gpt-0.0-example' model is not supported."]);
+  assert(!inFold(errs[0], q(main, "log")), "an error is never in a fold");
+  assert(text(errs[1]).includes("這則訊息無法送給 Codex（x）"));
+  assert.deepStrictEqual(errs[1].findAll((x) => x.className === "term-tech-raw"), []);
+});
+
 test("18d: the summary line of a fold has no money; the money of each turn is still in the page inside the fold", async () => {
   seqNo = 0;
   const records = [rec("process_started", { mode: "new", budget_usd: "0.5", instructions: true }),

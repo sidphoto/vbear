@@ -307,6 +307,10 @@ def build_world(name: str, now: float) -> World:
         elif name == "chat-limit":
             w.details[cid] = {"records": pair(now), "live": {"state": "idle", "turn": None, "partial": "", "partial_truncated": False, "model": "haiku", "cards": []}}
             w.ledger = {"lamp": "red", "spent_usd": "3.02", "daily_usd": "3", "includes": ["chats"]}
+    if name in ("held-policy", "held-unknown"):         # P57: the CEO uses Claude Code, which this made-up computer holds back; Codex can chat, AGY needs its safety check
+        w.chats = [chat_row(chat_id(1), CEO, now, 3600, "你好，我是虛構 CEO。", turns=1)]
+        w.support = support("policy", "2.1.318", "這台 Mac 上有管理員政策或系統設定，可能蓋過 VBear 的設定，所以不啟動聊天。") if name == "held-policy" \
+            else support("unsupported", "2.1.999", "VBear 還不認得 Claude Code 2.1.999，所以先不能用它聊天。")
     if name == "settings":
         w.chats = [chat_row(chat_id(1), CEO, now, 300, "好", turns=1)]
     if name == "templates":
@@ -321,7 +325,7 @@ def build_world(name: str, now: float) -> World:
     return w
 
 
-WORLDS = ("first-empty", "first-ready", "first-unknown", "home-fresh", "home-busy", "home-who", "chat-rich", "chat-decided", "chat-working", "chat-first", "chat-limit", "chat-list", "settings", "templates")
+WORLDS = ("first-empty", "first-ready", "first-unknown", "home-fresh", "home-busy", "home-who", "chat-rich", "chat-decided", "chat-working", "chat-first", "chat-limit", "chat-list", "settings", "templates", "held-policy", "held-unknown")
 
 
 def first_ceo_plan(tool: str) -> dict:
@@ -549,6 +553,10 @@ SCENES: tuple[Scene, ...] = (
     Scene("first-empty-pick", "沒有員工的首頁：選了 ChatGPT（Codex）後展開準備步驟", "first-empty", "#/", (("click", '[data-setup-pick-go="codex"]'),)),
     Scene("first-ready", "沒有員工的首頁：可以聊了，名字欄與建立 CEO", "first-ready", "#/", (("click", '[data-setup-pick-go="codex"]'),)),
     Scene("first-unknown", "沒有員工的首頁：版本還不認得", "first-unknown", "#/", (("click", '[data-setup-pick-go="claude"]'),)),
+    Scene("held-home", "首頁：CEO 的 Claude Code 被管理員設定擋住，可以改用別家 AI（確認區關著）", "held-policy", "#/"),
+    Scene("held-prep", "聊天準備頁：同上（管理員設定）", "held-policy", "#/chat?profile=" + CEO),
+    Scene("held-confirm", "聊天準備頁：按了「改用 OpenAI ChatGPT（Codex）」，確認區打開（沒有按確認，所以什麼都沒送）", "held-policy", "#/chat?profile=" + CEO, (("click", '[data-switch="pick"]'),)),
+    Scene("held-unknown", "聊天準備頁：Claude Code 版本還不認得，可以改用別家 AI", "held-unknown", "#/chat?profile=" + CEO),
     Scene("settings", "設定頁（用量與上限在通知上面）", "settings", "#/settings"),
     Scene("templates-save", "存成團隊範本的對話框", "templates", "#/templates", (("js", "document.querySelectorAll('[data-templates=\"now\"] input[type=checkbox]').forEach((b) => b.click())"),
                                                                                        ("click", '[data-tpl-action="save-now"]')), ("phone-light", "desktop-light")),
