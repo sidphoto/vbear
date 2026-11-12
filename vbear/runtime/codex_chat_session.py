@@ -32,7 +32,7 @@ from collections import deque
 from dataclasses import dataclass
 from decimal import Decimal
 
-from . import chat_session as chs, chat_store as cs, codex_chat_protocol as ccp
+from . import chat_session as chs, chat_store as cs, codex_chat_protocol as ccp, failure_words as fw
 from .chat_session import Card, Turn
 
 TOOL_COMMAND = "command"
@@ -50,6 +50,7 @@ class CodexTurn(Turn):
     limit_hit: bool = False             # the tokens reached the cap: the turn is being interrupted
     interrupt_sent: bool = False
     interrupt_at: float | None = None
+    error_text: str = ""                # the words of the last ``error`` notification Codex did not retry, until the turn ends (turn_error)
 
 
 @dataclass
@@ -316,7 +317,10 @@ class CodexChatProcess(chs.ChatProcess):
             self._on_done(n, data, TOOL_COMMAND, data.get("exit_code"), data.get("output") or "")
         elif kind == "file_change_done":
             self._on_done(n, data, TOOL_FILE, None, "")
-        # remote_control, item_started, steer, interrupt and delete answers, turn_error, thread_deleted: nothing to keep
+        elif kind == "turn_error":
+            if self.turn is not None and not data["will_retry"] and data["message"]:
+                self.turn.error_text = data["message"]       # kept only until the turn ends: a turn that fails then says why (_end_turn)
+        # remote_control, item_started, steer, interrupt and delete answers, thread_deleted: nothing to keep
 
     def _open_thread(self, now: float) -> None:
         self._queue(ccp.initialized_line())
@@ -496,6 +500,12 @@ class CodexChatProcess(chs.ChatProcess):
         self.turn = None
         self.spent += cost
         self.partial = ""
+        if reason != "not_sent" and (is_error or reason != "result") and t.error_text:
+            # The words Codex gave for a turn it could not finish, behind a plain sentence for their kind: an ordinary ``error`` record (the chat's own
+            # content, cut), before the end of the turn. Nothing else of the notification is kept.
+            text = fw.chat_error_text(t.error_text, cs.MAX_EXCERPT)
+            if text:
+                self._record("error", {"turn": t.n, "message": text})
         self._record("turn_ended", {"turn": t.n, "cost_usd": cs.usd(cost), "reported": False, "total_usd": None,
                                     "reason": reason,
                                     "subtype": status if isinstance(status, str) and status != "?" else None,

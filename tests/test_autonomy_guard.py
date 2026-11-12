@@ -108,6 +108,8 @@ Never, whatever the person ticked in 「自己動手」:
      18c  only Cmd/Ctrl + Enter sends from the chat page's box: its keydown handler calls ``send`` in that one case, and nothing else of the page (keypress, keyup, a form's submit) does
           (P51-2, this file, with tests/frontend/p51_who.cjs and tests/frontend/chat.cjs).
      18d  the line over a fold has no money: ``chatQuietSummary`` is only counts of kinds, and nothing else writes into it (ADR 0013 point 5; P51-1, this file, with tests/frontend/p51_chat.cjs).
+     18e  (P57 follow-up 2, v0.25.1; only added) a turn that failed is never a quiet record: ``chatIsQuiet`` says no to a ``turn_ended`` whose ``is_error`` is true, whatever its reason, and ``chatLine``
+          says in words that a turn which ended by itself (reason ``result``) with ``is_error`` true did not work (this file, ``FailedTurnIsNotQuietRules``, with tests/frontend/p51_chat.cjs).
      15b is not changed and still passes: v0.24.0 uses no ``/api/`` path that v0.20.0 did not. tests/test_p51_docs.py checks that these files exist and carry the number of their rule.
 
   19. (P52, ADR 0017) the first run on the home page of v0.25.0 puts the steps of the start-up page and the create-CEO page on one page; every step is still the person's own press. Three rules, tested where the thing is:
@@ -3285,6 +3287,78 @@ function chatQuietLog(log) {
         self.assertNotEqual(quiet_summary_problems("function other() {}"), [], "no function")
 
 
+def failed_turn_problems(source: str, label: str = "<app.js>") -> list[str]:
+    """18e: a ``turn_ended`` with ``is_error`` true is not a quiet record, and its line says so in words when it ended by itself."""
+    found = []
+    quiet = js_function_body(source, "chatIsQuiet")
+    if quiet is None:
+        return [f"{label}: chatIsQuiet is not there"]
+    m = re.search(r'case "turn_ended":([^\n]*)', quiet)
+    if not m:
+        found.append(f"{label}: chatIsQuiet does not decide on turn_ended")
+    elif not re.search(r"rec\.is_error\s*!==\s*true\s*&&", m.group(1)):
+        found.append(f"{label}: chatIsQuiet does not say no to a turn_ended whose is_error is true (needs `rec.is_error !== true &&`)")
+    line = js_function_body(source, "chatLine")
+    if line is None:
+        return found + [f"{label}: chatLine is not there"]
+    at = line.find('case "turn_ended":')
+    end = line.find('case "process_started":')
+    part = line[at:end] if 0 <= at < end else ""
+    if not part:
+        found.append(f"{label}: chatLine does not draw turn_ended")
+    else:
+        if not re.search(r'rec\.is_error\s*===\s*true\s*&&\s*rec\.reason\s*===\s*"result"', part) or "CHAT_TURN_FAILED" not in part:
+            found.append(f"{label}: chatLine does not say in words that a turn which ended by itself with is_error true did not work")
+        if not re.search(r"why \? el\(", part):
+            found.append(f"{label}: chatLine does not show the sentence of a turn")
+    return found
+
+
+class FailedTurnIsNotQuietRules(unittest.TestCase):
+    """18e"""
+
+    SOURCE = (Path(__file__).resolve().parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+    GOOD = """
+function chatIsQuiet(rec) {
+  if (!rec || typeof rec !== "object") return false;
+  switch (rec.kind) {
+    case "tool_call": return true;
+    case "turn_ended": return rec.is_error !== true && cardHas(CHAT_TURN_END, rec.reason) && CHAT_TURN_END[rec.reason] === "";
+    default: return false;
+  }
+}
+function chatLine(rec) {
+  switch (rec.kind) {
+    case "turn_ended": {
+      const failedByItself = rec.is_error === true && rec.reason === "result";
+      const why = failedByItself ? CHAT_TURN_FAILED : CHAT_TURN_END[rec.reason];
+      return el("li", {}, why ? el("span", {}, why) : null);
+    }
+    case "process_started":
+      return null;
+  }
+}
+"""
+
+    def test_18e_the_real_page_says_no_to_a_failed_turn(self):
+        self.assertEqual(failed_turn_problems(self.SOURCE), [])
+
+    def test_18e_the_good_sample_passes_and_each_bad_one_is_caught(self):
+        self.assertEqual(failed_turn_problems(self.GOOD), [])
+        bad = {
+            "the check is gone": self.GOOD.replace("rec.is_error !== true && ", ""),
+            "only false counts": self.GOOD.replace("rec.is_error !== true &&", "rec.is_error === false &&"),
+            "the check is on another kind": self.GOOD.replace('case "turn_ended": return rec.is_error !== true && ', 'case "turn_ended": return ').replace('case "tool_call": return true;', 'case "tool_call": return rec.is_error !== true && true;'),
+            "turn_ended is not decided": self.GOOD.replace('case "turn_ended": return rec.is_error !== true && cardHas(CHAT_TURN_END, rec.reason) && CHAT_TURN_END[rec.reason] === "";', ""),
+            "no sentence for a failed turn": self.GOOD.replace("failedByItself ? CHAT_TURN_FAILED : ", ""),
+            "the failure is not looked for": self.GOOD.replace("rec.is_error === true && rec.reason === \"result\"", "false"),
+            "the sentence is not shown": self.GOOD.replace('why ? el("span", {}, why) : null', "null"),
+            "no chatLine": "function chatIsQuiet(rec) { switch (rec.kind) { case \"turn_ended\": return rec.is_error !== true && true; } }",
+        }
+        for what, source in bad.items():
+            self.assertNotEqual(failed_turn_problems(source), [], what)
+
+
 class Guard18FilesAreThere(unittest.TestCase):
     """18: the four rules of v0.24.0 are kept where the description above says, and each file carries the number of its rule."""
 
@@ -3295,9 +3369,10 @@ class Guard18FilesAreThere(unittest.TestCase):
 
     def test_18_the_description_names_all_four_rules_and_their_files(self):
         text = self.read("tests", "test_autonomy_guard.py")
-        for rule in "abcd":
+        for rule in "abcde":
             self.assertIn(f"     18{rule}  ", text, rule)
-        for name in ("p51_chat.cjs", "p51_who.cjs", "ChatReadsLikeTextRules"):
+        self.assertIn("18e", self.read("tests", "frontend", "p51_chat.cjs"))
+        for name in ("p51_chat.cjs", "p51_who.cjs", "ChatReadsLikeTextRules", "FailedTurnIsNotQuietRules"):
             self.assertIn(name, text, name)
 
     def test_18_each_file_exists_and_carries_the_number_of_its_rule(self):

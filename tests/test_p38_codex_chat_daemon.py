@@ -558,6 +558,84 @@ class ViolationTests(CodexCase):
         self.assert_nothing_of_the_account_kept(chat_id)
 
 
+MODEL_SENTENCE = "The 'gpt-0.0-example' model is not supported when using Codex with a ChatGPT account."
+
+
+class FailedTurnTests(CodexCase):
+    """P57 follow-up 2: a turn Codex could not finish says why (a fixed sentence and the cut original) in an ordinary ``error`` record."""
+
+    def error_note(self, message, will_retry=False, **extra):
+        err = {"message": message, "codexErrorInfo": None, **extra}
+        return {"method": "error", "params": {"threadId": THREAD, "turnId": "t-inject", "willRetry": will_retry, "error": err}}
+
+    def failed_turn(self, *notes, error=True):
+        self.configure(start=[{"turn": 0, "inject": list(notes), "end": {"status": "failed", "error": {"message": "turn failed"} if error else None}}])
+        chat_id = self.open_chat()
+        self.assertTrue(self.send(chat_id)["ok"])
+        end = self.wait_turn(chat_id, 1)
+        return chat_id, end, self.events(chat_id)[0]
+
+    def test_a_failed_turn_leaves_the_reason_before_its_end(self):
+        chat_id, end, recs = self.failed_turn(self.error_note(MODEL_SENTENCE))
+        self.assertEqual((end["reason"], end["is_error"], end["subtype"]), ("result", True, "failed"))
+        errors = [r for r in recs if r["kind"] == "error"]
+        self.assertEqual(len(errors), 1, [r["kind"] for r in recs])
+        self.assertEqual(errors[0]["turn"], 1)
+        sentence, _, detail = errors[0]["message"].partition("\n技術細節：")
+        self.assertIn("不能用這個模型", sentence)
+        self.assertEqual(detail, MODEL_SENTENCE)
+        kinds = [r["kind"] for r in recs]
+        self.assertLess(kinds.index("error"), kinds.index("turn_ended"))
+        self.assertEqual(set(errors[0]), {"seq", "at", "kind", "turn", "message"}, "an ordinary error record: no new kind, no new field")
+
+    def says(self, message, word):
+        _, _, recs = self.failed_turn(self.error_note(message))
+        sentence = next(r for r in recs if r["kind"] == "error")["message"].partition("\n技術細節：")[0]
+        self.assertIn(word, sentence, message)
+        self.assertNotIn("模型", sentence) if word != "不能用這個模型" else None
+
+    def test_a_login_problem_says_to_log_in(self):
+        self.says("unexpected status 401 Unauthorized: Missing bearer or basic authentication", "登入")
+
+    def test_a_limit_says_the_plan_is_used_up(self):
+        self.says("You have hit your usage limit.", "用量到上限")
+
+    def test_a_connection_problem_says_the_network(self):
+        self.says("failed to connect to the server", "網路")
+
+    def test_an_unknown_reason_says_so_and_does_not_guess(self):
+        self.says("something nobody has seen", "原因 VBear 看不出來")
+
+    def test_an_error_that_codex_retries_is_not_recorded(self):
+        _, _, recs = self.failed_turn(self.error_note("Reconnecting... 2/5", will_retry=True))
+        self.assertEqual([r for r in recs if r["kind"] == "error"], [])
+
+    def test_a_retried_error_does_not_replace_the_one_that_ended_the_turn(self):
+        _, _, recs = self.failed_turn(self.error_note(MODEL_SENTENCE), self.error_note("Reconnecting... 5/5", will_retry=True))
+        errors = [r for r in recs if r["kind"] == "error"]
+        self.assertEqual(len(errors), 1)
+        self.assertIn(MODEL_SENTENCE, errors[0]["message"])
+
+    def test_the_original_is_cut_and_nothing_else_of_the_notification_is_kept(self):
+        chat_id, _, recs = self.failed_turn(self.error_note(MODEL_SENTENCE + " " + "z" * 20000, additionalDetails="NOT-KEPT-DETAIL-7", codexErrorInfo={"x": "NOT-KEPT-INFO-8"}))
+        message = next(r for r in recs if r["kind"] == "error")["message"]
+        self.assertLessEqual(len(message), cs.MAX_EXCERPT)
+        self.assertNotIn("NOT-KEPT", self.raw(chat_id))
+
+    def test_a_failed_turn_with_no_message_leaves_no_error_record(self):
+        _, end, recs = self.failed_turn()
+        self.assertEqual((end["reason"], end["is_error"]), ("result", True))
+        self.assertEqual([r for r in recs if r["kind"] == "error"], [])
+
+    def test_a_turn_that_ends_well_records_no_error_even_if_an_error_was_said(self):
+        self.configure(start=[{"turn": 0, "inject": [self.error_note("a warning-like error", will_retry=False)]}])
+        chat_id = self.open_chat()
+        self.assertTrue(self.send(chat_id)["ok"])
+        end = self.wait_turn(chat_id, 1)
+        self.assertEqual((end["reason"], end["is_error"]), ("result", False))
+        self.assertEqual([r for r in self.events(chat_id)[0] if r["kind"] == "error"], [])
+
+
 class LimitTests(CodexCase):
     def test_a_turn_over_its_time_is_stopped_at_its_cap(self):
         self.dm.chat_turn_timeout = 1.0

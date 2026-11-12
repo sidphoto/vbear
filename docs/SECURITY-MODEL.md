@@ -1466,6 +1466,15 @@ No Codex version is chat-verified out of the box: no process starts until one pa
   the token count and says it is not a bill; the plan's use is one line from the last `plan_usage` record (percent per
   window as Codex reports it, and the reset time only when a limit was reached). The head of the chat says reading is not
   limited. The deletion confirmation says Codex's own copy stays in `codex-chat-home` (`sessions`) and is not deleted.
+- **A turn Codex could not finish says why (v0.25.1, follow-up 2).** Codex's `error` notification used to be dropped, and a turn that ended with an error was drawn
+  like a good one. Now the protocol reads `error.message` of that notification (else a top-level `message`; nothing else of it: not `codexErrorInfo`, not
+  `additionalDetails`) and cuts it to 4000 characters. When the turn ends in failure (or any reason other than a normal end) and Codex did not say it would retry
+  (`willRetry` not true), the session writes one ordinary `error` record (no new kind of record, no new field) before the `turn_ended`: a fixed sentence for the kind
+  of failure (`vbear/runtime/failure_words.py`: not logged in, a model the account cannot use, a plan limit, a connection problem, or "VBear cannot see the reason"),
+  then `技術細節：` and the original flattened to one line and cut to the existing excerpt limit (`MAX_EXCERPT`). This is part of the chat's own content, stored with the
+  employee's replies and covered by the same delete; it is not the "never kept" case of 「試一下」. The page draws a `turn_ended` with `is_error` true as a failed turn
+  in the open (guard rule 18e) and puts the original behind 「技術細節」. The Codex message shape is from the vendor's schema and one seen sentence (a model the ChatGPT
+  account cannot use); the top-level `message` is a guess with no sample. Claude Code and AGY chats are not changed (no sample of their failures).
 - **Residual risks.** (1) *Reading is not limited by the sandbox.* The legacy `workspace-write` sandbox does not limit reads: a command the person
   allows can read the whole machine, as a Claude chat's Bash can. What stands between the model and those files is the person reading each command; the permission profile that
   denies reading the whole disk made file changes fail on the recorded version, so it is not used. (2) *The cap is checked
@@ -2473,7 +2482,7 @@ still read.
 v0.25.1 (ADR 0019) puts a way out where the reason is said: when an employee's AI tool is held back by an administrator's policy or is a version VBear does not know, the home page and the page that prepares a chat offer
 "use another AI". **The switch changes only what the screen shows and where a press is.** For the switch, nothing under `vbear/` changed except the version number (no file of `agent_launch.py`, `runtime/*`, `chat_service.py`, `*_verify.py`,
 `chat_check.py`, `cli_versions.py` or `admin_policy.py`); **no route (API path), no kind of request, no key of `config.json`, no kind of chat event and no `localStorage` key was added**; guard rule 15b still holds
-unchanged. Rule 21 (21a to 21d) was added and rules 1 to 19 were not loosened. The one other server change of the release is the last item below (what 「試一下」 reads of a failed tool).
+unchanged. Rule 21 (21a to 21d) was added and rules 1 to 19 were not loosened. The other server changes of the release are the last items below (what 「試一下」 reads of a failed tool, and the reason a failed Codex turn leaves in the chat).
 
 - **Nothing about the hold is loosened.** The policy check, the unknown-version check and the chat safety check are the server's and are unchanged. The button is not a way around them: the employee is moved to another
   tool that the server's own `support` says can chat (or can be made ready by the person's own press), and that tool goes through its own checks as before. A tool that is held back too is not offered.
@@ -2487,6 +2496,9 @@ unchanged. Rule 21 (21a to 21d) was added and rules 1 to 19 were not loosened. T
   answer that never came is said as not known, not guessed.
 - **Nothing is started by the switch.** No safety check, login, chat or message is begun by it: the page shows the new tool's own state, with its own button, confirmation and cost sentence.
 
+- **The classifier is shared and has a model class (follow-up 2).** The phrases live in `vbear/runtime/failure_words.py` and are used by 「試一下」 and by the Codex chat's failed
+  turns (above). A new class `model` ("model ... not supported", "unsupported model") ranks after the login class and before the limit class, so a model the
+  account cannot use is said as that and not as "cannot see the reason". The tail of a try is still handled exactly as the next item says (rule 21d).
 - **A failed 「試一下」 now reads the tail of the tool's error output, only to tell a few failures apart (v0.25.1 follow-up, guard rule 21d).** Until now the try threw the error output away and every failed exit was told as "not logged in",
   which sent people with a good login to log in again. Now `headless_cli.run(stderr_tail=4096)` reads the error output all the way while the program runs (so it can never block on a full pipe; the time limit and the process-group kill are
   unchanged and the error pipe never keeps the call waiting) and keeps in memory only its last 4 KiB. For a failed exit those bytes go to `setup_try.classify_failure` and to nothing else: it looks for a few clear phrases (a 401

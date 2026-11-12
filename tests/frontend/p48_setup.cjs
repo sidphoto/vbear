@@ -481,7 +481,8 @@ test("try follow-up: 'not logged in' while a login check does not pass keeps the
 
 test("try follow-up: the server's own words for a limit, a connection problem and an unknown failure are shown as they are, with the exit code in the details", async () => {
   const cases = [["limit", "Claude Code 說你的方案現在用量到上限了，晚一點再試。", 1], ["network", "連不上 Claude Code 的伺服器，可能是網路問題，稍後再試。", 1],
-                 ["failed", FAILED_WORDS("Claude Code"), 3]];
+                 ["failed", FAILED_WORDS("Claude Code"), 3],
+                 ["model", "Claude Code 說你的帳號現在不能用它預設的模型，可能是 OpenAI 正在更換模型，過幾分鐘再試一次。", 1]];
   for (const [result, message, code] of cases) {
     const v = app.setupCheckView("claude", ready("claude", { version: WARM }), null, { phase: "done", try: { success: false, result, exit_code: code, message } });
     const t = v.items.find((i) => i.key === "try");

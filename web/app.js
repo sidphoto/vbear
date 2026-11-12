@@ -15135,6 +15135,8 @@ const CHAT_TURN_END = {
   not_sent: "這則訊息沒有送出，沒有花錢",
   limit: "用量到了這回合的上限，已請員工停下來，按估算的用量計費",
 };
+const CHAT_ERROR_DETAIL_MARK = "\n技術細節：";       // the server's mark between the plain sentence and the tool's own words in an error record (vbear/runtime/failure_words.py)
+const CHAT_TURN_FAILED = "這一回合沒有成功，員工沒有回覆。可以再說一次；如果一直這樣，開一個新對話。";
 const CHAT_DECISION = {
   allow: "你允許了這一次", deny: "你拒絕了", modify: "你改了內容再允許",
   expired: "5 分鐘內沒有回覆，卡片過期，視為拒絕（沒有執行）", cancelled: "這回合結束了，這張卡片視為拒絕（沒有執行）",
@@ -15299,11 +15301,14 @@ function chatLine(rec, opts) {
         agy && rec.decision === "modify" ? CHAT_AGY_DECISION_MODIFY : codex && rec.decision === "modify" ? CHAT_DECISION_CODEX_MODIFY : cardHas(CHAT_DECISION, rec.decision) ? CHAT_DECISION[rec.decision] : "這張卡片的結果不明",
         rec.decision === "modify" && typeof rec.value === "string" ? el("code", null, ` ${rec.value}`) : null);
     case "turn_ended": {
-      const why = cardHas(CHAT_TURN_END, rec.reason) ? CHAT_TURN_END[rec.reason] : "這回合因不明原因結束";
+      // P57: a turn that ended by itself (reason result) but with is_error true did not work; it says so (18e). The tool's own word for it (subtype) is behind 「技術細節」.
+      const failedByItself = rec.is_error === true && rec.reason === "result";
+      const why = failedByItself ? CHAT_TURN_FAILED : cardHas(CHAT_TURN_END, rec.reason) ? CHAT_TURN_END[rec.reason] : "這回合因不明原因結束";
       // P47-4: a turn that ended as it should says nothing in words; why it ended is written only when it was stopped, went wrong or hit a limit.
       // What it cost, and that it is an estimate and not a bill, is behind 「詳細資訊」 (it is in the page; it is only folded).
       return el("li", { class: "chat-cost small muted", "data-chat": "cost", "data-seq": String(rec.seq) },
         why ? el("span", { class: "chat-cost-why" }, why) : null,
+        failedByItself && typeof rec.subtype === "string" && rec.subtype ? plainTechFold(rec.subtype) : null,
         el("details", { class: "fold chat-money", "data-chat": "cost-detail" }, el("summary", null, "詳細資訊"), el("p", { class: "small" }, chatTurnCost(rec, opts && opts.engine))));
     }
     case "process_started":
@@ -15316,8 +15321,13 @@ function chatLine(rec, opts) {
     case "anomaly":
       return el("li", { class: "chat-sys small muted", "data-chat": "anomaly", "data-seq": String(rec.seq) },
         `員工用的 AI 工具送來一個 VBear 不認得的訊息（${text(rec.event_type)}），已略過。`);
-    case "error":
-      return el("li", { class: "chat-note", "data-chat": "error", "data-seq": String(rec.seq) }, badge("錯誤", "b-bad"), " ", text(rec.message));
+    case "error": {
+      // P57: the server may say a turn's failure as a plain sentence, then 「技術細節：」 and the tool's own words (cut); the words go behind 「技術細節」.
+      const cut = typeof rec.message === "string" ? rec.message.indexOf(CHAT_ERROR_DETAIL_MARK) : -1;
+      const said = cut >= 0 ? rec.message.slice(0, cut) : rec.message;
+      const detail = cut >= 0 ? rec.message.slice(cut + CHAT_ERROR_DETAIL_MARK.length).trim() : "";
+      return el("li", { class: "chat-note", "data-chat": "error", "data-seq": String(rec.seq) }, badge("錯誤", "b-bad"), " ", text(said), detail ? plainTechFold(detail) : null);
+    }
     default:
       return null;                       // chat_created, session_ready, and anything this page does not know
   }
@@ -16144,7 +16154,7 @@ function chatIsQuiet(rec) {
   if (!rec || typeof rec !== "object") return false;
   switch (rec.kind) {
     case "tool_call": case "tool_result": case "auto_allowed": case "process_started": return true;
-    case "turn_ended": return cardHas(CHAT_TURN_END, rec.reason) && CHAT_TURN_END[rec.reason] === "";         // only a turn that ended well
+    case "turn_ended": return rec.is_error !== true && cardHas(CHAT_TURN_END, rec.reason) && CHAT_TURN_END[rec.reason] === "";         // only a turn that ended well (18e: one that failed is never quiet)
     case "process_ended": return typeof rec.reason === "string" && cardHas(CHAT_PROCESS_END, rec.reason);     // only for a reason this page can say
     default: return false;
   }

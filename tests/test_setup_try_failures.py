@@ -100,6 +100,12 @@ class ClassifyTests(unittest.TestCase):
                      "unexpected status 429", "quota exceeded for this plan", "Usage Limit reached"):
             self.assertEqual(self.c(text), "limit", text)
 
+    def test_each_model_phrase(self):
+        # Codex 0.167.0 with a ChatGPT account said this of a model the account could not use (the model name here is made up)
+        for text in ("The 'gpt-0.0-example' model is not supported when using Codex with a ChatGPT account.", "model is not supported", "Unsupported model: gpt-x"):
+            self.assertEqual(self.c(text), "model", text)
+        self.assertEqual(self.c("this feature is not supported"), "failed")
+
     def test_each_network_phrase(self):
         for text in ("failed to connect to Responses WebSocket stage=Unknown", "dns error: failed to lookup address information",
                      "Could not resolve host: example.invalid", "error: connection refused", "request timed out",
@@ -112,7 +118,10 @@ class ClassifyTests(unittest.TestCase):
                      "quotation mark missing", "429x", "the limit of the file name"):
             self.assertEqual(self.c(text), "failed", text)
 
-    def test_priority_login_then_limit_then_network_then_failed(self):
+    def test_priority_login_then_model_then_limit_then_network_then_failed(self):
+        self.assertEqual(self.c("timed out\nthe 'x' model is not supported when using Codex"), "model")
+        self.assertEqual(self.c("the 'x' model is not supported\nunexpected status 401 Unauthorized"), "not_logged_in")
+        self.assertEqual(self.c("the 'x' model is not supported\n429 Too Many Requests"), "model")
         self.assertEqual(self.c("failed to connect\nfailed to connect\nunexpected status 401 Unauthorized"), "not_logged_in")
         self.assertEqual(self.c("timed out\nunexpected status 401 Unauthorized\ntimed out"), "not_logged_in")
         self.assertEqual(self.c("unexpected status 401 Unauthorized\n429 Too Many Requests"), "not_logged_in")
@@ -154,6 +163,13 @@ class ResultOverHttpTests(FailureCase):
         self.assertIn("可以再試一次", r["message"])
         self.assertIn("先登入", r["message"])
         self.assertNotIn("請先按「登入」", r["message"], "it does not tell the person to log in when it does not know")
+
+    def test_a_model_the_account_cannot_use_has_its_own_words(self):
+        r = self.fail_with("codex", "The 'gpt-0.0-example' model is not supported when using Codex with a ChatGPT account.\n", 1)
+        self.assertEqual((r["result"], r["exit_code"]), ("model", 1))
+        self.assertEqual(r["message"], "Codex 說你的帳號現在不能用它預設的模型，可能是 OpenAI 正在更換模型，過幾分鐘再試一次。")
+        self.assertNotIn("請先按「登入」", r["message"])
+        self.assertNotIn("gpt-0.0-example", json.dumps(r, ensure_ascii=False))
 
     def test_a_failure_with_no_output_at_all_is_failed_and_still_booked(self):
         self.assertEqual(self.ledger()["spent_usd"], "0")

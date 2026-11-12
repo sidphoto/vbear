@@ -9,15 +9,15 @@ a small budget; Codex runs without the person's config and rules, read-only, wit
 fewer tools that has been checked, so it gets only the sentence (see docs/evidence).
 
 What comes back is read for one thing, whether the tool answered, and then dropped: the reply, and anything a tool prints
-about the account, are never kept, logged or passed on. What the page gets is one of success, not_logged_in, limit, network,
+about the account, are never kept, logged or passed on. What the page gets is one of success, not_logged_in, model, limit, network,
 failed, timeout, not_found, bad_reply (or not_ended, the group could not be confirmed gone), with a plain sentence.
 
 What is read of a failed try (v0.25.1): a program that exits with an error used to be told as "not logged in" whatever
 the reason, which sent people with a good login to log in again. Now the last 4 KiB of what it printed on its error
 output (``STDERR_TAIL``, read all the way while it runs so it cannot block, only the end kept, in memory) are looked at
 once, by ``classify_failure``, for a few well-known phrases: a login one (401 Unauthorized, missing bearer, not logged in,
-authentication required, please run ... login), a plan limit (usage limit, rate limit, 429, quota) or a connection one
-(failed to connect, DNS, timed out, connection refused ...), in that order of weight; anything else is ``failed``, said
+authentication required, please run ... login), a model the account cannot use ("model ... not supported"), a plan limit (usage limit,
+rate limit, 429, quota) or a connection one (failed to connect, DNS, timed out, connection refused ...), in that order of weight; anything else is ``failed``, said
 as "VBear cannot see the reason". Only the word of the class and the program's exit code (a number) leave this module:
 the tail itself is passed to ``classify_failure`` and to nothing else, is not kept in a variable, a record, a log, the
 result or the message, and is gone when the call ends (guard rule 21d). The error output of a try that succeeds is not
@@ -39,6 +39,7 @@ from decimal import Decimal
 from typing import Callable
 
 from . import ai_tool_status, ai_tools, headless_cli, meetings as mt, try_spend
+from .runtime import failure_words
 from .jsonstore import StoreError
 
 TRY_SENTENCE = "請只回答 OK"
@@ -56,6 +57,7 @@ RESULT_WORDS = {
     "not_logged_in": "{name} 沒有成功回應，看起來還沒登入。請先按「登入」，登入好了再試一次。",
     "limit": "{name} 說你的方案現在用量到上限了，晚一點再試。",
     "network": "連不上 {name} 的伺服器，可能是網路問題，稍後再試。",
+    "model": "{name} 說你的帳號現在不能用它預設的模型，可能是 OpenAI 正在更換模型，過幾分鐘再試一次。",
     "failed": "{name} 沒有成功回應（原因 VBear 看不出來）。可以再試一次；如果上面的登入檢查沒過，先登入。",
     "timeout": "等了 {secs} 秒，{name} 都沒有回應。可能是網路不通或它正在忙，稍後再試一次。",
     "not_found": "找不到 {name}。請先按「安裝」；剛裝好的話，可能要重新打開 VBear。",
@@ -72,27 +74,13 @@ class TryRefused(Exception):
         super().__init__(message)
 
 
-# The phrases a failed program's error output is told apart by. Only clear, general phrases; each class is looked for in the
-# order below and the first class with a hit wins: the server's own answer (login, then limit) outranks the retry noise of a
-# connection that came before it (Codex 0.167.0 with no login prints many "failed to connect" lines and then a 401).
-# Only Codex has a real sample (docs/evidence); Claude Code, AGY, Grok and MCODE have no phrase of their own and are
-# judged by the same general ones, else they are ``failed``. No phrase here was made up for a tool nobody has seen fail.
-_FAILURE_PHRASES = (
-    ("not_logged_in", re.compile(r"\b401\b[^\n]{0,40}\bunauthorized\b|\bmissing bearer\b|\bnot logged in\b|\bauthentication required\b"
-                                 r"|\bplease run [^\n]{0,60}\blogin\b")),
-    ("limit", re.compile(r"\busage limit\b|\brate[- ]limit|\b429\b|\bquota\b")),
-    ("network", re.compile(r"failed to connect|(?:could not|can[’']?t|cannot|unable to) connect|could not resolve|\bdns\b"
-                           r"|connection (?:refused|reset|timed out)|network is unreachable|timed out|name or service not known"
-                           r"|nodename nor servname")),
-)
-
-
 def classify_failure(tool_id: str, tail: bytes) -> str:
-    """Which of not_logged_in, limit, network or failed a program that exited with an error was, from the end of its
-    error output. The bytes are looked at here and nowhere else; only the word comes back. ``tool_id`` is for a tool-specific
-    phrase if one is ever seen for real (none is today)."""
+    """Which of not_logged_in, model, limit, network or failed a program that exited with an error was, from the end of its
+    error output. The bytes are looked at here and nowhere else; only the word comes back. The phrases are the shared ones of
+    ``runtime/failure_words.PHRASES`` (the Codex chat uses them too). ``tool_id`` is for a tool-specific phrase if one is ever
+    seen for real (none is today)."""
     text = (tail or b"").decode("utf-8", "replace").lower()
-    for code, rule in _FAILURE_PHRASES:
+    for code, rule in failure_words.PHRASES:
         if rule.search(text):
             return code
     return "failed"

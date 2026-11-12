@@ -34,7 +34,8 @@ class AdrTests(unittest.TestCase):
 
     def test_the_rules_21a_to_21d_are_named_with_their_file_and_20_and_0018_are_not_taken(self):
         for part in ("21a 換工具的寫入只由確認鈕的 click 送出", "21b 那個寫入的 body 只有 `model`", "21c 確認區一定有資料流向那一句", "tests/frontend/p57_switch.cjs",
-                     "21d 「試一下」失敗時，工具印在錯誤輸出的東西看過就丟", "SetupTryStderrRules", "tests/test_setup_try_failures.py"):
+                     "21d 「試一下」失敗時，工具印在錯誤輸出的東西看過就丟", "SetupTryStderrRules", "tests/test_setup_try_failures.py",
+                     "18e（接在守門 18 後面，只加，同一版追加）", "FailedTurnIsNotQuietRules"):
             self.assertIn(part, self.adr, part)
         self.assertNotIn("守門規則 20", self.adr)
         self.assertFalse(list((ROOT / "docs" / "adr").glob("0018-*")), "0018 belongs to another release")
@@ -70,6 +71,19 @@ class DocumentsTests(unittest.TestCase):
                      "The cost booking, the confirmation, the 60 seconds and the one-at-a-time lock are unchanged", "is not known (the new sentence and the exit code are there"):
             self.assertIn(part, self.first, part)
 
+    def test_the_changelog_says_a_failed_turn_is_seen_and_its_reason_kept(self):
+        for part in ("A turn that failed no longer looks like a good one", "always in the open", "這一回合沒有成功，員工沒有回覆", "Guard rule 18e", "The reason Codex gives is kept",
+                     "one error line", "cut original behind 「技術細節」", "ChatGPT 說你的帳號現在不能用這個模型", "It is not known that this was the cause",
+                     "「試一下」 uses the same wording rules", "Claude Code and AGY chats are not changed", "a guess with no sample"):
+            self.assertIn(part, self.first, part)
+
+    def test_the_security_model_says_what_a_failed_codex_turn_keeps(self):
+        for part in ("A turn Codex could not finish says why", "`error.message`", "not `codexErrorInfo`, not `additionalDetails`", "4000 characters", "ordinary `error` record (no new kind of record, no new field)",
+                     "`vbear/runtime/failure_words.py`", "`技術細節：`", "`MAX_EXCERPT`", "the chat's own content", "not the \"never kept\" case", "guard rule 18e",
+                     "the top-level `message` is a guess with no sample", "Claude Code and AGY chats are not changed"):
+            self.assertIn(part, flat(raw("docs", "SECURITY-MODEL.md")), part)
+        self.assertIn("ranks after the login class and before the limit class", self.model)
+
     def test_the_security_model_says_the_error_output_tail_is_read_only_to_tell_failures_apart(self):
         for part in ("reads the tail of the tool's error output, only to tell a few failures apart", "guard rule 21d", "`headless_cli.run(stderr_tail=4096)`", "never block on a full pipe",
                      "keeps in memory only its last 4 KiB", "`setup_try.classify_failure`", "to nothing else", "first class that matches in that order wins", "not stored, logged, written to a file",
@@ -89,7 +103,7 @@ class DocumentsTests(unittest.TestCase):
         for name in ("chatSwitchOptions", "switchToolNode", "switchToolConfirmNode", "switchToolHost", "switchToolConfirm", "switchToolUi", "homeChatsOf"):
             self.assertIn(name, self.arch, name)
             self.assertRegex(self.app, rf"(function|const) {name}\b", f"web/app.js has {name}")
-        for part in ("21a to 21c", "15b", "setupTryWords", "setupLoginPasses", "classify_failure", "stderr_tail", "21d"):
+        for part in ("21a to 21c", "15b", "setupTryWords", "setupLoginPasses", "classify_failure", "stderr_tail", "21d", "failure_words", "CHAT_TURN_FAILED", "CHAT_ERROR_DETAIL_MARK", "MAX_ERROR_TEXT", "18e"):
             self.assertIn(part, self.arch, part)
         for name in ("setupTryWords", "setupLoginPasses"):
             self.assertRegex(self.app, rf"function {name}\b", f"web/app.js has {name}")
@@ -109,7 +123,7 @@ class GuardFilesTests(unittest.TestCase):
         for rule in ("21a", "21b", "21c"):
             self.assertIn(rule, spec, rule)
         guard = raw("tests", "test_autonomy_guard.py")
-        for part in ("class Guard21FilesAreThere", "class SetupTryStderrRules", "     21a  ", "     21b  ", "     21c  ", "     21d  "):
+        for part in ("class Guard21FilesAreThere", "class SetupTryStderrRules", "class FailedTurnIsNotQuietRules", "     18e  ", "     21a  ", "     21b  ", "     21c  ", "     21d  "):
             self.assertIn(part, guard, part)
         self.assertIn("21d", raw("tests", "test_setup_try_failures.py"))
 
@@ -118,6 +132,10 @@ class GuardFilesTests(unittest.TestCase):
         app = raw("web", "app.js")
         self.assertIn(setup_try.RESULT_WORDS["failed"].replace("{name}", "${name}"), app, "the page says the same unknown-reason sentence as the server")
         self.assertIn("登入檢查是通過的，不用再登入", app)
+        from vbear.runtime import failure_words
+        self.assertIn("這一回合沒有成功，員工沒有回覆。可以再說一次；如果一直這樣，開一個新對話。", app)
+        self.assertIn(failure_words.DETAIL_MARK.replace("\n", "\\n"), app, "the page splits an error record at the mark the server writes")
+        self.assertIn("model", setup_try.RESULT_WORDS)
         for code in ("limit", "network", "failed"):
             self.assertIn(code, setup_try.RESULT_WORDS)
             self.assertNotIn("請先按「登入」", setup_try.RESULT_WORDS[code], code)
