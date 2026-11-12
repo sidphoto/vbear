@@ -59,7 +59,7 @@ class ChangelogTests(unittest.TestCase):
     def test_the_release_comes_first(self):
         self.assertTrue(self.head.startswith("## v0.12.0 — the start-up page"), self.head[:60])
         self.assertIn("\n## v0.16.0 — group chat", self.changelog_start)           # (v0.17.0 is the first now)
-        self.assertTrue(self.changelog_start.startswith("# Changelog\n\n## v0.25.0 — "), self.changelog_start[:70])       # (v0.24.0 is the second now)
+        self.assertTrue(self.changelog_start.startswith("# Changelog\n\n## v0.25.2 — "), self.changelog_start[:70])       # (v0.24.0 is the second now)
         self.assertLess(self.changelog_start.index("## v0.25.0"), self.changelog_start.index("## v0.24.0"))
         self.assertLess(self.changelog_start.index("## v0.24.0"), self.changelog_start.index("## v0.23.0"))
         self.assertLess(self.changelog_start.index("## v0.23.0"), self.changelog_start.index("## v0.22.1"))

@@ -118,6 +118,14 @@ Never, whatever the person ticked in 「自己動手」:
      19c  the plain sentence for a tool whose version VBear does not know holds no version number that the program did not take from the server's data (P52-2, tests/frontend/p52_words.cjs).
      P52-4's rule: this file, ``Guard19FilesAreThere``, checks that these files exist and carry the number of their rule.
 
+  20. (P56, ADR 0018) a version in the AGY chat table is a version with evidence: VBear is willing to start an AGY version only when the tables behind it were made from that very version. Four rules on
+     ``agy_chat_protocol.VERSIONS``, ``admin_policy.AGY_SOURCES`` and the files of ``docs/evidence/``, each with made-up bad tables that must fire (``AgyVersionTablesNeedEvidence``):
+     20a  every version of ``VERSIONS`` has an entry in ``AGY_SOURCES`` (with at least one path) and an evidence file ``docs/evidence/agy-<version>-*.md`` that names the version (a "not added" note is not evidence for a version that is added).
+     20b  the built-in table of every version is complete: one SHA-256 (64 lower-case hex digits) for each file of ``builtin_paths``, no hash for a path that is not a file of it, no path hashed twice.
+     20c  every file of a version's ``builtin_paths`` whose ending is in ``builtin_runnable`` has a hash (a file that can run is never let through without a pinned hash), whatever version wrote it.
+     20d  the tables ``agy_chat_env`` takes from the newest version (settings, forbidden and created names, project entries, forbidden-anywhere and work-folder names, the closed folders) are the same in every version, so a table that starts
+          to differ has to be made per version before that version can be added.
+
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
 ``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py``, ``vbear/skillbook*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
 staff, of dispatch, of groups and of memory (the suggestions, P42-4) are held to it the day they are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
@@ -3328,6 +3336,118 @@ class Guard19FilesAreThere(unittest.TestCase):
         self.assertRegex(first, r"19a judge[^\n]*catches")
         self.assertRegex(first, r"19b judge[^\n]*catches")
         self.assertRegex(words, r"19c[^\n]*(catches|bad)")
+
+
+# 20. (P56, ADR 0018) a version of the AGY chat table is a version with evidence
+AGY_ENV_SHARED_FIELDS = ("settings", "home_forbidden", "home_created", "project_entries", "forbidden_anywhere", "cli_closed",
+                         "workdir_forbidden")        # what agy_chat_env takes from the newest version only
+
+
+def agy_version_table_problems(versions: dict, sources: dict, evidence: dict) -> list[str]:
+    """``versions``: {AGY version: its AgyConstants}; ``sources``: {AGY version: its administrator-source entry}; ``evidence``: {file name in
+    docs/evidence: text}. One sentence for each rule 20 breach."""
+    problems = []
+    newest = versions[max(versions, key=cli_versions._version_key)] if versions else None
+    for version, consts in versions.items():
+        spec = sources.get(version)
+        if not (isinstance(spec, dict) and spec.get("paths")):
+            problems.append(f"{version}: no administrator-source entry with a path (20a)")
+        pattern = re.compile(rf"^agy-{re.escape(version)}-(?!not-added).*\.md$")
+        if not any(pattern.match(name) and version in text for name, text in evidence.items()):
+            problems.append(f"{version}: no docs/evidence/agy-{version}-*.md that names the version (20a)")
+        paths = list(consts.builtin_paths)
+        files = {p for p in paths if not any(q.startswith(p + "/") for q in paths)}
+        hashes = [path for path, _ in consts.builtin_sha256]
+        if not paths or not hashes:
+            problems.append(f"{version}: the built-in table has no paths or no hashes (20b)")
+        if len(set(hashes)) != len(hashes):
+            problems.append(f"{version}: a built-in path is hashed twice (20b)")
+        if set(hashes) != files:
+            problems.append(f"{version}: the hashed paths are not the files of builtin_paths: "
+                            f"{len(hashes)} hashes, {len(files)} files (20b)")
+        for path, digest in consts.builtin_sha256:
+            if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                problems.append(f"{version}: {path} has no SHA-256 (20b)")
+        for path in sorted(files - set(hashes)):
+            if path.casefold().endswith(tuple(consts.builtin_runnable)):          # (agy_chat_env.builtin_executable_like)
+                problems.append(f"{version}: {path} can run and has no hash (20c)")
+        for field in AGY_ENV_SHARED_FIELDS:
+            if getattr(consts, field) != getattr(newest, field):
+                problems.append(f"{version}: {field} differs from the newest version's, which agy_chat_env uses for all (20d)")
+    return problems
+
+
+class AgyVersionTablesNeedEvidence(unittest.TestCase):
+    """Rule 20: every version of the AGY chat table has its source entry, its evidence file, a complete built-in table, a hash for every file
+    that can run, and the same shared tables."""
+
+    EVIDENCE = Path(__file__).resolve().parents[1] / "docs" / "evidence"
+
+    def real(self):
+        import dataclasses
+        from vbear import admin_policy
+        from vbear.runtime import agy_chat_protocol as acp
+        evidence = {p.name: p.read_text(encoding="utf-8") for p in self.EVIDENCE.glob("agy-*.md")}
+        return dataclasses, acp, dict(acp.VERSIONS), dict(admin_policy.AGY_SOURCES), evidence
+
+    def test_20_every_version_of_the_table_passes(self):
+        _, acp, versions, sources, evidence = self.real()
+        self.assertEqual(sorted(versions), ["1.5.3", "1.5.6"])
+        self.assertEqual(agy_version_table_problems(versions, sources, evidence), [])
+        self.assertIn("agy-1.5.6-chat.md", evidence)
+
+    def test_20_the_not_added_note_of_1_5_5_is_not_evidence_for_a_version(self):
+        _, acp, versions, sources, evidence = self.real()
+        self.assertNotIn("1.5.5", versions)
+        fake = dict(versions, **{"1.5.5": versions["1.5.6"]})
+        problems = agy_version_table_problems(fake, dict(sources, **{"1.5.5": sources["1.5.6"]}), evidence)
+        self.assertTrue(any(p.startswith("1.5.5: no docs/evidence/agy-1.5.5-*.md") for p in problems), problems)
+
+    # the bad samples: each is a small change of the real tables that must be caught
+    def test_20a_a_version_without_a_source_or_evidence_fires(self):
+        _, acp, versions, sources, evidence = self.real()
+        self.assertTrue(any("administrator-source" in p for p in agy_version_table_problems(versions, {"1.5.3": sources["1.5.3"]}, evidence)))
+        self.assertTrue(any("administrator-source" in p for p in agy_version_table_problems(versions, dict(sources, **{"1.5.6": {"paths": ()}}), evidence)))
+        self.assertTrue(any("evidence" in p for p in agy_version_table_problems(versions, sources, {k: v for k, v in evidence.items() if "1.5.6" not in k})))
+        self.assertTrue(any("evidence" in p for p in agy_version_table_problems(versions, sources, dict(evidence, **{"agy-1.5.6-chat.md": "about 1.5.3 only"}))))
+
+    def test_20b_a_built_in_table_that_is_not_complete_fires(self):
+        dataclasses, acp, versions, sources, evidence = self.real()
+        real = versions["1.5.6"]
+        for what, table in (("one hash missing", real.builtin_sha256[1:]),
+                            ("a hash for a path that is not a file", real.builtin_sha256 + (("plugins/swarm", "0" * 64),)),
+                            ("a path hashed twice", real.builtin_sha256 + (real.builtin_sha256[0],)),
+                            ("a short hash", ((real.builtin_sha256[0][0], "abc"),) + real.builtin_sha256[1:]),
+                            ("an upper-case hash", ((real.builtin_sha256[0][0], "A" * 64),) + real.builtin_sha256[1:]),
+                            ("no hashes at all", ())):
+            with self.subTest(what=what):
+                bad = dict(versions, **{"1.5.6": dataclasses.replace(real, builtin_sha256=table)})
+                self.assertNotEqual(agy_version_table_problems(bad, sources, evidence), [])
+        bad = dict(versions, **{"1.5.6": dataclasses.replace(real, builtin_paths=real.builtin_paths + ("skills/new/SKILL.md",))})
+        self.assertTrue(any("20b" in p for p in agy_version_table_problems(bad, sources, evidence)))
+
+    def test_20c_a_file_that_can_run_without_a_hash_fires(self):
+        dataclasses, acp, versions, sources, evidence = self.real()
+        real = versions["1.5.6"]
+        runnable = next(path for path, _ in real.builtin_sha256 if path.endswith(".mjs"))
+        bad = dict(versions, **{"1.5.6": dataclasses.replace(real, builtin_sha256=tuple(x for x in real.builtin_sha256 if x[0] != runnable))})
+        problems = agy_version_table_problems(bad, sources, evidence)
+        self.assertTrue(any("can run and has no hash (20c)" in p and runnable in p for p in problems), problems)
+        every = [path for path, _ in real.builtin_sha256]
+        for version, consts in versions.items():
+            for path in every:
+                if path.casefold().endswith(tuple(consts.builtin_runnable)):
+                    self.assertIn(path, {p for p, _ in consts.builtin_sha256}, (version, path))
+
+    def test_20d_a_table_that_differs_between_versions_fires(self):
+        dataclasses, acp, versions, sources, evidence = self.real()
+        real = versions["1.5.6"]
+        for field, value in (("settings", dict(real.settings, toolPermission="auto")), ("workdir_forbidden", real.workdir_forbidden[1:]),
+                             ("forbidden_anywhere", real.forbidden_anywhere + ("new",)), ("home_created", real.home_created[1:]),
+                             ("home_forbidden", real.home_forbidden[:-1]), ("project_entries", ("x",)), ("cli_closed", ())):
+            with self.subTest(field=field):
+                bad = dict(versions, **{"1.5.3": dataclasses.replace(versions["1.5.3"], **{field: value})})
+                self.assertTrue(any(f"{field} differs" in p for p in agy_version_table_problems(bad, sources, evidence)))
 
 
 if __name__ == "__main__":
