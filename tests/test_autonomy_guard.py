@@ -108,6 +108,8 @@ Never, whatever the person ticked in 「自己動手」:
      18c  only Cmd/Ctrl + Enter sends from the chat page's box: its keydown handler calls ``send`` in that one case, and nothing else of the page (keypress, keyup, a form's submit) does
           (P51-2, this file, with tests/frontend/p51_who.cjs and tests/frontend/chat.cjs).
      18d  the line over a fold has no money: ``chatQuietSummary`` is only counts of kinds, and nothing else writes into it (ADR 0013 point 5; P51-1, this file, with tests/frontend/p51_chat.cjs).
+     18e  (P57 follow-up 2, v0.25.1; only added) a turn that failed is never a quiet record: ``chatIsQuiet`` says no to a ``turn_ended`` whose ``is_error`` is true, whatever its reason, and ``chatLine``
+          says in words that a turn which ended by itself (reason ``result``) with ``is_error`` true did not work (this file, ``FailedTurnIsNotQuietRules``, with tests/frontend/p51_chat.cjs).
      15b is not changed and still passes: v0.24.0 uses no ``/api/`` path that v0.20.0 did not. tests/test_p51_docs.py checks that these files exist and carry the number of their rule.
 
   19. (P52, ADR 0017) the first run on the home page of v0.25.0 puts the steps of the start-up page and the create-CEO page on one page; every step is still the person's own press. Three rules, tested where the thing is:
@@ -117,6 +119,26 @@ Never, whatever the person ticked in 「自己動手」:
           after the card is made the page writes ``setup_done: true`` once (only if it was not true), never on load, pick or redraw, never without a made card (P52-1 and P52-5, tests/frontend/p52_first_run.cjs).
      19c  the plain sentence for a tool whose version VBear does not know holds no version number that the program did not take from the server's data (P52-2, tests/frontend/p52_words.cjs).
      P52-4's rule: this file, ``Guard19FilesAreThere``, checks that these files exist and carry the number of their rule.
+
+  20. (P56, ADR 0018) a version in the AGY chat table is a version with evidence: VBear is willing to start an AGY version only when the tables behind it were made from that very version. Four rules on
+     ``agy_chat_protocol.VERSIONS``, ``admin_policy.AGY_SOURCES`` and the files of ``docs/evidence/``, each with made-up bad tables that must fire (``AgyVersionTablesNeedEvidence``):
+     20a  every version of ``VERSIONS`` has an entry in ``AGY_SOURCES`` (with at least one path) and an evidence file ``docs/evidence/agy-<version>-*.md`` that names the version (a "not added" note is not evidence for a version that is added).
+     20b  the built-in table of every version is complete: one SHA-256 (64 lower-case hex digits) for each file of ``builtin_paths``, no hash for a path that is not a file of it, no path hashed twice, no path twice in ``builtin_paths``.
+     20c  every file of a version's ``builtin_paths`` whose ending is in ``builtin_runnable`` has a hash (a file that can run is never let through without a pinned hash), whatever version wrote it.
+     20d  the tables ``agy_chat_env`` takes from the newest version (settings, forbidden and created names, project entries, forbidden-anywhere and work-folder names, the closed folders) are the same in every version, so a table that starts
+          to differ has to be made per version before that version can be added.
+
+  21. (P57, ADR 0019) v0.25.1 gives an employee whose AI tool is held back for good (the administrator's policy, a version VBear does not know) a button to use another AI, in the place that says why; it is
+      only what the screen shows and one ordinary employee write after a confirmation. Four rules, tested where the thing is (20 and ADR 0018 belong to the AGY release, v0.25.2):
+     21a  the write is sent only by the click of the confirm button (「確認，改用 …」): the first press, 「先不要」, a redraw, the 5-second refresh and Enter send nothing, and the switch code holds one
+          write, in ``switchToolConfirm``, called by nothing else (P57, tests/frontend/p57_switch.cjs).
+     21b  the body of that write is only ``{model: {tool, model_id: ""}}`` for one of the other tools offered: no name, mode, instructions, skills or ``enabled``, no model name (P57, tests/frontend/p57_switch.cjs).
+     21c  the confirmation always says where the words go from now on (「之後跟他說的話會送到 …」), outside any fold and in the same area as the confirm button (P57, tests/frontend/p57_switch.cjs).
+     21d  what a tool printed on its error output is looked at and dropped: the tail that ``headless_cli.run(stderr_tail=...)`` keeps leaves only as ``HeadlessError.stderr_tail``, and ``vbear/setup_try.py``
+          hands it to ``classify_failure`` and to nothing else (no variable, no result, no message, no file, no log, no call that writes); ``classify_failure`` returns only a fixed word; in ``headless_cli.run``
+          the tail is only counted, cut and handed to the error (this file, ``SetupTryStderrRules``, with a bad sample for each way out, and tests/test_setup_try_failures.py, which looks for the words of a
+          made-up error output in the result, in the logs and in every file the program wrote).
+     15b is not changed and still passes: v0.25.1 uses no ``/api/`` path that v0.20.0 did not. P57's rule: this file, ``Guard21FilesAreThere``, checks that these files exist and carry the number of their rule.
 
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
 ``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py``, ``vbear/skillbook*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
@@ -3273,6 +3295,78 @@ function chatQuietLog(log) {
         self.assertNotEqual(quiet_summary_problems("function other() {}"), [], "no function")
 
 
+def failed_turn_problems(source: str, label: str = "<app.js>") -> list[str]:
+    """18e: a ``turn_ended`` with ``is_error`` true is not a quiet record, and its line says so in words when it ended by itself."""
+    found = []
+    quiet = js_function_body(source, "chatIsQuiet")
+    if quiet is None:
+        return [f"{label}: chatIsQuiet is not there"]
+    m = re.search(r'case "turn_ended":([^\n]*)', quiet)
+    if not m:
+        found.append(f"{label}: chatIsQuiet does not decide on turn_ended")
+    elif not re.search(r"rec\.is_error\s*!==\s*true\s*&&", m.group(1)):
+        found.append(f"{label}: chatIsQuiet does not say no to a turn_ended whose is_error is true (needs `rec.is_error !== true &&`)")
+    line = js_function_body(source, "chatLine")
+    if line is None:
+        return found + [f"{label}: chatLine is not there"]
+    at = line.find('case "turn_ended":')
+    end = line.find('case "process_started":')
+    part = line[at:end] if 0 <= at < end else ""
+    if not part:
+        found.append(f"{label}: chatLine does not draw turn_ended")
+    else:
+        if not re.search(r'rec\.is_error\s*===\s*true\s*&&\s*rec\.reason\s*===\s*"result"', part) or "CHAT_TURN_FAILED" not in part:
+            found.append(f"{label}: chatLine does not say in words that a turn which ended by itself with is_error true did not work")
+        if not re.search(r"why \? el\(", part):
+            found.append(f"{label}: chatLine does not show the sentence of a turn")
+    return found
+
+
+class FailedTurnIsNotQuietRules(unittest.TestCase):
+    """18e"""
+
+    SOURCE = (Path(__file__).resolve().parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+    GOOD = """
+function chatIsQuiet(rec) {
+  if (!rec || typeof rec !== "object") return false;
+  switch (rec.kind) {
+    case "tool_call": return true;
+    case "turn_ended": return rec.is_error !== true && cardHas(CHAT_TURN_END, rec.reason) && CHAT_TURN_END[rec.reason] === "";
+    default: return false;
+  }
+}
+function chatLine(rec) {
+  switch (rec.kind) {
+    case "turn_ended": {
+      const failedByItself = rec.is_error === true && rec.reason === "result";
+      const why = failedByItself ? CHAT_TURN_FAILED : CHAT_TURN_END[rec.reason];
+      return el("li", {}, why ? el("span", {}, why) : null);
+    }
+    case "process_started":
+      return null;
+  }
+}
+"""
+
+    def test_18e_the_real_page_says_no_to_a_failed_turn(self):
+        self.assertEqual(failed_turn_problems(self.SOURCE), [])
+
+    def test_18e_the_good_sample_passes_and_each_bad_one_is_caught(self):
+        self.assertEqual(failed_turn_problems(self.GOOD), [])
+        bad = {
+            "the check is gone": self.GOOD.replace("rec.is_error !== true && ", ""),
+            "only false counts": self.GOOD.replace("rec.is_error !== true &&", "rec.is_error === false &&"),
+            "the check is on another kind": self.GOOD.replace('case "turn_ended": return rec.is_error !== true && ', 'case "turn_ended": return ').replace('case "tool_call": return true;', 'case "tool_call": return rec.is_error !== true && true;'),
+            "turn_ended is not decided": self.GOOD.replace('case "turn_ended": return rec.is_error !== true && cardHas(CHAT_TURN_END, rec.reason) && CHAT_TURN_END[rec.reason] === "";', ""),
+            "no sentence for a failed turn": self.GOOD.replace("failedByItself ? CHAT_TURN_FAILED : ", ""),
+            "the failure is not looked for": self.GOOD.replace("rec.is_error === true && rec.reason === \"result\"", "false"),
+            "the sentence is not shown": self.GOOD.replace('why ? el("span", {}, why) : null', "null"),
+            "no chatLine": "function chatIsQuiet(rec) { switch (rec.kind) { case \"turn_ended\": return rec.is_error !== true && true; } }",
+        }
+        for what, source in bad.items():
+            self.assertNotEqual(failed_turn_problems(source), [], what)
+
+
 class Guard18FilesAreThere(unittest.TestCase):
     """18: the four rules of v0.24.0 are kept where the description above says, and each file carries the number of its rule."""
 
@@ -3283,9 +3377,10 @@ class Guard18FilesAreThere(unittest.TestCase):
 
     def test_18_the_description_names_all_four_rules_and_their_files(self):
         text = self.read("tests", "test_autonomy_guard.py")
-        for rule in "abcd":
+        for rule in "abcde":
             self.assertIn(f"     18{rule}  ", text, rule)
-        for name in ("p51_chat.cjs", "p51_who.cjs", "ChatReadsLikeTextRules"):
+        self.assertIn("18e", self.read("tests", "frontend", "p51_chat.cjs"))
+        for name in ("p51_chat.cjs", "p51_who.cjs", "ChatReadsLikeTextRules", "FailedTurnIsNotQuietRules"):
             self.assertIn(name, text, name)
 
     def test_18_each_file_exists_and_carries_the_number_of_its_rule(self):
@@ -3328,6 +3423,287 @@ class Guard19FilesAreThere(unittest.TestCase):
         self.assertRegex(first, r"19a judge[^\n]*catches")
         self.assertRegex(first, r"19b judge[^\n]*catches")
         self.assertRegex(words, r"19c[^\n]*(catches|bad)")
+
+
+# 20. (P56, ADR 0018) a version of the AGY chat table is a version with evidence
+AGY_ENV_SHARED_FIELDS = ("settings", "home_forbidden", "home_created", "project_entries", "forbidden_anywhere", "cli_closed",
+                         "workdir_forbidden")        # what agy_chat_env takes from the newest version only
+
+
+def agy_version_table_problems(versions: dict, sources: dict, evidence: dict) -> list[str]:
+    """``versions``: {AGY version: its AgyConstants}; ``sources``: {AGY version: its administrator-source entry}; ``evidence``: {file name in
+    docs/evidence: text}. One sentence for each rule 20 breach."""
+    problems = []
+    newest = versions[max(versions, key=cli_versions._version_key)] if versions else None
+    for version, consts in versions.items():
+        spec = sources.get(version)
+        if not (isinstance(spec, dict) and spec.get("paths")):
+            problems.append(f"{version}: no administrator-source entry with a path (20a)")
+        pattern = re.compile(rf"^agy-{re.escape(version)}-(?!not-added).*\.md$")
+        if not any(pattern.match(name) and version in text for name, text in evidence.items()):
+            problems.append(f"{version}: no docs/evidence/agy-{version}-*.md that names the version (20a)")
+        paths = list(consts.builtin_paths)
+        if len(set(paths)) != len(paths):
+            problems.append(f"{version}: a path is in builtin_paths twice (20b)")
+        files = {p for p in paths if not any(q.startswith(p + "/") for q in paths)}
+        hashes = [path for path, _ in consts.builtin_sha256]
+        if not paths or not hashes:
+            problems.append(f"{version}: the built-in table has no paths or no hashes (20b)")
+        if len(set(hashes)) != len(hashes):
+            problems.append(f"{version}: a built-in path is hashed twice (20b)")
+        if set(hashes) != files:
+            problems.append(f"{version}: the hashed paths are not the files of builtin_paths: "
+                            f"{len(hashes)} hashes, {len(files)} files (20b)")
+        for path, digest in consts.builtin_sha256:
+            if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                problems.append(f"{version}: {path} has no SHA-256 (20b)")
+        for path in sorted(files - set(hashes)):
+            if path.casefold().endswith(tuple(consts.builtin_runnable)):          # (agy_chat_env.builtin_executable_like)
+                problems.append(f"{version}: {path} can run and has no hash (20c)")
+        for field in AGY_ENV_SHARED_FIELDS:
+            if getattr(consts, field) != getattr(newest, field):
+                problems.append(f"{version}: {field} differs from the newest version's, which agy_chat_env uses for all (20d)")
+    return problems
+
+
+class AgyVersionTablesNeedEvidence(unittest.TestCase):
+    """Rule 20: every version of the AGY chat table has its source entry, its evidence file, a complete built-in table, a hash for every file
+    that can run, and the same shared tables."""
+
+    EVIDENCE = Path(__file__).resolve().parents[1] / "docs" / "evidence"
+
+    def real(self):
+        import dataclasses
+        from vbear import admin_policy
+        from vbear.runtime import agy_chat_protocol as acp
+        evidence = {p.name: p.read_text(encoding="utf-8") for p in self.EVIDENCE.glob("agy-*.md")}
+        return dataclasses, acp, dict(acp.VERSIONS), dict(admin_policy.AGY_SOURCES), evidence
+
+    def test_20_every_version_of_the_table_passes(self):
+        _, acp, versions, sources, evidence = self.real()
+        self.assertEqual(sorted(versions), ["1.5.3", "1.5.6"])
+        self.assertEqual(agy_version_table_problems(versions, sources, evidence), [])
+        self.assertIn("agy-1.5.6-chat.md", evidence)
+
+    def test_20_the_not_added_note_of_1_5_5_is_not_evidence_for_a_version(self):
+        _, acp, versions, sources, evidence = self.real()
+        self.assertNotIn("1.5.5", versions)
+        fake = dict(versions, **{"1.5.5": versions["1.5.6"]})
+        problems = agy_version_table_problems(fake, dict(sources, **{"1.5.5": sources["1.5.6"]}), evidence)
+        self.assertTrue(any(p.startswith("1.5.5: no docs/evidence/agy-1.5.5-*.md") for p in problems), problems)
+
+    # the bad samples: each is a small change of the real tables that must be caught
+    def test_20a_a_version_without_a_source_or_evidence_fires(self):
+        _, acp, versions, sources, evidence = self.real()
+        self.assertTrue(any("administrator-source" in p for p in agy_version_table_problems(versions, {"1.5.3": sources["1.5.3"]}, evidence)))
+        self.assertTrue(any("administrator-source" in p for p in agy_version_table_problems(versions, dict(sources, **{"1.5.6": {"paths": ()}}), evidence)))
+        self.assertTrue(any("evidence" in p for p in agy_version_table_problems(versions, sources, {k: v for k, v in evidence.items() if "1.5.6" not in k})))
+        self.assertTrue(any("evidence" in p for p in agy_version_table_problems(versions, sources, dict(evidence, **{"agy-1.5.6-chat.md": "about 1.5.3 only"}))))
+
+    def test_20b_a_built_in_table_that_is_not_complete_fires(self):
+        dataclasses, acp, versions, sources, evidence = self.real()
+        real = versions["1.5.6"]
+        for what, table in (("one hash missing", real.builtin_sha256[1:]),
+                            ("a hash for a path that is not a file", real.builtin_sha256 + (("plugins/swarm", "0" * 64),)),
+                            ("a path hashed twice", real.builtin_sha256 + (real.builtin_sha256[0],)),
+                            ("a short hash", ((real.builtin_sha256[0][0], "abc"),) + real.builtin_sha256[1:]),
+                            ("an upper-case hash", ((real.builtin_sha256[0][0], "A" * 64),) + real.builtin_sha256[1:]),
+                            ("no hashes at all", ())):
+            with self.subTest(what=what):
+                bad = dict(versions, **{"1.5.6": dataclasses.replace(real, builtin_sha256=table)})
+                self.assertNotEqual(agy_version_table_problems(bad, sources, evidence), [])
+        bad = dict(versions, **{"1.5.6": dataclasses.replace(real, builtin_paths=real.builtin_paths + ("skills/new/SKILL.md",))})
+        self.assertTrue(any("20b" in p for p in agy_version_table_problems(bad, sources, evidence)))
+        bad = dict(versions, **{"1.5.6": dataclasses.replace(real, builtin_paths=real.builtin_paths + (real.builtin_paths[0],))})          # R1: a path twice
+        self.assertTrue(any("in builtin_paths twice (20b)" in p for p in agy_version_table_problems(bad, sources, evidence)))
+
+    def test_20c_a_file_that_can_run_without_a_hash_fires(self):
+        dataclasses, acp, versions, sources, evidence = self.real()
+        real = versions["1.5.6"]
+        runnable = next(path for path, _ in real.builtin_sha256 if path.endswith(".mjs"))
+        bad = dict(versions, **{"1.5.6": dataclasses.replace(real, builtin_sha256=tuple(x for x in real.builtin_sha256 if x[0] != runnable))})
+        problems = agy_version_table_problems(bad, sources, evidence)
+        self.assertTrue(any("can run and has no hash (20c)" in p and runnable in p for p in problems), problems)
+        every = [path for path, _ in real.builtin_sha256]
+        for version, consts in versions.items():
+            for path in every:
+                if path.casefold().endswith(tuple(consts.builtin_runnable)):
+                    self.assertIn(path, {p for p, _ in consts.builtin_sha256}, (version, path))
+
+    def test_20d_a_table_that_differs_between_versions_fires(self):
+        dataclasses, acp, versions, sources, evidence = self.real()
+        real = versions["1.5.6"]
+        for field, value in (("settings", dict(real.settings, toolPermission="auto")), ("workdir_forbidden", real.workdir_forbidden[1:]),
+                             ("forbidden_anywhere", real.forbidden_anywhere + ("new",)), ("home_created", real.home_created[1:]),
+                             ("home_forbidden", real.home_forbidden[:-1]), ("project_entries", ("x",)), ("cli_closed", ())):
+            with self.subTest(field=field):
+                bad = dict(versions, **{"1.5.3": dataclasses.replace(versions["1.5.3"], **{field: value})})
+                self.assertTrue(any(f"{field} differs" in p for p in agy_version_table_problems(bad, sources, evidence)))
+
+
+# ---- 21d: what a tool printed on its error output is looked at and dropped (P57 follow-up, v0.25.1) ------------------------------------------------
+
+_WRITING_CALLS = {"print", "open", "write_private", "write_text", "write_bytes", "write", "dump", "dumps", "info", "warning", "error", "debug",
+                  "exception", "critical", "log", "format", "append", "extend", "update", "setdefault", "send", "sendall", "put", "set", "add"}
+
+
+def _parents(tree):
+    parents = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+    return parents
+
+
+def _call_name(call):
+    f = call.func
+    return f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else ""
+
+
+def setup_try_stderr_problems(source, label="vbear/setup_try.py"):
+    """21d on setup_try: ``.stderr_tail`` of a headless error is read only as a direct argument of ``classify_failure``; ``classify_failure`` returns a fixed word only; the result has no key that
+    names the error output."""
+    tree = ast.parse(source)
+    parents = _parents(tree)
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr == "stderr_tail":
+            parent = parents.get(node)
+            if not (isinstance(parent, ast.Call) and _call_name(parent) == "classify_failure" and node in parent.args):
+                found.append(f"{label}: .stderr_tail is used outside a direct argument of classify_failure (line {node.lineno})")
+        elif isinstance(node, ast.Constant) and node.value == "stderr_tail":
+            parent = parents.get(node)
+            if not isinstance(parent, ast.keyword):
+                found.append(f"{label}: the name 'stderr_tail' is built as text (line {node.lineno})")
+        elif isinstance(node, ast.Dict):
+            for key in node.keys:
+                if isinstance(key, ast.Constant) and isinstance(key.value, str) and re.search(r"stderr|tail|error_output|raw", key.value, re.I):
+                    found.append(f"{label}: a dict has the key {key.value!r} (line {node.lineno})")
+    funcs = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "classify_failure"]
+    if len(funcs) != 1:
+        return found + [f"{label}: there is not exactly one classify_failure"]
+    for ret in (n for n in ast.walk(funcs[0]) if isinstance(n, ast.Return)):
+        v = ret.value
+        if not ((isinstance(v, ast.Constant) and isinstance(v.value, str)) or (isinstance(v, ast.Name) and v.id == "code")):
+            found.append(f"{label}: classify_failure returns something other than a fixed word (line {ret.lineno})")
+    for call in (n for n in ast.walk(funcs[0]) if isinstance(n, ast.Call)):
+        if _call_name(call) in _WRITING_CALLS:
+            found.append(f"{label}: classify_failure calls {_call_name(call)} (line {call.lineno})")
+    return found
+
+
+def headless_stderr_problems(source, label="vbear/headless_cli.py"):
+    """21d on the runner: the kept tail (``tail``) is only counted, cut, appended to and handed to ``HeadlessError`` as ``bytes(tail)``; no call that writes sees it."""
+    tree = ast.parse(source)
+    parents = _parents(tree)
+    found = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Name) and node.id == "tail" and isinstance(node.ctx, (ast.Load, ast.Del))):
+            continue
+        parent = parents.get(node)
+        grand = parents.get(parent)
+        ok = (isinstance(parent, ast.Attribute) and parent.attr == "extend") or isinstance(parent, ast.Subscript) \
+            or (isinstance(parent, ast.Call) and _call_name(parent) == "len") \
+            or (isinstance(parent, ast.Call) and _call_name(parent) == "bytes" and isinstance(grand, ast.Call) and _call_name(grand) == "HeadlessError")
+        if not ok:
+            found.append(f"{label}: the tail is used somewhere other than count, cut, extend or HeadlessError(bytes(tail)) (line {node.lineno})")
+    for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
+        if _call_name(call) in _WRITING_CALLS - {"extend", "append"} and any(isinstance(x, ast.Name) and x.id == "tail" for a in call.args for x in ast.walk(a)):
+            found.append(f"{label}: {_call_name(call)} is given the tail (line {call.lineno})")
+    return found
+
+
+class SetupTryStderrRules(unittest.TestCase):
+    """21d: the real sources are clean, and each way out is caught on a made-up bad source."""
+
+    ROOT = Path(__file__).resolve().parents[1]
+    GOOD_TRY = (
+        "def classify_failure(tool_id, tail):\n    text = (tail or b'').decode('utf-8', 'replace').lower()\n"
+        "    for code, rule in RULES:\n        if rule.search(text):\n            return code\n    return 'failed'\n"
+        "def attempt():\n    try:\n        run()\n    except HeadlessError as exc:\n"
+        "        code, exit_code = classify_failure(tool.id, exc.stderr_tail), exc.returncode\n"
+        "    return {'ok': True, 'result': code, 'exit_code': exit_code}\n")
+    GOOD_RUN = (
+        "def run():\n    tail = bytearray()\n    def drain():\n        tail.extend(chunk)\n        if len(tail) > 9:\n            del tail[:1]\n"
+        "    raise HeadlessError('cli_failed', 1, bytes(tail))\n")
+
+    def test_21d_the_real_sources_are_clean(self):
+        self.assertEqual(setup_try_stderr_problems((self.ROOT / "vbear" / "setup_try.py").read_text(encoding="utf-8")), [])
+        self.assertEqual(headless_stderr_problems((self.ROOT / "vbear" / "headless_cli.py").read_text(encoding="utf-8")), [])
+
+    def test_21d_the_good_samples_pass(self):
+        self.assertEqual(setup_try_stderr_problems(self.GOOD_TRY), [])
+        self.assertEqual(headless_stderr_problems(self.GOOD_RUN), [])
+
+    def test_21d_setup_try_catches_each_way_the_error_output_could_leave(self):
+        bad = {
+            "kept in a variable": self.GOOD_TRY.replace("code, exit_code = classify_failure(tool.id, exc.stderr_tail), exc.returncode",
+                                                         "raw = exc.stderr_tail\n        code, exit_code = classify_failure(tool.id, raw), exc.returncode"),
+            "put in the result": self.GOOD_TRY.replace("'exit_code': exit_code}", "'exit_code': exit_code, 'detail': exc.stderr_tail}"),
+            "put in the result under a key": self.GOOD_TRY.replace("'exit_code': exit_code}", "'exit_code': exit_code, 'stderr': 1}"),
+            "logged": self.GOOD_TRY.replace("    return {", "    log.warning(exc.stderr_tail)\n    return {"),
+            "decoded and kept": self.GOOD_TRY.replace("code, exit_code = classify_failure(tool.id, exc.stderr_tail), exc.returncode",
+                                                      "code, exit_code = classify_failure(tool.id, b''), exc.stderr_tail.decode()"),
+            "read by name": self.GOOD_TRY.replace("exc.stderr_tail), exc.returncode", "exc.stderr_tail), getattr(exc, 'stderr_tail')"),
+            "returned by the classifier": self.GOOD_TRY.replace("    return 'failed'\n", "    return text\n"),
+            "written by the classifier": self.GOOD_TRY.replace("    for code, rule in RULES:", "    print(text)\n    for code, rule in RULES:"),
+            "classifier gone": "def attempt():\n    return 1\n",
+        }
+        for what, source in bad.items():
+            self.assertNotEqual(setup_try_stderr_problems(source), [], what)
+
+    def test_21d_the_runner_catches_each_way_the_tail_could_leave(self):
+        bad = {
+            "written to a file": self.GOOD_RUN.replace("    raise", "    write_private(path, tail)\n    raise"),
+            "logged": self.GOOD_RUN.replace("    raise", "    print(bytes(tail))\n    raise"),
+            "in the message": self.GOOD_RUN.replace("raise HeadlessError('cli_failed', 1, bytes(tail))", "raise HeadlessError(bytes(tail).decode())"),
+            "returned": self.GOOD_RUN.replace("    raise HeadlessError('cli_failed', 1, bytes(tail))", "    return tail"),
+            "copied elsewhere": self.GOOD_RUN.replace("    raise", "    out = tail\n    raise"),
+        }
+        for what, source in bad.items():
+            self.assertNotEqual(headless_stderr_problems(source), [], what)
+
+
+class Guard21FilesAreThere(unittest.TestCase):
+    """21: the four rules of v0.25.1 are kept where the description above says, and the files carry the number of each rule and a judge with a bad sample for it."""
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def read(self, *parts):
+        return self.ROOT.joinpath(*parts).read_text(encoding="utf-8")
+
+    def test_21_the_description_names_all_four_rules_and_their_files(self):
+        text = self.read("tests", "test_autonomy_guard.py")
+        for rule in "abcd":
+            self.assertIn(f"     21{rule}  ", text, rule)
+        self.assertIn("p57_switch.cjs", text)
+        self.assertIn("test_setup_try_failures.py", text)
+        self.assertIn("class SetupTryStderrRules", text)
+
+    def test_21d_the_runtime_test_is_there_and_carries_its_number(self):
+        spec = self.read("tests", "test_setup_try_failures.py")
+        self.assertIn("21d", spec)
+        self.assertIn("test_nothing_the_tool_printed_is_in_the_result_a_log_or_a_file", spec)
+
+    def test_21_the_file_exists_and_carries_the_number_of_each_rule(self):
+        spec = self.read("tests", "frontend", "p57_switch.cjs")
+        for rule in ("21a", "21b", "21c"):
+            self.assertIn(rule, spec, rule)
+
+    def test_21_each_rule_has_a_judge_and_a_bad_sample_that_it_catches(self):
+        spec = self.read("tests", "frontend", "p57_switch.cjs")
+        for needle in ("judge21a", "judge21aSource", "judge21b", "judge21bSource", "judge21c", "judge21cSource"):
+            self.assertIn(needle, spec, needle)
+        for rule in ("21a", "21b", "21c"):
+            self.assertRegex(spec, rf"{rule} judge catches", rule)
+
+    def test_21_the_judges_run_on_the_real_page(self):
+        # the page's source holds the region the judges cut out, with the one write and the sentence
+        app = self.read("web", "app.js")
+        self.assertIn("// ---- P57 switch tool", app)
+        self.assertIn("// ---- end of P57 switch tool", app)
+        self.assertEqual(len(re.findall(r"switchToolConfirm\(", app)), 2)
+        self.assertIn("之後跟他說的話會送到", app)
 
 
 if __name__ == "__main__":

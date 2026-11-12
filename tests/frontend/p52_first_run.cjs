@@ -556,6 +556,32 @@ function judge19bSource(src) {
     assert.strictEqual(posts(page).length, 1);
   });
 
+  await test("v0.25.1 follow-up: on the home page a try that says 'not logged in' while the login checks pass is said as an unknown reason, with the exit code behind 技術細節", async () => {
+    const page = await firstPage(readyClaude(), { storage: { [PICK]: "claude" } });
+    await click(chk(page, "go"));
+    page.F.tryReply = () => jr({ ok: true, success: false, result: "not_logged_in", exit_code: 1, message: "Claude Code 沒有成功回應，看起來還沒登入。請先按「登入」，登入好了再試一次。" });
+    await click(chk(page, "confirm"), 60);
+    const t = item(page, "try");
+    assert.strictEqual(t.getAttribute("data-result"), "fail");
+    const words = t.textContent;
+    assert.ok(words.includes("原因 VBear 看不出來") && words.includes("登入檢查是通過的"), words);
+    assert.ok(!words.includes("請先按「登入」") && !words.includes("看起來還沒登入"), words);
+    const raw = all(t, (n) => n.className === "term-tech-raw");
+    assert.deepStrictEqual(raw.map((n) => n.textContent), ["結束代碼：1"]);
+    assert.deepStrictEqual(posts(page).map((c) => c[1]), ["/api/setup/tools/claude/try"], "nothing else was sent");
+  });
+
+  await test("v0.25.1 follow-up: on the home page a limit answer and a connection answer are shown as the server said them", async () => {
+    for (const [result, message] of [["limit", "Claude Code 說你的方案現在用量到上限了，晚一點再試。"], ["network", "連不上 Claude Code 的伺服器，可能是網路問題，稍後再試。"]]) {
+      const page = await firstPage(readyClaude(), { storage: { [PICK]: "claude" } });
+      await click(chk(page, "go"));
+      page.F.tryReply = () => jr({ ok: true, success: false, result, exit_code: 1, message });
+      await click(chk(page, "confirm"), 60);
+      assert.ok(item(page, "try").textContent.includes(message), result);
+      assert.ok(!item(page, "try").textContent.includes("登入檢查是通過的"), result);
+    }
+  });
+
   // ---- 19b: the CEO ---------------------------------------------------------------------------------------------------------------------------------
   const chatReady = (over = {}) => ({ ...readyClaude(), support: verifiedSupport(), ...over });
   await test("19b: when the chosen tool can chat the plan is read for that tool (a GET), the name box has the CEO page's default, the mode line is there and not folded; nothing is made", async () => {

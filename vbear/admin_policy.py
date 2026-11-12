@@ -92,7 +92,16 @@ CODEX_SOURCES = {"0.160.0": _CODEX, "0.163.0": _CODEX, "0.167.0": _CODEX}
 # person nothing when it is not a real source. "Better to refuse too much" is the rule here. AGY's own user-level
 # hooks (~/.agents/hooks.json) are not a policy source and are checked by agy_chat_env.home_hooks_state. Method and result:
 # docs/evidence/agy-1.5.3-chat.md, section 8.
-AGY_SOURCES = {"1.5.3": {"paths": ("etc/antigravity",), "domain": "com.google.antigravity", "home_paths": ()}}
+# 1.5.6 (P56-2, v0.25.2): the 1.5.3 list and one more place. The strings of the real 1.5.6 (counted on 2026-11-12, the program was
+# not run for them) still hold /etc/antigravity (once), admin_settings (7), AdminSettings (18) and com.google.antigravity (6), and
+# nothing named managed-settings or policy.json. They also hold /Library/Application Support/Antigravity once, a path the 1.5.3
+# reading met too and left out as unexplained. The strings cannot show what it is, so for 1.5.6 the whole folder is a source: if it
+# is there the launch is refused (only stricter than 1.5.3, and a Mac without that folder is not affected). 1.5.3's entry did not
+# change. It is a candidate only ("unconfirmed"): the refusal sentence says its use is not confirmed, not that a policy exists.
+# Method and result: docs/evidence/agy-1.5.6-chat.md, section 3.
+AGY_SOURCES = {"1.5.3": {"paths": ("etc/antigravity",), "domain": "com.google.antigravity", "home_paths": ()},
+               "1.5.6": {"paths": ("etc/antigravity", "Library/Application Support/Antigravity"), "domain": "com.google.antigravity",
+                         "home_paths": (), "unconfirmed": ("Library/Application Support/Antigravity",)}}
 
 
 @dataclass
@@ -100,13 +109,20 @@ class PolicyCheck:
     ok: bool
     found: list[str] = field(default_factory=list)       # sources that exist
     problems: list[str] = field(default_factory=list)    # could not be established
+    unconfirmed: list[str] = field(default_factory=list)  # found, but nothing shows it is an administrator source (a candidate only)
 
     def reason(self) -> str:
         if self.ok:
             return ""
-        parts = [f"存在管理員政策或系統設定：{p}" for p in self.found]
+        confirmed = [p for p in self.found if p not in self.unconfirmed]
+        parts = [f"存在管理員政策或系統設定：{p}" for p in confirmed]
         parts += self.problems
-        return "；".join(parts) + "。請使用者或系統管理員處理後再啟動。"
+        text = "；".join(parts) + "。請使用者或系統管理員處理後再啟動。" if parts or not self.unconfirmed else ""
+        if self.unconfirmed:
+            text += ("；" if text else "") + "、".join(self.unconfirmed) + (
+                " 這個位置的用途 VBear 還不能確認（它可能是管理員設定，也可能只是一般的安裝資料），為了安全先不啟動聊天。"
+                "VBear 不會替你動它；等 VBear 確認它的用途後才能放行。")
+        return text
 
 
 def _exists(path: str) -> bool:
@@ -124,16 +140,18 @@ def _check(spec: dict | None, version: str, root: str, home: str, tool: str) -> 
         return PolicyCheck(False, problems=[f"{tool} {version} 沒有管理員政策來源清單，不能啟動"])
     result = PolicyCheck(True)
 
-    def look(path: str, shown: str | None = None):
+    def look(path: str, shown: str | None = None, candidate: bool = False):
         shown = shown or ("/" + os.path.relpath(path, root) if root != "/" else path)
         try:
             if _exists(path):
                 result.found.append(shown)
+                if candidate:
+                    result.unconfirmed.append(shown)
         except OSError as exc:
             result.problems.append(f"無法確認 {shown} 是否存在（{exc.strerror or type(exc).__name__}）")
 
     for rel in spec["paths"]:
-        look(os.path.join(root, rel))
+        look(os.path.join(root, rel), candidate=rel in spec.get("unconfirmed", ()))
     for rel in spec["home_paths"]:
         if not isinstance(home, str) or not home.startswith("/"):
             result.problems.append("不知道執行者的 HOME，無法確認伺服器管理設定的快取")

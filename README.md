@@ -361,7 +361,7 @@ refused by VBear itself. 改內容再問 refuses the original, and after that tu
 AGY reports tokens, not money: VBear estimates each turn (US$1.00 per million tokens, at least US$0.01), shows it as an estimate and not a bill, and counts it in the daily
 limit, but AGY uses your Google plan. The per-turn limit is checked only before a turn starts, so one turn may cost more than it. What you say, what a read card allows AGY to read and
 the memory you switch on go to Google. **AGY employees cannot use the shared folder in this version.** The chat does not start if your Mac has an administrator policy
-for AGY (`/etc/antigravity`) or if you have `~/.agents/hooks.json` (commands AGY runs by itself; VBear only checks that it exists, never reads it). AGY updates itself, and a
+for AGY (`/etc/antigravity`) or if you have `hooks.json`, `plugins.json` or `plugins` in `~/.agents` (or `~/.agent`, `~/_agents`, `~/_agent`), or in any of those four folders above VBear's own folder (for example a project that holds your `VBEAR_HOME`) (commands and programs AGY starts by itself; VBear only checks that they exist, never reads them). AGY updates itself, and a
 new version must pass 驗證聊天 on your Mac first (about fifteen short calls on your Google plan, not billed apart); AGY keeps its own copy of the conversation in the settings folder, and deleting a chat does not delete it.
 
 **Ask the chief of staff to arrange the work.**

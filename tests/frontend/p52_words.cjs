@@ -34,7 +34,7 @@ const PICK = "vbear-setup-pick";
 // ---- the sentences the server really says (word for word from chat_service.py, admin_policy.py, agy_chat_env.py and agent_sessions.py; versions invented) ----
 const UNKNOWN_CLAUDE = "VBear 沒有 Claude Code 2.1.999 的聊天模式常數，所以不能聊天。VBear 目前能聊天的版本：2.1.318、2.1.322。"
   + "處理方式：安裝其中一個版本（放在 Claude Code 自己的版本資料夾裡，VBear 就會自動選用），或等 VBear 更新。";
-const UNKNOWN_AGY = "AGY 9.9.9 不是 VBear 能聊天的版本。VBear 目前能聊天的 AGY 版本：1.5.3。";
+const UNKNOWN_AGY = "AGY 9.9.9 不是 VBear 能聊天的版本。VBear 目前能聊天的 AGY 版本：1.5.3、1.5.6。";
 const NO_SOURCE_LIST = (tool, v) => `${tool} ${v} 沒有管理員政策來源清單，不能啟動`;
 const NO_SOURCE_FULL = (tool, v) => `${NO_SOURCE_LIST(tool, v)}。請使用者或系統管理員處理後再啟動。`;
 const NO_CONSTANTS = (tool, v) => `${tool} ${v} 沒有聊天模式的常數`;

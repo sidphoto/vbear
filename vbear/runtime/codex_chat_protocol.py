@@ -45,6 +45,7 @@ MAX_INSTRUCTIONS_BYTES = 32 * 1024              # a role card's own instructions
 MAX_CARD_BYTES = 12 << 10                       # one card as the live view shows it (chat_session.CARD_SHOW_MAX)
 MAX_OUTPUT_TEXT = 256 * 1024                    # the output of one command, kept for the session to cut and mask
 MAX_REPLY_TEXT = 256 * 1024
+MAX_ERROR_TEXT = 4000                           # the message of an ``error`` notification, cut (a chat record keeps it behind a plain sentence)
 MAX_EVENT_TYPE = sp.MAX_EVENT_TYPE
 MAX_TOKENS = 10 ** 12
 TOKEN_USD_PER_MTOK = Decimal("1.00")            # VBear's own accounting rule, not a price (ADR 0005; AGY chats use it too, ADR 0012)
@@ -477,7 +478,8 @@ class CodexTracker:
       usage             {total_tokens, delta_tokens, baseline}  delta_tokens None when the total went back
       plan_usage        {primary_pct, primary_window_min, primary_resets_at, secondary_*, reached}
       turn_completed    {turn_id, status, error, tokens, open_items}   tokens None when a count was unusable
-      turn_error        {will_retry}
+      turn_error        {will_retry, message}                   message: the words of the notification's ``error.message`` (else ``message``), cut to
+                                                                MAX_ERROR_TEXT, "" when there are none; nothing else of the notification is read
       thread_deleted    {thread_id}
       unknown_request   {request_id, method, refused}           to be answered with error_line
       anomaly           {event_type, fields}
@@ -734,7 +736,15 @@ class CodexTracker:
             [_anomaly("thread/deleted", params)]
 
     def _n_error(self, params):
-        return [("turn_error", {"will_retry": params.get("willRetry") is True})]
+        # The schema's ErrorNotification is {error: {message, codexErrorInfo, additionalDetails}, willRetry, threadId, turnId}; 0.167.0 was seen to say
+        # "The '<model>' model is not supported when using Codex with a ChatGPT account." in error.message. A top-level ``message`` is read too, as a
+        # guess for a shape no sample shows. Only that text is taken (cut); codexErrorInfo and additionalDetails are never read.
+        err = params.get("error")
+        message = err.get("message") if isinstance(err, dict) else None
+        if not isinstance(message, str):
+            message = params.get("message")
+        return [("turn_error", {"will_retry": params.get("willRetry") is True,
+                                "message": message[:MAX_ERROR_TEXT] if isinstance(message, str) else ""})]
 
     def _n_account_rateLimits_updated(self, params):
         limits = params.get("rateLimits")

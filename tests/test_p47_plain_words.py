@@ -33,6 +33,7 @@ SENTENCES = {
     "這台 Mac 上有管理員政策或系統設定，可能蓋過 VBear 的設定，所以不啟動聊天": "chat_service.py",
     # P52-2 (v0.25.0): a tool that updated itself to a version VBear does not know
     "沒有管理員政策來源清單，不能啟動": "admin_policy.py",
+    "這個位置的用途 VBear 還不能確認": "admin_policy.py",          # R1 (v0.25.2): a candidate folder, not a confirmed policy
     "的聊天模式常數，所以不能聊天。": "chat_service.py",
     "VBear 沒有這個版本的聊天模式常數，不會啟動。": "chat_service.py",
     "沒有聊天模式的常數": "runtime/agent_sessions.py",
@@ -52,7 +53,7 @@ class ServerSentencesAreUnchanged(unittest.TestCase):
         app = (Path(__file__).resolve().parents[1] / "web" / "app.js").read_text(encoding="utf-8")
         table = app[app.index("const PLAIN_ERRORS = ["):app.index("// x: the original (a string, or an Error")]
         for word in ("今天的額度已用完（亮紅燈）", "今天剩下的額度不到 US\\$0\\.01", "無法連線到 VBear runtime", "Agent CLI 版本檢查", "manual_review", "孤兒翻譯", "聊天模式還沒有", "管理員政策或系統設定",
-                     "沒有管理員政策來源清單", "聊天模式常數", "不是 VBear 能聊天的版本"):
+                     "沒有管理員政策來源清單", "聊天模式常數", "不是 VBear 能聊天的版本", "這個位置的用途 VBear 還不能確認"):
             self.assertIn(word, table, word)
 
 

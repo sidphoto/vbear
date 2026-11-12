@@ -1079,11 +1079,34 @@ class UnknownTests(unittest.TestCase):
                        "turn/diff/updated", "item/reasoning/textDelta", "item/commandExecution/outputDelta"):
             self.assertEqual(d.feed(note(method, threadId=THREAD, metadata={"prompt": {"omnimod": "x"}})), [], method)
 
-    def test_an_error_notification_is_a_fact_without_its_message(self):
+    def test_an_error_notification_is_a_fact_with_its_message_cut_and_nothing_else_of_it(self):
         d = Drive()
         out = d.feed(note("error", threadId=THREAD, turnId="t", willRetry=True,
-                          error={"message": "oops /Users/fake-user/x", "codexErrorInfo": None}))
-        self.assertEqual(out, [("turn_error", {"will_retry": True})])
+                          error={"message": "oops /Users/fake-user/x", "codexErrorInfo": {"secret": "s3cret"}, "additionalDetails": "s4cret"}))
+        self.assertEqual(out, [("turn_error", {"will_retry": True, "message": "oops /Users/fake-user/x"})])
+        self.assertNotIn("s3cret", json.dumps(out))
+        self.assertNotIn("s4cret", json.dumps(out))
+
+    def test_the_message_is_read_from_error_message_or_from_message_and_from_nowhere_else(self):
+        d = Drive()
+        self.assertEqual(d.feed(note("error", threadId=THREAD, message="top level words")), [("turn_error", {"will_retry": False, "message": "top level words"})])
+        for params in ({"error": "just a string"}, {"error": {"message": 5}}, {"error": {}}, {"detail": "elsewhere"}, {"error": {"text": "other name"}}, {"error": [1]}, {}):
+            (kind, data), = d.feed(note("error", threadId=THREAD, **params))
+            self.assertEqual((kind, data["message"]), ("turn_error", ""), params)
+        # the nested one wins when both are there
+        (_, data), = d.feed(note("error", threadId=THREAD, message="outer", error={"message": "inner"}))
+        self.assertEqual(data["message"], "inner")
+
+    def test_the_message_is_cut_to_a_limit(self):
+        d = Drive()
+        (_, data), = d.feed(note("error", threadId=THREAD, error={"message": "m" * 100000}))
+        self.assertEqual(len(data["message"]), ccp.MAX_ERROR_TEXT)
+
+    def test_will_retry_is_true_only_for_true(self):
+        d = Drive()
+        for value, want in ((True, True), (False, False), ("true", False), (1, False), (None, False)):
+            (_, data), = d.feed(note("error", threadId=THREAD, willRetry=value, error={"message": "x"}))
+            self.assertIs(data["will_retry"], want, value)
 
     def test_junk_never_raises(self):
         d = Drive()

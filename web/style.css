@@ -2193,3 +2193,17 @@ main select { min-height: 36px; padding: 6px 10px; border: 1px solid var(--line-
 .home-first-run .first-checks > summary { cursor: pointer; color: var(--muted); padding: 4px 0; }
 .home-first-run .first-checks > summary:hover { color: var(--ink); text-decoration: underline; }
 .home-first-run .first-checks[open] > summary { margin-bottom: 8px; }
+
+/* P57 (v0.25.1): the way out for an employee whose AI tool cannot chat and which the person cannot fix by themselves (policy, a version VBear does not know): the other AIs, one button each, and a confirmation under the one pressed. */
+.switch-tool { display: grid; gap: 10px; margin: 12px 0; overflow-wrap: anywhere; text-align: left; }
+.switch-tool p { margin: 0; }
+.switch-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.switch-opt { display: grid; gap: 4px; justify-items: start; }
+.switch-confirm { display: grid; gap: 8px; width: 100%; box-sizing: border-box; margin-top: 6px; padding: 12px 14px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--panel); }
+.switch-confirm:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch-confirm .row { flex-wrap: wrap; }
+.switch-error { width: 100%; }
+@media (max-width: 520px) {
+  .switch-tool .btn { width: 100%; justify-content: center; white-space: normal; }
+  .switch-opt { justify-items: stretch; }
+}

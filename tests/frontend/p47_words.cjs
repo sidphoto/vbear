@@ -217,6 +217,16 @@ const ENGLISH = /[A-Za-z]{4,}/;
     assert.strictEqual(p.detail, policy);
   });
 
+  await test("fix47 plainWords (R1): a folder that only might be an administrator source is not said to be one; the server's sentence stays whole behind 「技術細節」", () => {
+    const unconfirmed = "這台 Mac 上有管理員政策或系統設定，可能蓋過 VBear 的設定，所以不啟動聊天。（/Library/Application Support/Antigravity 這個位置的用途 VBear 還不能確認（它可能是管理員設定，也可能只是一般的安裝資料），為了安全先不啟動聊天。VBear 不會替你動它；等 VBear 確認它的用途後才能放行。）";
+    const w = evalIn(`plainWords(${JSON.stringify(unconfirmed)})`);
+    assert.strictEqual(w.known, true);
+    assert.ok(w.text.includes("還不能確認") && w.text.includes("不能用它聊天") && !w.text.includes("有管理員設定"), w.text);
+    assert.strictEqual(w.detail, unconfirmed);
+    const bare = evalIn(`plainWords(${JSON.stringify("/Library/Application Support/Antigravity 這個位置的用途 VBear 還不能確認（它可能是管理員設定）。")})`);
+    assert.strictEqual(bare.known, true);
+  });
+
   // ---- plainNotice / notice / toast -------------------------------------------------------------------------------------
   await test("plainNotice: the plain words in the box, the original only behind 「技術細節」", () => {
     for (const raw of [...RUNTIME_DOWN, "Agent CLI 版本檢查回傳失敗", "審查需要人工處理（manual_review）"]) {

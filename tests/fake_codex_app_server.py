@@ -23,9 +23,11 @@ Configuration: the JSON file named by $FAKE_CODEX_CONFIG (else $HOME/fake-codex.
 
 ``start`` is used when VBear writes ``thread/start``, ``resume`` when it writes ``thread/resume``. ``turns`` names the
 recorded turns to play, one for each ``turn/start``, in order (default: all of them); an entry is a number or
-{"turn": n, "inject": [message, ...], "hold": true}, the messages printed right after the answer to ``turn/start`` (a
-server request among them is waited for until VBear answers it); ``hold`` then stops the turn there, printing nothing
-more until VBear writes ``turn/interrupt`` (which ends it as interrupted) or closes stdin. The turn counter is kept in ``<config>.state.json`` so that a
+{"turn": n, "inject": [message, ...], "hold": true, "end": {"status": "failed", "error": {...}}}, the messages printed
+right after the answer to ``turn/start`` (a server request among them is waited for until VBear answers it); ``hold`` then
+stops the turn there, printing nothing more until VBear writes ``turn/interrupt`` (which ends it as interrupted) or closes
+stdin; ``end`` rewrites the recorded ``turn/completed`` to that status and error (the fake's own, not a recording: how a
+turn that Codex could not finish ends). The turn counter is kept in ``<config>.state.json`` so that a
 process that resumes the thread goes on with the next turn. Everything it is given and does goes to
 ``<config>.log.jsonl``.
 
@@ -301,6 +303,7 @@ class Fake:
         entry = entries[index]
         number, inject = (entry, []) if isinstance(entry, int) else (entry["turn"], entry.get("inject", []))
         hold = isinstance(entry, dict) and entry.get("hold") is True
+        end = entry.get("end") if isinstance(entry, dict) and isinstance(entry.get("end"), dict) else None
         self.rows = self.parsed.turns[number]
         start_id = self.rows[0][1]["id"]
         self.idmap[start_id] = msg["id"]
@@ -308,6 +311,10 @@ class Fake:
         try:
             for d, ln in self.rows[1:]:
                 if d == "out":
+                    if end is not None and isinstance(ln, dict) and ln.get("method") == "turn/completed":
+                        ln = copy.deepcopy(ln)
+                        ln["params"]["turn"]["status"] = end.get("status", "failed")
+                        ln["params"]["turn"]["error"] = end.get("error")
                     self.emit(ln)
                     if ccf.is_response(ln) and ln["id"] == start_id:
                         for extra in inject:

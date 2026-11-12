@@ -1,4 +1,4 @@
-"""P46-2: the administrator policy sources of AGY 1.5.3 (vbear/admin_policy.py). Every check runs against a temporary root; the real
+"""P46-2 / P56-2: the administrator policy sources of AGY 1.5.3 and 1.5.6 (vbear/admin_policy.py). Every check runs against a temporary root; the real
 /etc and /Library are never looked at, and no AGY is started."""
 
 import os
@@ -11,6 +11,8 @@ from unittest import mock
 from vbear import admin_policy as ap
 
 AGY = "1.5.3"
+AGY_156 = "1.5.6"
+APP_SUPPORT = "Library/Application Support/Antigravity"
 PREFS = "Library/Managed Preferences"
 
 
@@ -41,11 +43,82 @@ class AgyPolicyTests(unittest.TestCase):
         return ap.check_agy(version, str(self.root))
 
     def test_the_list_is_the_one_the_plan_names(self):
-        self.assertEqual(set(ap.AGY_SOURCES), {AGY})
+        self.assertEqual(set(ap.AGY_SOURCES), {AGY, AGY_156})       # (v0.25.2 added 1.5.6; 1.5.3's entry below is unchanged)
         spec = ap.AGY_SOURCES[AGY]
         self.assertEqual(tuple(spec["paths"]), ("etc/antigravity",))
         self.assertEqual(spec["domain"], "com.google.antigravity")
         self.assertEqual(tuple(spec["home_paths"]), ())
+
+    def test_1_5_6_has_the_list_of_1_5_3_and_one_more_place_the_strings_of_the_real_program_name(self):
+        """The strings of the real 1.5.6 hold /Library/Application Support/Antigravity once; the 1.5.3 reading left that fragment out as
+        unexplained. For 1.5.6 it is a source (only stricter); 1.5.3's list does not change."""
+        old, new = ap.AGY_SOURCES[AGY], ap.AGY_SOURCES[AGY_156]
+        self.assertEqual(tuple(new["paths"]), ("etc/antigravity", APP_SUPPORT))
+        self.assertTrue(set(old["paths"]) < set(new["paths"]), "a later version never has fewer sources than the earlier one")
+        self.assertEqual(new["domain"], old["domain"])
+        self.assertEqual(tuple(new["home_paths"]), tuple(old["home_paths"]))
+
+    def test_1_5_6_refuses_on_the_new_place_and_1_5_3_does_not(self):
+        self.assertTrue(self.agy(AGY_156).ok)
+        for rel, directory in ((APP_SUPPORT, True), (f"{APP_SUPPORT}/anything.json", False), (f"{APP_SUPPORT}/sub/deeper", False)):
+            with self.subTest(source=rel):
+                self._cleanup()
+                self.root.mkdir(parents=True)
+                p = self.make(rel, directory=directory)
+                if not directory:
+                    p.chmod(0o000)
+                r = self.agy(AGY_156)
+                self.assertFalse(r.ok)
+                self.assertTrue(r.found)
+                self.assertIn("管理員", r.reason())
+                self.assertTrue(self.agy(AGY).ok, "1.5.3's list is the one of v0.25.0")
+        self._cleanup()
+        self.root.mkdir(parents=True)
+        (self.root / "Library/Application Support").mkdir(parents=True)
+        (self.root / APP_SUPPORT).symlink_to("/nonexistent-target")        # a dangling link is a source too
+        self.assertFalse(self.agy(AGY_156).ok)
+
+    def test_the_new_place_is_said_to_be_unconfirmed_not_to_be_an_administrator_policy(self):          # R1
+        """Nothing shows what ``/Library/Application Support/Antigravity`` is, so the sentence does not claim a policy: it says the use
+        is not confirmed and that this is why the chat does not start. The confirmed sources keep their old sentence."""
+        self.make(APP_SUPPORT, directory=True)
+        r = self.agy(AGY_156)
+        self.assertFalse(r.ok)
+        self.assertEqual(r.found, ["/" + APP_SUPPORT])
+        self.assertEqual(r.unconfirmed, ["/" + APP_SUPPORT])
+        self.assertIn("/" + APP_SUPPORT, r.reason())
+        self.assertIn("還不能確認", r.reason())
+        self.assertNotIn("存在管理員政策", r.reason())
+        self.make("etc/antigravity", directory=True)
+        r = self.agy(AGY_156)
+        self.assertEqual(r.found, ["/etc/antigravity", "/" + APP_SUPPORT])
+        self.assertEqual(r.unconfirmed, ["/" + APP_SUPPORT])
+        self.assertIn("存在管理員政策或系統設定：/etc/antigravity", r.reason())
+        self.assertIn("還不能確認", r.reason())
+        self._cleanup()
+        self.root.mkdir(parents=True)
+        self.make("etc/antigravity", directory=True)
+        r = self.agy(AGY)
+        self.assertEqual((r.unconfirmed, r.reason()), ([], "存在管理員政策或系統設定：/etc/antigravity。請使用者或系統管理員處理後再啟動。"))
+
+    def test_1_5_6_cannot_start_when_the_new_place_cannot_be_looked_at(self):
+        support = self.make("Library/Application Support", directory=True)
+        support.chmod(0o000)
+        r = self.agy(AGY_156)
+        support.chmod(0o755)
+        self.assertFalse(r.ok)
+        self.assertTrue(r.problems)
+        self.assertIn("無法確認", r.problems[0])
+        self.assertTrue(self.agy(AGY_156).ok)
+
+    def test_1_5_6_keeps_every_source_of_1_5_3(self):
+        for rel, directory in (("etc/antigravity", True), ("etc/antigravity/admin_settings.json", False),
+                               (f"{PREFS}/com.google.antigravity.plist", False), (f"{PREFS}/alice/com.google.antigravity.plist", False)):
+            with self.subTest(source=rel):
+                self._cleanup()
+                self.root.mkdir(parents=True)
+                self.make(rel, directory=directory)
+                self.assertFalse(self.agy(AGY_156).ok)
 
     def test_a_clean_root_passes_and_other_vendors_do_not_matter(self):
         self.assertTrue(self.agy().ok)

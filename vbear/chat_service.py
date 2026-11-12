@@ -97,9 +97,10 @@ CODE_TEXT: dict[str, tuple[int, str]] = {
     "codex_home": (409, "聊天用的 Codex 資料夾不能用（裡面有不是 VBear 放的設定檔、太大，或路徑不安全），VBear 不使用它。"),
     "agy_home": (409, "聊天用的 AGY 資料夾不能用（裡面有不是 VBear 放的設定、太大，或路徑不安全），VBear 不使用它。"
                       "請到 VBear 的狀態資料夾，把不是 VBear 放的那個項目移走後再試。"),
-    "agy_hooks": (409, "你自己的 AGY 設定裡有會自動執行的指令（hooks）。AGY 聊天會載入它們，VBear 管不到，所以不啟動。"
-                       "請把 ~/.agents/hooks.json 移走後再試（VBear 不會替你動它）。"),
-    "agy_workdir": (409, "員工的工作資料夾最上層有 AGY 會當成設定或規則來讀的項目（.agents、.agent、.gemini、GEMINI.md、AGENTS.md），"
+    "agy_hooks": (409, "你自己的 AGY 設定，或聊天資料夾往上的資料夾裡，有會自動執行的指令（hooks）或外掛。AGY 聊天會載入它們，VBear 管不到，所以不啟動。"
+                       "請把括號裡寫的那一項（例如 ~/.agents/hooks.json；~/.agents、~/.agent、~/_agents、~/_agent 裡的 hooks.json、plugins.json 和 plugins 都算）移走後再試，"
+                       "或把 VBear 的資料夾（VBEAR_HOME）放到別處；VBear 不會替你動它。"),
+    "agy_workdir": (409, "員工的工作資料夾最上層有 AGY 會當成設定或規則來讀的項目（.agents、.agent、_agents、_agent、.gemini、GEMINI.md、AGENTS.md），"
                          "或有指向資料夾以外的連結，VBear 不讓 AGY 在那裡聊天。請把它移走後再試。"),
     "agy_version": (409, "讀不到 AGY 的版本，或 VBear 不能拿這個 AGY 來聊天（程式不安全、版本不在 VBear 認得的清單裡）。"),
     "manual_review": (409, "這個聊天之前的程序還沒確認已經結束，需要人工檢查 VBear 的狀態資料夾，之後才能再送訊息。"),
