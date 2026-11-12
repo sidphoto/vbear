@@ -512,7 +512,9 @@ MAX_APPEND_PROMPT = 2000                                  # agent_profiles.MAX_I
 # MAX_APPEND_PROMPT) and the memory paragraph (runtime/memory_rules.MAX_BLOCK). Only a chat's manifest has this room;
 # the added prompt of a full-mode launch stays at MAX_APPEND_PROMPT.
 # P43-1: 9,000 (the card's 2,000, the memory's 6,000 and the shared folder's paragraph of at most 1,000).
-MAX_CHAT_APPEND_PROMPT = 9000
+# P58 (ADR 0020): 9,500, 500 more for the employee's identity paragraph (at most memory_rules.MAX_IDENTITY_BLOCK = 400) and the blank
+# lines between the paragraphs.
+MAX_CHAT_APPEND_PROMPT = 9500
 
 
 def append_prompt_problem(value, limit: int = MAX_APPEND_PROMPT) -> str | None:

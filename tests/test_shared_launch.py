@@ -151,12 +151,12 @@ class TheOnePathTests(LaunchCase):
 
 
 class PromptRoomTests(LaunchCase):
-    def test_a_chat_may_append_nine_thousand_characters_and_full_mode_two_thousand(self):
-        self.assertEqual((asess.MAX_CHAT_APPEND_PROMPT, asess.MAX_APPEND_PROMPT), (9000, 2000))
-        m = self.prepare(append_prompt="字" * 9000)
-        self.assertEqual(len(asess.chat_argv(m)[asess.chat_argv(m).index("--append-system-prompt") + 1]), 9000)
+    def test_a_chat_may_append_nine_and_a_half_thousand_characters_and_full_mode_two_thousand(self):
+        self.assertEqual((asess.MAX_CHAT_APPEND_PROMPT, asess.MAX_APPEND_PROMPT), (9500, 2000))      # P58: 500 more than v0.25.2, for the identity paragraph
+        m = self.prepare(append_prompt="字" * 9500)
+        self.assertEqual(len(asess.chat_argv(m)[asess.chat_argv(m).index("--append-system-prompt") + 1]), 9500)
         with self.assertRaises(asess.LaunchRefused):
-            self.prepare(append_prompt="字" * 9001)
+            self.prepare(append_prompt="字" * 9501)
         self.assertIsNone(asess.append_prompt_problem("字" * 2000))
         self.assertIsNotNone(asess.append_prompt_problem("字" * 2001), "full mode's room is unchanged")
 

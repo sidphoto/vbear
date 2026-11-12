@@ -98,3 +98,13 @@ def script(name: str, index: int, *, init: dict | None = None) -> list[dict]:
 def clean_init() -> dict:
     """What system/init says with VBear's settings in force: no extra folders (P36-0 fact 8)."""
     return {"additional_directories": []}
+
+
+def without_identity(text):
+    """P58 (v0.25.3): a chat's system prompt now starts with the one sentence that tells the employee its name. This is what is left of ``text`` without
+    it (None when nothing is), for the tests that are about the card's instructions, the memory or the shared folder. The sentence itself is tested in
+    tests/test_p58_identity.py."""
+    if text is None or not text.startswith("[VBear 身分] "):
+        return text
+    _, sep, rest = text.partition("\n\n")
+    return rest if sep else None

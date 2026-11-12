@@ -64,7 +64,7 @@ Never, whatever the person ticked in 「自己動手」:
           read it (``conf.advanced_mode``) and as the body of the settings switch's POST to /api/config. (This file, ``AdvancedModeIsADisplay`` and ``AdvancedModeChangesNothingElse``.)
      15b  nothing new is asked of the server and nothing about the data changes: the ``/api/`` paths ``web/app.js`` uses are a subset of those
           of v0.20.0, the routes of ``vbear/server.py`` are those of v0.20.0, and the kinds of a chat's record (``chat_store.KINDS``,
-          ``_OPTIONAL``, ``_ALTERNATIVES``) and their fields are those of v0.20.0. (This file, ``NothingNewIsAsked``.)
+          ``_OPTIONAL``, ``_ALTERNATIVES``) and their fields are those of v0.20.0, plus the one optional ``process_started.identity`` that P58 (rule 22, ADR 0020) added and ``CHAT_OPTIONAL_ADDED`` names. (This file, ``NothingNewIsAsked``.)
      15c  the home page sends nothing by itself: only the press of 「送出」 sends one message (P47-2, tests/frontend/p47_home.cjs).
      15d  the spending limit and a routine are changed only by the person's press: the settings page sends nothing when it loads, the limit is
           saved by 「儲存」 alone, a routine kept on goes through ``confirmInPage`` when 「自己動手」 item 3 is on (P47-3, tests/frontend/p47_settings.cjs).
@@ -139,6 +139,15 @@ Never, whatever the person ticked in 「自己動手」:
           the tail is only counted, cut and handed to the error (this file, ``SetupTryStderrRules``, with a bad sample for each way out, and tests/test_setup_try_failures.py, which looks for the words of a
           made-up error output in the result, in the logs and in every file the program wrote).
      15b is not changed and still passes: v0.25.1 uses no ``/api/`` path that v0.20.0 did not. P57's rule: this file, ``Guard21FilesAreThere``, checks that these files exist and carry the number of their rule.
+
+  22. (P58, ADR 0020) v0.25.3 tells an employee its own name and position in the system prompt of every new chat. It changes what is sent to the AI company, so the paragraph is held to three rules on
+      the source (this file, ``EmployeeNameRules``, with a bad sample for each way out; the behaviour is tested in tests/test_p58_identity.py):
+     22a  the paragraph is always FIRST in the system prompt: ``memory_rules.combine`` lists it before the card's instructions, the memory and the shared folder, and every ``combine`` call in
+          ``vbear/runtime/daemon_chat.py`` (Claude Code's appended prompt, Codex's developer instructions, AGY's appended prompt) hands it over as the fourth argument.
+     22b  the name is always cleaned: the console takes the card's name only through ``memory_rules.identity_parts`` (``ChatService._identity``) and puts nothing else in the ``identity`` field; the daemon
+          reads that field only to hand it to ``memory_rules.prepare_identity``, which builds the paragraph through ``identity_block``, which checks its words against ``identity_parts``.
+     22c  the paragraph is a fixed string: ``identity_block`` builds it only from the ``IDENTITY_*`` constants with ``.format`` (no f-string, no ``%``, no other concatenation), and those constants take
+          only the four fields ``name``, ``position``, ``tool`` and ``label``; nothing a person writes can bring its own wording.
 
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
 ``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py``, ``vbear/skillbook*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
@@ -2462,6 +2471,8 @@ CHAT_KINDS_V0200 = {
     "card_edit_sent": ("card_id", "text"),
 }
 CHAT_OPTIONAL_V0200 = {"turn_ended": ("estimate", "tokens"), "user_message": ("origin",)}
+# P58 (ADR 0020): the one field the record gained since v0.20.0, named here so that any other new field is still caught: whether a new process was told the employee's name.
+CHAT_OPTIONAL_ADDED = {"process_started": ("identity",)}
 CHAT_ALTERNATIVES_V0200 = {"session_ready": ("claude_code_version", "cli_version")}
 API_PREFIX = re.compile(r"""["'`](/api/[^"'`$\s]*)""")
 
@@ -2501,7 +2512,7 @@ class NothingNewIsAsked(unittest.TestCase):
         from vbear.runtime import chat_store
         shape = chat_record_shape(chat_store.KINDS, chat_store._OPTIONAL, chat_store._ALTERNATIVES)
         self.assertEqual(shape["kinds"], {k: tuple(sorted(v)) for k, v in CHAT_KINDS_V0200.items()})
-        self.assertEqual(shape["optional"], {k: tuple(sorted(v)) for k, v in CHAT_OPTIONAL_V0200.items()})
+        self.assertEqual(shape["optional"], {k: tuple(sorted(v)) for k, v in {**CHAT_OPTIONAL_V0200, **CHAT_OPTIONAL_ADDED}.items()})
         self.assertEqual(shape["alternatives"], {k: tuple(sorted(v)) for k, v in CHAT_ALTERNATIVES_V0200.items()})
 
     def test_15b_the_scans_fire_on_small_made_up_sources(self):
@@ -2520,6 +2531,8 @@ class NothingNewIsAsked(unittest.TestCase):
         self.assertEqual(base["kinds"], {k: tuple(sorted(v)) for k, v in CHAT_KINDS_V0200.items()}, "the helper reads a table the way the test does")
         more = chat_record_shape({**{k: dict.fromkeys(v) for k, v in kinds.items()}, "spending": {"usd": None}}, {}, {})
         self.assertNotEqual(more["kinds"], base["kinds"], "a new kind is caught")
+        extra = {**{k: dict.fromkeys(v) for k, v in CHAT_OPTIONAL_V0200.items()}, **{k: dict.fromkeys(v) for k, v in CHAT_OPTIONAL_ADDED.items()}, "reply": {"extra": None}}
+        self.assertNotEqual(chat_record_shape({}, extra, {})["optional"], {k: tuple(sorted(v)) for k, v in {**CHAT_OPTIONAL_V0200, **CHAT_OPTIONAL_ADDED}.items()}, "a new optional field that is not named is caught")
         fewer = {k: dict.fromkeys(v) for k, v in kinds.items()}
         fewer["reply"] = {"text": None, "turn": None, "truncated": None, "extra": None}
         self.assertNotEqual(chat_record_shape(fewer, {}, {})["kinds"], base["kinds"], "a new field of a kind is caught")
@@ -3704,6 +3717,249 @@ class Guard21FilesAreThere(unittest.TestCase):
         self.assertIn("// ---- end of P57 switch tool", app)
         self.assertEqual(len(re.findall(r"switchToolConfirm\(", app)), 2)
         self.assertIn("之後跟他說的話會送到", app)
+
+
+# ---- 22: an employee is told its own name (P58, v0.25.3) ----------------------------------------------------------------------------------------------------
+
+def _function(tree, name):
+    found = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == name]
+    return found[0] if len(found) == 1 else None
+
+
+def identity_first_problems(rules_source, daemon_source):
+    """22a: ``combine`` lists the identity paragraph before everything else, and each ``combine`` call of the daemon passes ``named`` as its fourth argument (at least three: Claude, Codex, AGY)."""
+    found = []
+    combine = _function(ast.parse(rules_source), "combine")
+    if combine is None:
+        return ["memory_rules.combine is not there exactly once"]
+    lists = [n for n in ast.walk(combine) if isinstance(n, ast.Tuple) and any(isinstance(e, ast.Name) and e.id == "identity_block" for e in n.elts)]
+    if len(lists) != 1 or not isinstance(lists[0].elts[0], ast.Name) or lists[0].elts[0].id != "identity_block":
+        found.append("combine does not list identity_block first")
+    calls = [n for n in ast.walk(ast.parse(daemon_source)) if isinstance(n, ast.Call) and _call_name(n) == "combine"]
+    if len(calls) < 3:
+        found.append(f"daemon_chat has {len(calls)} combine calls, not three")
+    for call in calls:
+        fourth = call.args[3] if len(call.args) > 3 else None
+        if not (isinstance(fourth, ast.Name) and fourth.id == "named") or call.keywords:
+            found.append(f"a combine call (line {call.lineno}) does not pass the identity paragraph as its fourth argument")
+    return found
+
+
+def identity_clean_problems(service_source, rules_source, daemon_source):
+    """22b: the card's name reaches the field only through ``identity_parts``; the daemon reads the field only to hand it to ``prepare_identity``; the builder checks against ``identity_parts``."""
+    found = []
+    tree = ast.parse(service_source)
+    helper = _function(tree, "_identity")
+    if helper is None:
+        return ["ChatService._identity is not there exactly once"]
+    returns = [n.value for n in ast.walk(helper) if isinstance(n, ast.Return)]
+    if not returns or not all(v is None or (isinstance(v, ast.Constant) and v.value is None)
+                              or (isinstance(v, ast.Call) and _call_name(v) == "identity_parts") for v in returns):
+        found.append("_identity returns something other than identity_parts(...) or None")
+    setters = 0
+    for func in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)):
+        for assign in (n for n in ast.walk(func) if isinstance(n, ast.Assign)):
+            for target in assign.targets:
+                if isinstance(target, ast.Subscript) and isinstance(target.slice, ast.Constant) and target.slice.value == "identity":
+                    setters += 1
+                    v = assign.value
+                    if not (isinstance(v, ast.Name) and v.id == "identity"):
+                        found.append(f"the identity field is set from something other than the cleaned value (line {assign.lineno})")
+                    own = [n for n in ast.walk(func) if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name) and n.targets[0].id == "identity"]
+                    if not own or not all(isinstance(n.value, ast.Call) and _call_name(n.value) == "_identity" for n in own):
+                        found.append(f"the value sent in {func.name} is not what _identity made")
+    if setters != 1:
+        found.append(f"the identity field is set {setters} times, not once")
+    rules = ast.parse(rules_source)
+    builder = _function(rules, "identity_block")
+    if builder is None or not any(isinstance(n, ast.Call) and _call_name(n) == "identity_parts" for n in ast.walk(builder)):
+        found.append("identity_block does not check its words against identity_parts")
+    parts = _function(rules, "identity_parts")
+    if parts is None or not any(isinstance(n, ast.Call) and _call_name(n) == "_clean_word" for n in ast.walk(parts)):
+        found.append("identity_parts does not clean through _clean_word")
+    prep = _function(rules, "prepare_identity")
+    if prep is None or not any(isinstance(n, ast.Call) and _call_name(n) == "identity_block" for n in ast.walk(prep)):
+        found.append("prepare_identity does not build through identity_block")
+    daemon = ast.parse(daemon_source)
+    parents = _parents(daemon)
+    reads = 0
+    for node in ast.walk(daemon):
+        key = None
+        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and node.value.id == "req" and isinstance(node.slice, ast.Constant):
+            key = node.slice.value
+        elif isinstance(node, ast.Call) and _call_name(node) == "get" and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) \
+                and node.func.value.id == "req" and node.args and isinstance(node.args[0], ast.Constant):
+            key = node.args[0].value
+        if key != "identity":
+            continue
+        reads += 1
+        parent = parents.get(node)
+        ok = (isinstance(parent, ast.Call) and _call_name(parent) == "prepare_identity") or (isinstance(parent, ast.Compare) and any(isinstance(c, ast.Constant) and c.value is None for c in parent.comparators))
+        if not ok:
+            found.append(f"the daemon reads req['identity'] for something other than prepare_identity (line {node.lineno})")
+    if reads < 2:
+        found.append("the daemon does not read the field the way the guard expects")
+    return found
+
+
+_ALLOWED_FIELDS = {"name", "position", "tool", "label"}
+
+
+def identity_fixed_problems(rules_source):
+    """22c: the paragraph is built from the IDENTITY_* constants and ``.format`` of them, nothing else; each constant is plain text with only the four fields."""
+    found = []
+    tree = ast.parse(rules_source)
+    consts = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and node.targets[0].id.startswith("IDENTITY_"):
+            consts[node.targets[0].id] = node.value
+    for name in ("IDENTITY_HEAD", "IDENTITY_NAME", "IDENTITY_POSITION", "IDENTITY_REST"):
+        if name not in consts:
+            found.append(f"{name} is not a constant")
+    for name, value in consts.items():
+        if name in ("IDENTITY_TOOLS", "IDENTITY_LABEL"):
+            continue
+        if not all(isinstance(n, (ast.Constant, ast.Expression, ast.Load)) for n in ast.walk(value)) or not isinstance(value, ast.Constant):
+            found.append(f"{name} is not a plain string")
+            continue
+        fields = set(re.findall(r"\{([^{}]*)\}", value.value))
+        if fields - _ALLOWED_FIELDS:
+            found.append(f"{name} takes a field other than {sorted(_ALLOWED_FIELDS)}")
+    builder = _function(tree, "identity_block")
+    if builder is None:
+        return found + ["identity_block is not there exactly once"]
+    doc = builder.body[0].value if builder.body and isinstance(builder.body[0], ast.Expr) else None
+    for node in ast.walk(builder):
+        if node is doc:
+            continue
+        if isinstance(node, ast.JoinedStr):
+            found.append(f"identity_block uses an f-string (line {node.lineno})")
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+            found.append(f"identity_block uses % (line {node.lineno})")
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            for side in (node.left, node.right):
+                if isinstance(side, ast.BinOp):
+                    continue
+                if not ((isinstance(side, ast.Name) and side.id.startswith("IDENTITY_"))
+                        or (isinstance(side, ast.Call) and isinstance(side.func, ast.Attribute) and side.func.attr == "format"
+                            and isinstance(side.func.value, ast.Name) and side.func.value.id.startswith("IDENTITY_"))
+                        or (isinstance(side, ast.Name) and side.id == "position")):
+                    found.append(f"identity_block adds something other than an IDENTITY_ constant (line {node.lineno})")
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in ("format", "join", "replace"):
+            if not (node.func.attr == "format" and isinstance(node.func.value, ast.Name) and node.func.value.id.startswith("IDENTITY_")):
+                found.append(f"identity_block calls .{node.func.attr} on something other than an IDENTITY_ constant (line {node.lineno})")
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value not in ("身分說明的格式不符", "name", "position") and len(node.value) > 12:
+            found.append(f"identity_block holds wording of its own (line {node.lineno})")
+    return found
+
+
+class EmployeeNameRules(unittest.TestCase):
+    """22: the real sources keep the three rules, and each way out is caught on a made-up bad source."""
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    RULES = (
+        "def combine(instructions, memory_block, shared_block=None, identity_block=None):\n"
+        "    parts = [x for x in (identity_block, instructions, memory_block, shared_block) if x is not None]\n"
+        "    return '\\n\\n'.join(parts) if parts else None\n"
+        "IDENTITY_HEAD = '[x] '\nIDENTITY_NAME = 'a {name}'\nIDENTITY_POSITION = ', {position}'\nIDENTITY_REST = 'b {tool} {label}'\n"
+        "IDENTITY_TOOLS = {'claude-chat': 'Claude Code'}\nIDENTITY_LABEL = {True: 'x', False: 'y'}\n"
+        "def _clean_word(v, n):\n    return v\n"
+        "def identity_parts(name, position):\n    return {'name': _clean_word(name, 1), 'position': None}\n"
+        "def identity_block(parts, engine):\n"
+        "    if identity_parts(parts['name'], parts['position']) != parts:\n        raise ValueError('x')\n"
+        "    position = IDENTITY_POSITION.format(position=parts['position'])\n"
+        "    return IDENTITY_HEAD + IDENTITY_NAME.format(name=parts['name']) + position + IDENTITY_REST.format(tool=IDENTITY_TOOLS[engine], label=IDENTITY_LABEL[True])\n"
+        "def prepare_identity(identity, engine):\n    return identity_block(identity, engine)\n")
+    DAEMON = (
+        "def op(req):\n    named = None\n    if req.get('identity') is not None:\n        named = prepare_identity(req['identity'], 'x')\n"
+        "def a():\n    return memory_rules.combine(i, m, s, named)\n"
+        "def b():\n    return memory_rules.combine(i, m, s, named)\n"
+        "def c():\n    return memory_rules.combine(i, m, s, named)\n")
+    SERVICE = (
+        "class ChatService:\n"
+        "    @staticmethod\n    def _identity(profile):\n        if not profile:\n            return None\n"
+        "        return memory_rules.identity_parts(profile.get('name'), 'x')\n"
+        "    def _send(self, profile, fields):\n        identity = self._identity(profile)\n        if identity is not None:\n            fields['identity'] = identity\n")
+
+    def read(self, *parts):
+        return self.ROOT.joinpath(*parts).read_text(encoding="utf-8")
+
+    def test_22_the_real_sources_keep_all_three_rules(self):
+        rules, daemon, service = (self.read("vbear", "runtime", "memory_rules.py"), self.read("vbear", "runtime", "daemon_chat.py"), self.read("vbear", "chat_service.py"))
+        self.assertEqual(identity_first_problems(rules, daemon), [])
+        self.assertEqual(identity_clean_problems(service, rules, daemon), [])
+        self.assertEqual(identity_fixed_problems(rules), [])
+
+    def test_22_the_good_samples_pass(self):
+        self.assertEqual(identity_first_problems(self.RULES, self.DAEMON), [])
+        self.assertEqual(identity_clean_problems(self.SERVICE, self.RULES, self.DAEMON), [])
+        self.assertEqual(identity_fixed_problems(self.RULES), [])
+
+    def test_22a_catches_each_way_the_paragraph_could_stop_being_first(self):
+        bad_rules = {
+            "last": self.RULES.replace("(identity_block, instructions, memory_block, shared_block)", "(instructions, memory_block, shared_block, identity_block)"),
+            "second": self.RULES.replace("(identity_block, instructions, memory_block, shared_block)", "(instructions, identity_block, memory_block, shared_block)"),
+            "gone": "def combine(instructions, memory_block, shared_block=None):\n    return None\n",
+        }
+        for what, source in bad_rules.items():
+            self.assertNotEqual(identity_first_problems(source, self.DAEMON), [], what)
+        bad_daemon = {
+            "in front of the rest": self.DAEMON.replace("combine(i, m, s, named)", "combine(named, i, m, s)", 1),
+            "left out": self.DAEMON.replace("combine(i, m, s, named)", "combine(i, m, s)", 1),
+            "by keyword": self.DAEMON.replace("combine(i, m, s, named)", "combine(i, m, s, identity_block=named)", 1),
+            "another value": self.DAEMON.replace("combine(i, m, s, named)", "combine(i, m, s, req['identity'])", 1),
+            "only two engines": self.DAEMON.replace("def c():\n    return memory_rules.combine(i, m, s, named)\n", ""),
+        }
+        for what, source in bad_daemon.items():
+            self.assertNotEqual(identity_first_problems(self.RULES, source), [], what)
+
+    def test_22b_catches_each_way_the_name_could_skip_the_cleaning(self):
+        bad_service = {
+            "the raw name": self.SERVICE.replace("memory_rules.identity_parts(profile.get('name'), 'x')", "{'name': profile.get('name'), 'position': None}"),
+            "set from the card": self.SERVICE.replace("fields['identity'] = identity", "fields['identity'] = profile['name']"),
+            "not from the helper": self.SERVICE.replace("identity = self._identity(profile)", "identity = profile.get('name')"),
+            "no helper": "class ChatService:\n    pass\n",
+        }
+        for what, source in bad_service.items():
+            self.assertNotEqual(identity_clean_problems(source, self.RULES, self.DAEMON), [], what)
+        bad_rules = {
+            "builder skips the check": self.RULES.replace("    if identity_parts(parts['name'], parts['position']) != parts:\n        raise ValueError('x')\n", ""),
+            "parts skip the cleaner": self.RULES.replace("'name': _clean_word(name, 1)", "'name': name"),
+            "prepare skips the builder": self.RULES.replace("    return identity_block(identity, engine)\n", "    return str(identity)\n"),
+        }
+        for what, source in bad_rules.items():
+            self.assertNotEqual(identity_clean_problems(self.SERVICE, source, self.DAEMON), [], what)
+        bad_daemon = {
+            "used raw": self.DAEMON.replace("prepare_identity(req['identity'], 'x')", "str(req['identity'])"),
+            "read elsewhere": self.DAEMON + "def d(req):\n    return log(req['identity'])\n",
+        }
+        for what, source in bad_daemon.items():
+            self.assertNotEqual(identity_clean_problems(self.SERVICE, self.RULES, source), [], what)
+
+    def test_22c_catches_each_way_the_paragraph_could_stop_being_a_fixed_string(self):
+        bad = {
+            "f-string": self.RULES.replace("    return IDENTITY_HEAD + ", "    return f'{parts[\"name\"]} ' + IDENTITY_HEAD + "),
+            "percent": self.RULES.replace("    return IDENTITY_HEAD + ", "    return 'x %s' % parts['name'] + IDENTITY_HEAD + "),
+            "wording of its own": self.RULES.replace("    return IDENTITY_HEAD + ", "    return 'a sentence that is the builder own' + IDENTITY_HEAD + "),
+            "a free field": self.RULES.replace("IDENTITY_NAME = 'a {name}'", "IDENTITY_NAME = 'a {custom}'"),
+            "a format on the person's text": self.RULES.replace("    return IDENTITY_HEAD + ", "    return parts['name'].format(x=1) + IDENTITY_HEAD + "),
+            "a join": self.RULES.replace("    return IDENTITY_HEAD + ", "    return ''.join([parts['name']]) + IDENTITY_HEAD + "),
+            "a constant that is computed": self.RULES.replace("IDENTITY_REST = 'b {tool} {label}'", "IDENTITY_REST = 'b' + 'c {tool} {label}'"),
+            "a constant gone": self.RULES.replace("IDENTITY_HEAD = '[x] '\n", ""),
+        }
+        for what, source in bad.items():
+            self.assertNotEqual(identity_fixed_problems(source), [], what)
+
+    def test_22_the_description_and_the_tests_are_there(self):
+        text = self.read("tests", "test_autonomy_guard.py")
+        for rule in "abc":
+            self.assertIn(f"     22{rule}  ", text, rule)
+        self.assertIn("class EmployeeNameRules", text)
+        spec = self.read("tests", "test_p58_identity.py")
+        self.assertIn("class ClaudeIdentityTests", spec)
+        self.assertIn("class CodexIdentityTests", spec)
+        self.assertIn("class AgyIdentityTests", spec)
 
 
 if __name__ == "__main__":

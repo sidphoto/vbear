@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from tests import test_chat_api as tca
+from tests.chat_fixtures import without_identity
 from tests.test_chat_daemon import clean
 from vbear import chat_service, config as cfg
 from vbear.runtime import chat_store as cs, cli_versions, memory_rules as mr, shared_rules as sr
@@ -39,7 +40,7 @@ class ChatSharedCase(tca.ApiCase):
 
     def appended(self, index=-1):
         argv = self.starts()[index]["argv"]
-        return argv[argv.index("--append-system-prompt") + 1] if "--append-system-prompt" in argv else None
+        return without_identity(argv[argv.index("--append-system-prompt") + 1] if "--append-system-prompt" in argv else None)      # P58: the name's sentence is tests/test_p58_identity.py's
 
     def allow_write(self):
         argv = self.starts()[-1]["argv"]
@@ -122,7 +123,7 @@ class FromTheSwitchTests(ChatSharedCase):
         self.talk(chat_id, 2)
         self.assertEqual(len(self.starts()), 2)
         self.assertEqual(self.allow_write()[-1], self.shared, "the sandbox follows the switch")
-        self.assertEqual(self.starts()[-1]["system_prompt"], mr.block([]), "what it knows follows the start of the chat (P42-6)")
+        self.assertEqual(without_identity(self.starts()[-1]["system_prompt"]), mr.block([]), "what it knows follows the start of the chat (P42-6)")
 
     def test_a_folder_that_is_not_right_stops_the_message_with_words_for_a_person(self):
         self.switch(self.emp)
@@ -176,7 +177,10 @@ class ThePageOfAChatTests(ChatSharedCase):
         self.configure([clean("text", 0)])
         chat_id = self.open_http()
         self.talk(chat_id, 1)
-        self.assertEqual(cs.prompt_start(cfg.state_dir(), chat_id)["sha"], V0170_SHA)
+        # P58: the console now tells the employee its name, so the fingerprint is v0.17.0's value plus the identity paragraph; without that paragraph it is still v0.17.0's value
+        self.assertEqual(mr.prompt_sha(None, mr.block([])), V0170_SHA)
+        self.assertEqual(cs.prompt_start(cfg.state_dir(), chat_id)["sha"],
+                         mr.prompt_sha(None, mr.block([]), None, mr.identity_block({"name": "虛構員工", "position": "PM"}, "claude-chat")))
         self.assertFalse(self.memory_of(chat_id)["changed"])
         self.assertIs(self.memory_of(chat_id)["started_with_memory"], True)
 
@@ -185,7 +189,8 @@ class ThePageOfAChatTests(ChatSharedCase):
         self.configure([clean("text", 0)])
         chat_id = self.open_http()
         self.talk(chat_id, 1)
-        self.assertEqual(cs.prompt_start(cfg.state_dir(), chat_id)["sha"], mr.prompt_sha(None, mr.block([]), sr.block(self.shared)))
+        self.assertEqual(cs.prompt_start(cfg.state_dir(), chat_id)["sha"],
+                         mr.prompt_sha(None, mr.block([]), sr.block(self.shared), mr.identity_block({"name": "虛構員工", "position": "PM"}, "claude-chat")))      # P58: plus the identity paragraph
         self.assertFalse(self.memory_of(chat_id)["changed"])
 
     def test_switching_it_on_or_off_after_the_start_shows_the_chat_as_changed(self):

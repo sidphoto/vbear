@@ -3,7 +3,7 @@ StreamOps is.
 
   chat_open    {profile_id, engine?}                        a new chat (engine claude-chat, or codex-chat for a role
                                                             card whose AI tool is Codex, or agy-chat for AGY); no process
-  chat_send    {chat_id, text, cli: {binary, version, identity}, model_id, instructions?, memory?, engine?, origin?}
+  chat_send    {chat_id, text, cli: {binary, version, identity}, model_id, instructions?, memory?, identity?, engine?, origin?}
                                                             a person's message: a turn, in the chat's live process
                                                             or a new one (``--resume`` once the session exists, a
                                                             Codex chat's ``thread/resume``); ``instructions`` is the
@@ -13,6 +13,12 @@ StreamOps is.
                                                             chat's; a Codex chat's ``model_id`` may be None (Codex's
                                                             own default); ``origin`` ({dispatch, step}) is only
                                                             written into the record: a message VBear sent for a dispatch;
+                                                            ``identity`` (P58, ADR 0020), when present, is exactly ``{name, position}``,
+                                                            both already cleaned (memory_rules.identity_parts): the daemon builds the
+                                                            one fixed sentence from them (memory_rules.prepare_identity, a bad one is a
+                                                            ``bad_request``) and puts it FIRST in what a new process is given (the system
+                                                            prompt, a Codex chat's developer instructions, an AGY session's appended
+                                                            system prompt); ``process_started`` says whether it went;
                                                             ``shared`` (P43-1, ADR 0009), when present, is exactly ``true``: the
                                                             employee may use the shared folder. The path is the daemon's own
                                                             (``<state>/shared``), never the caller's; it is checked (a folder of
@@ -213,10 +219,16 @@ class ChatOps:
         shared, refused = self._chat_shared(rid, chat, req)
         if refused:
             return refused
+        named = None                        # the paragraph that tells the employee its name (P58); never a word of it is logged
+        if req.get("identity") is not None:
+            try:
+                named = memory_rules.prepare_identity(req["identity"], chat["engine"])
+            except memory_rules.MemoryProblem as exc:
+                return _err(rid, "bad_request", str(exc))
         send = getattr(self, chat_engines.by_engine(chat["engine"]).daemon_send)
         # only a message sent for a dispatch has an origin; an engine's method that does not know one is called as it was
         extra = {**({"origin": origin} if origin is not None else {}), **({"memory": memory} if memory is not None else {}),
-                 **({"shared": shared} if shared is not None else {})}
+                 **({"shared": shared} if shared is not None else {}), **({"named": named} if named is not None else {})}
         return send(rid, chat, text, cli, model_id, instructions, **extra)
 
     def _chat_shared(self, rid: str, chat: dict, req: dict):
@@ -248,7 +260,8 @@ class ChatOps:
     # ---- a Claude Code chat -------------------------------------------------------------------------------------
 
     def _claude_send(self, rid: str, chat: dict, text: str, cli: dict, model_id: str | None,
-                     instructions: str | None, origin: dict | None = None, memory=None, shared: str | None = None) -> dict:
+                     instructions: str | None, origin: dict | None = None, memory=None, shared: str | None = None,
+                     named: str | None = None) -> dict:
         """A person's message in a Claude Code chat: a turn in the chat's live process (its limits as ``headroom``), or in
         a new one (``--resume`` once the session exists). ``shared`` is the shared folder the employee may use now (None: off); an
         idle process that was started with another setting gives way to a new one, the way it does for another model."""
@@ -290,11 +303,11 @@ class ChatOps:
                 return _store_err(rid, exc)
             p.start_turn(n, allowance, line, now)
             return _ok(rid, {"turn": n, "cap_usd": cs.usd(allowance), "process": "reused"})
-        return self._chat_spawn(rid, chat, text, cli, model_id, allowance, per_turn, instructions, origin, memory, shared)
+        return self._chat_spawn(rid, chat, text, cli, model_id, allowance, per_turn, instructions, origin, memory, shared, named)
 
     def _chat_spawn(self, rid: str, chat: dict, text: str, cli: dict, model_id: str, allowance: Decimal,
                     per_turn: Decimal, instructions: str | None = None, origin: dict | None = None, memory=None,
-                    shared: str | None = None) -> dict:
+                    shared: str | None = None, named: str | None = None) -> dict:
         from .daemon import build_env              # here: daemon imports this module
         chat_id, profile_id = chat["id"], chat["profile_id"]
         state, binary, version, identity, refused = self._chat_precheck(rid, chat, cli)
@@ -324,7 +337,7 @@ class ChatOps:
                 self.base, workdir=workdir, cli_binary=binary, cli_version=version, cli_identity=identity,
                 model_id=model_id, chat_id=chat_id, profile_id=profile_id,
                 claude_session_id=chat["claude_session_id"], budget_usd=float(allowance), resume=resume,
-                append_prompt=memory_rules.combine(instructions, memory.block if memory else None, shared_block), shared=shared)
+                append_prompt=memory_rules.combine(instructions, memory.block if memory else None, shared_block, named), shared=shared)
             line = cp.user_line(text, chat["claude_session_id"])
             agent_sessions.update_manifest(self.base, m["launch_id"], state="launching")
             m = agent_sessions.load_validated(self.base, m["launch_id"])
@@ -343,13 +356,13 @@ class ChatOps:
         self._log_memory(launch_id, memory, instructions)
         self._log_shared(launch_id, shared)
         if not resume:
-            self._keep_prompt_start(chat_id, instructions, memory, shared_block)
+            self._keep_prompt_start(chat_id, instructions, memory, shared_block, named)
         try:
             log.append("user_message", _said(n, text, origin), now=time.time())
             log.append("turn_started", {"turn": n, "cap_usd": cs.usd(allowance)}, now=time.time())
             log.append("process_started", {"mode": "resume" if resume else "new",
-                                           "budget_usd": cs.usd(allowance), "instructions": instructions is not None},
-                       now=time.time())
+                                           "budget_usd": cs.usd(allowance), "instructions": instructions is not None,
+                                           "identity": named is not None}, now=time.time())
         except cs.ChatStoreError as exc:
             self._chat_not_started(log, n, launch_id, "聊天紀錄無法寫入")
             return _store_err(rid, exc)
@@ -394,7 +407,8 @@ class ChatOps:
     # ---- a Codex chat -------------------------------------------------------------------------------------------
 
     def _codex_send(self, rid: str, chat: dict, text: str, cli: dict, model_id: str | None,
-                    instructions: str | None, origin: dict | None = None, memory=None, shared: str | None = None) -> dict:
+                    instructions: str | None, origin: dict | None = None, memory=None, shared: str | None = None,
+                     named: str | None = None) -> dict:
         """A person's message in a Codex chat (P38-3): a turn in the chat's live ``codex app-server`` (its thread goes
         on), or in a new one (``thread/start`` the first time, ``thread/resume`` after). Money is as for a Claude chat: the
         turn's cap is the per-turn limit or what is left of the day, whichever is less."""
@@ -410,7 +424,7 @@ class ChatOps:
         if refused:
             return refused
         if p is None:
-            return self._codex_spawn(rid, chat, text, cli, model_id, allowance, instructions, origin, memory, shared)
+            return self._codex_spawn(rid, chat, text, cli, model_id, allowance, instructions, origin, memory, shared, named)
         if p.shared != shared:                       # the sandbox of a live process is fixed: a new one gives the new setting (P43-2)
             p.close_gracefully("共用資料夾的設定改了，要換新的程序", now)
             return _err(rid, "restarting", "員工要換新的程序（共用資料夾的設定改了），請稍後再送一次")
@@ -446,7 +460,8 @@ class ChatOps:
         return None
 
     def _codex_spawn(self, rid: str, chat: dict, text: str, cli: dict, model_id: str | None, allowance: Decimal,
-                     instructions: str | None, origin: dict | None = None, memory=None, shared: str | None = None) -> dict:
+                     instructions: str | None, origin: dict | None = None, memory=None, shared: str | None = None,
+                     named: str | None = None) -> dict:
         from .daemon import DAEMON_VERSION, build_env      # here: daemon imports this module
         chat_id, profile_id = chat["id"], chat["profile_id"]
         state, binary, version, identity, refused = self._chat_precheck(rid, chat, cli)
@@ -504,12 +519,12 @@ class ChatOps:
         self._log_memory(launch_id, memory, instructions)
         self._log_shared(launch_id, shared)
         if not resume:
-            self._keep_prompt_start(chat_id, instructions, memory, shared_block)
+            self._keep_prompt_start(chat_id, instructions, memory, shared_block, named)
         try:
             log.append("user_message", _said(n, text, origin), now=time.time())
             log.append("turn_started", {"turn": n, "cap_usd": cs.usd(allowance)}, now=time.time())
             log.append("process_started", {"mode": "resume" if resume else "new", "budget_usd": cs.usd(allowance),
-                                           "instructions": instructions is not None}, now=time.time())
+                                           "instructions": instructions is not None, "identity": named is not None}, now=time.time())
         except cs.ChatStoreError as exc:
             self._chat_not_started(log, n, launch_id, "聊天紀錄無法寫入")
             return _store_err(rid, exc)
@@ -535,7 +550,7 @@ class ChatOps:
                 unwatch=self._unwatch_chat, card_ttl=self.chat_card_ttl, init_deadline=self.chat_init_deadline,
                 turn_timeout=self.chat_turn_timeout, idle_timeout=self.chat_idle_timeout,
                 close_grace=self.chat_close_grace, close_below=Decimal(0),
-                instructions=memory_rules.combine(instructions, memory.block if memory else None, shared_block),
+                instructions=memory_rules.combine(instructions, memory.block if memory else None, shared_block, named),
                 thread_id=thread_id, last_tokens=state.last_tokens, followup=self._codex_followup,
                 client_version=DAEMON_VERSION)
             self._chats[chat_id] = p
@@ -556,7 +571,8 @@ class ChatOps:
     # ---- an AGY chat (P46-3, ADR 0012) --------------------------------------------------------------------------
 
     def _agy_send(self, rid: str, chat: dict, text: str, cli: dict, model_id: str | None,
-                  instructions: str | None, origin: dict | None = None, memory=None, shared: str | None = None) -> dict:
+                  instructions: str | None, origin: dict | None = None, memory=None, shared: str | None = None,
+                     named: str | None = None) -> dict:
         """A person's message in an AGY chat: a turn in the chat's live ``agy acp`` (its session goes on), or in a new one
         (``session/new`` the first time, ``session/resume`` after). Money is as for a Codex chat: the turn's cap is the per-turn
         limit or what is left of the day, whichever is less. AGY has the one model of its version's table: a ``model_id`` is refused."""
@@ -574,7 +590,7 @@ class ChatOps:
         if refused:
             return refused
         if p is None:
-            return self._agy_spawn(rid, chat, text, cli, allowance, instructions, origin, memory, shared)
+            return self._agy_spawn(rid, chat, text, cli, allowance, instructions, origin, memory, shared, named)
         if p.shared != shared:                       # the folders of a live process are fixed: a new one gives the new setting
             p.close_gracefully("共用資料夾的設定改了，要換新的程序", now)
             return _err(rid, "restarting", "員工要換新的程序（共用資料夾的設定改了），請稍後再送一次")
@@ -611,7 +627,7 @@ class ChatOps:
         return None
 
     def _agy_spawn(self, rid: str, chat: dict, text: str, cli: dict, allowance: Decimal, instructions: str | None,
-                   origin: dict | None = None, memory=None, shared: str | None = None) -> dict:
+                   origin: dict | None = None, memory=None, shared: str | None = None, named: str | None = None) -> dict:
         from .daemon import build_env      # here: daemon imports this module
         chat_id, profile_id = chat["id"], chat["profile_id"]
         state, binary, version, identity, refused = self._chat_precheck(rid, chat, cli)
@@ -670,12 +686,12 @@ class ChatOps:
         self._log_memory(launch_id, memory, instructions)
         self._log_shared(launch_id, shared)
         if not resume:
-            self._keep_prompt_start(chat_id, instructions, memory, shared_block)
+            self._keep_prompt_start(chat_id, instructions, memory, shared_block, named)
         try:
             log.append("user_message", _said(n, text, origin), now=time.time())
             log.append("turn_started", {"turn": n, "cap_usd": cs.usd(allowance)}, now=time.time())
             log.append("process_started", {"mode": "resume" if resume else "new", "budget_usd": cs.usd(allowance),
-                                           "instructions": instructions is not None}, now=time.time())
+                                           "instructions": instructions is not None, "identity": named is not None}, now=time.time())
         except cs.ChatStoreError as exc:
             self._chat_not_started(log, n, launch_id, "聊天紀錄無法寫入")
             return _store_err(rid, exc)
@@ -700,7 +716,7 @@ class ChatOps:
                 unwatch=self._unwatch_chat, card_ttl=self.chat_card_ttl, init_deadline=self.chat_init_deadline,
                 turn_timeout=self.chat_turn_timeout, idle_timeout=self.chat_idle_timeout,
                 close_grace=self.chat_close_grace, close_below=Decimal(0),
-                instructions=memory_rules.combine(instructions, memory.block if memory else None, shared_block),
+                instructions=memory_rules.combine(instructions, memory.block if memory else None, shared_block, named),
                 session_id=session_id, followup=self._agy_followup,
                 settings_ok=lambda: agy_chat_env.settings_intact(self.base))
             self._chats[chat_id] = p
@@ -718,16 +734,18 @@ class ChatOps:
             return self._chat_abort_spawned(rid, log, n, m, proc, p, leader_start, f"{type(exc).__name__}: {exc}")
         return _ok(rid, {"turn": n, "cap_usd": cs.usd(allowance), "process": "resume" if resume else "new"})
 
-    def _keep_prompt_start(self, chat_id: str, instructions, memory, shared_block: str | None = None) -> None:
+    def _keep_prompt_start(self, chat_id: str, instructions, memory, shared_block: str | None = None,
+                           named: str | None = None) -> None:
         """A NEW session (not a resumed one) is started with this system prompt, and keeps it: Claude Code 2.1.319 does not apply
         another one to a session it resumes (found on a real machine, P42-6). Keep its fingerprint, so that the page can say when
         the memory or the instructions are not what the chat works with. Not a word of either; a failure is only logged (the
         page then says nothing about it). The shared folder's paragraph is part of the fingerprint only when the folder was on
-        (P43-1), so that with it off the value is the one v0.17.0 kept."""
+        (P43-1), so that with it off the value is the one v0.17.0 kept. So is the identity paragraph (P58): the file says ``identity`` only when
+        the session was told, and the page counts the employee's name in its compare only for such a file."""
         try:
             cs.set_prompt_start(self.base, chat_id,
-                                memory_rules.prompt_sha(instructions, memory.block if memory else None, shared_block),
-                                memory is not None)
+                                memory_rules.prompt_sha(instructions, memory.block if memory else None, shared_block, named),
+                                memory is not None, with_identity=named is not None)
         except cs.ChatStoreError as exc:
             self._log(f"{chat_id}: the prompt a new session started with was not kept ({exc.code})")
 

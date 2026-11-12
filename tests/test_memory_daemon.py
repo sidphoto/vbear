@@ -92,7 +92,7 @@ class ClaudeMemoryTests(tcd.ChatCase):
         self.assertTrue(self.send_mem(chat_id, ENTRIES, instructions=None)["ok"])
         self.wait_turn(chat_id, 1)
         started = self.started(chat_id)
-        self.assertEqual(set(started) - {"seq", "at", "kind"}, {"mode", "budget_usd", "instructions"})
+        self.assertEqual(set(started) - {"seq", "at", "kind"}, {"mode", "budget_usd", "instructions", "identity"})      # P58: one yes-or-no field, no word of the name
         self.assertIs(started["instructions"], False, "it says whether the CARD has instructions, not whether memory went")
         self.assertEqual(set(cs.KINDS["process_started"]), {"mode", "budget_usd", "instructions"})
         blob = self.raw(chat_id) + json.dumps(self.rpc("chat_events", chat_id=chat_id, after=0), ensure_ascii=False)
@@ -251,17 +251,17 @@ class CodexMemoryTests(tcx.CodexCase):
         for text in TEXTS:
             self.assertNotIn(text, blob)
         started = next(x for x in self.events(chat_id)[0] if x["kind"] == "process_started")
-        self.assertEqual(set(started) - {"seq", "at", "kind"}, {"mode", "budget_usd", "instructions"})
+        self.assertEqual(set(started) - {"seq", "at", "kind"}, {"mode", "budget_usd", "instructions", "identity"})      # P58: one yes-or-no field, no word of the name
 
 
 class BoundaryTests(unittest.TestCase):
     def test_the_full_mode_limit_is_still_two_thousand_and_a_chat_has_eight_thousand(self):
         self.assertEqual(a.MAX_APPEND_PROMPT, 2000)
-        self.assertEqual(a.MAX_CHAT_APPEND_PROMPT, 9000)      # v0.17.1 (P43-1): room for the shared folder's paragraph
+        self.assertEqual(a.MAX_CHAT_APPEND_PROMPT, 9500)      # v0.17.1 (P43-1): room for the shared folder's paragraph; v0.25.3 (P58): 500 more for the identity paragraph
         self.assertIsNone(a.append_prompt_problem("x" * 2000))
         self.assertIn("2000", a.append_prompt_problem("x" * 2001))
-        self.assertIsNone(a.chat_append_prompt_problem("x" * 9000))
-        self.assertIn("9000", a.chat_append_prompt_problem("x" * 9001))
+        self.assertIsNone(a.chat_append_prompt_problem("x" * 9500))
+        self.assertIn("9500", a.chat_append_prompt_problem("x" * 9501))
         self.assertIsNotNone(a.chat_append_prompt_problem("a\x00b"))
         self.assertIsNotNone(a.chat_append_prompt_problem(" x"))
 
@@ -283,7 +283,8 @@ class BoundaryTests(unittest.TestCase):
             "turn_started": ["cap_usd", "turn"], "usage": ["delta_tokens", "total_tokens", "turn"],
             "user_message": ["text", "turn"]}
         self.assertEqual({k: sorted(v) for k, v in cs.KINDS.items()}, v016)
-        self.assertEqual({k: sorted(v) for k, v in cs._OPTIONAL.items()}, {"turn_ended": ["estimate", "tokens"], "user_message": ["origin"]})
+        self.assertEqual({k: sorted(v) for k, v in cs._OPTIONAL.items()},
+                         {"process_started": ["identity"], "turn_ended": ["estimate", "tokens"], "user_message": ["origin"]})      # P58: the one yes-or-no field of v0.25.3
 
     def test_the_daemon_accepts_the_field(self):
         from vbear.runtime import daemon

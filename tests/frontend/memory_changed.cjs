@@ -77,7 +77,7 @@ test("a chat that is not as it was started says so in plain words and offers a n
   const main = await open("#/chat/" + CID);
   const box = changedBox(main);
   assert(box, "the notice is there");
-  assert(text(box).includes("你改過記憶（或這位員工的固定指示），這個聊天還是用開始時的內容。要用新的，請開新聊天。"));
+  assert(text(box).includes("你改過記憶（或這位員工的名字、職位、固定指示），這個聊天還是用開始時的內容。要用新的，請開新聊天。"));
   assert(!text(box).includes("收不回來"), "the chat started with the memory and still has it on: that sentence is for a card switched off");
   assert(!/下一句|下一則|馬上|立刻/.test(text(box)), "no promise that the next message has it");
   assert(newChatButton(main), "the button");

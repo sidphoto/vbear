@@ -156,7 +156,8 @@ class AgyChatThroughHttpTests(ApiCase):
         self.wait_http_turn(chat_id, 1)
         new = next(x for x in self.stdin() if x.get("method") == "session/new")
         sent = new["params"]["_meta"]["antigravity"]["systemPrompt"]["append"]
-        self.assertTrue(sent.startswith("先說結論，再說理由。"), sent)
+        self.assertTrue(sent.startswith("[VBear 身分] "), sent)      # P58: the name's sentence comes first
+        self.assertTrue(sent.partition("\n\n")[2].startswith("先說結論，再說理由。"), sent)
 
     def test_deleting_an_agy_chat_keeps_the_copy_agy_made_in_its_own_folder(self):
         self.configure("text")
