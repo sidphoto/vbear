@@ -1019,6 +1019,7 @@ const WORDS = {
   firstRun:      { use: "第一次使用", avoid: [], loose: [], scope: "new", note: "沒有員工的首頁一頁做完：選一家 AI、準備好、「建立 CEO，開始聊」；每一步都由使用者自己按（ADR 0017）" },
   versionUnknown: { use: "還不認得這一版", avoid: [], loose: [], scope: "new", note: "AI 工具自己更新後 VBear 還沒有那一版的聊天資料；版本只在讀到時才寫，原句收進技術細節" },
   oneStepLeft:   { use: "還差一步", avoid: [], loose: [], scope: "new", note: "AI 工具還不能聊天時，一行話說缺哪一步（還沒安裝、還沒登入、還沒做安全檢查、有管理員設定、版本不認得）" },
+  switchTool:    { use: "改用另一家", avoid: [], loose: [], scope: "new", note: "員工的 AI 工具被管理員設定擋住或版本不認得時，在看到原因的地方改用別家 AI；按了先確認，確認才寫入（ADR 0019）" },
 };
 // -> [{ key, term, use }] for the words a page of that scope must not say (`avoid` only, searched literally). scope "all": the pages of
 // the normal mode; "title": the menu names and the h1 of the advanced pages (and, for a page of scope "all", nothing of this).
@@ -2367,6 +2368,7 @@ async function viewHome() {
   const state = {
     token, profiles: null, conf, catalog: null, chats: null, routines: null, tools: null,
     lamp: "", waitingList: null, shown: "", now: () => new Date(),
+    reload: () => route(),            // P57: the page is read and drawn again after the person switched an employee's AI tool
   };
   const back = new Set();            // the requests that are back (a failed one is back, with nothing)
   const gaveUp = new Set();          // the blocks that waited 60 seconds
@@ -2655,10 +2657,13 @@ function homeRoutineChatIds(routinesRes) {
 function homeChatsOf(chatsRes, routinesRes, profileId) {
   const list = chatsRes && typeof chatsRes === "object" && Array.isArray(chatsRes.chats) ? chatsRes.chats : [];
   const routine = homeRoutineChatIds(routinesRes);
+  // P57: a chat runs on the engine it was opened with, for good; once the employee uses another AI, the old chats are for reading and cannot be sent into (the server refuses with card_tool_changed)
+  const card = homeCardOf(chatsRes, profileId);
+  const engine = card && typeof card.engine === "string" ? card.engine : "";
   // a chat the server labels with a routine's title is that routine's own run (the server reads it from the whole record, so it holds for a deleted routine
   // or a run older than the last ten that GET /api/routines lists): it is never "the chat with" the employee
   return list.filter((c) => c && typeof c === "object" && typeof c.id === "string" && c.profile_id === profileId && !c.problem && !routine.has(c.id)
-    && typeof c.routine_title !== "string")
+    && typeof c.routine_title !== "string" && (!engine || typeof c.engine !== "string" || c.engine === engine))
     .sort((a, b) => (Number(b.last_at) || 0) - (Number(a.last_at) || 0));
 }
 // The employee who is the CEO: the first CEO the person made (config first_ceo_id) when that card is there, else the first card whose position is CEO.
@@ -2955,9 +2960,13 @@ function homeAsk(state) {
   const card = homeCardOf(state.chats, ceo.id);
   const prep = card ? chatPrepState(card, state.chats) : null;
   if (prep && prep.kind !== "start") {         // cannot chat yet (card off, tool not checked for chat, policy...): one reason and one way to the page that prepares it
+    // P57: when the tool is held back for good (policy, a version VBear does not know) and another AI can be used, the way out is here: a button, then a confirmation
+    const other = Array.isArray(prep.switch) && prep.switch.length ? switchToolHost(card, { options: prep.switch, missing: prep.switchMissing, lead: prep.switchLead }, "home",
+      () => (typeof state.reload === "function" ? state.reload() : route())) : null;
     return block(
       el("p", null, `${ceo.name || "CEO"} 現在還不能聊天：${plainWords(prep.reason || "").text || "原因不明"}`),
-      el("a", { class: "btn primary", href: `#/chat?profile=${encodeURIComponent(ceo.id)}`, "data-home": "ask-prepare" }, "先把聊天準備好"));
+      other,
+      el("a", { class: other ? "btn" : "btn primary", href: `#/chat?profile=${encodeURIComponent(ceo.id)}`, "data-home": "ask-prepare" }, "先把聊天準備好"));
   }
   const talked = state.chats && Array.isArray(state.chats.chats) ? state.chats.chats.some((c) => c && c.turns > 0 && !c.problem) : false;
   // P51-2: whom the box is for. It starts as the CEO on every visit (nothing is remembered); the small button at the left of the box changes it, and a pick changes only this.
@@ -15506,12 +15515,18 @@ function chatPrepState(card, data) {
   const version = part && typeof part.version === "string" && part.version ? part.version : part && typeof part.detected === "string" && part.detected ? part.detected : "";
   if (state === (engine === "claude-chat" || !engine ? "verified" : "ready")) return { kind: "start", label: "開始聊天", reason: `${name}準備好了，可以開始聊天。` };
   if (state === "policy") {            // not something to verify: the administrator's settings on this computer hold the tool back
-    return linkSetup("到 AI 工具看看", `這台電腦的 ${tool} 有管理員設定，VBear 不能用它聊天。可以到「AI 工具」看看有沒有別的工具能用。`);
+    // P57: when another AI can be used, the sentence says the next step (the switch is drawn by switchToolNode); with none, it is the old sentence
+    const other = chatSwitchOptions(card, data);
+    const base = `這台電腦的 ${tool} 有管理員設定，VBear 不能用它聊天。`;
+    return { ...linkSetup("到 AI 工具看看", base + (other.options.length ? `這不是你能改的；可以讓 ${name} 改用別家 AI。` : "可以到「AI 工具」看看有沒有別的工具能用。")),
+      switch: other.options, switchMissing: other.missing, switchLead: "" };
   }
   if (state === "unsupported") {       // P52-2: the tool updated itself; the server's sentence goes behind 「技術細節」 (`raw`)
     const u = versionUnknownWords(tool, version);
     const raw = part && typeof part.message === "string" && part.message ? part.message : part && typeof part.why === "string" ? part.why : "";
-    return { ...linkSetup("到 AI 工具看看", u.text + u.next), raw };
+    const other = chatSwitchOptions(card, data);       // P57
+    return { ...linkSetup("到 AI 工具看看", u.text + u.next), raw, switch: other.options, switchMissing: other.missing,
+      switchLead: other.options.length ? `現在要聊的話，可以讓 ${name} 先改用別家 AI：` : "" };
   }
   const why = `${tool} ${word}，先處理這一步才能和 ${name} 聊天。`;
   // P48-3 (D10): the safety check was started elsewhere (the start-up page) and is still going: nothing to press, the chat opens by itself when it passes
@@ -15526,6 +15541,132 @@ function chatPrepState(card, data) {
   if (engine === "codex-chat" && state === "not_logged_in") return linkSetup("到 AI 工具登入聊天用的 Codex", why);
   return linkSetup("到 AI 工具看看", why);
 }
+
+// ---- P57 switch tool (v0.25.1, ADR 0019) ----
+// An employee whose AI tool cannot chat and which the person cannot fix (the administrator's policy, a version VBear does not know) gets a way out where the reason is
+// said: a button to let the employee use another AI. It is the ordinary employee write (POST /api/agent-profiles/<id>) with only `model`, sent by one place only: the
+// click of 「確認」. The first press only opens the confirmation; 「先不要」, a redraw, the 5-second refresh and Enter send nothing. It reads nothing of its own: the options
+// come from the `support` of the GET /api/chats answer the page already has. The model is the tool's own default (model_id "", as the new-employee form and the first CEO do).
+// Nothing is checked, logged in or started by it: the page then shows the new tool's own state (its own safety-check button, with its own confirmation).
+const SWITCH_WORD = { ready: "可以聊天了", unverified: "第一次聊天前要做一次安全檢查", running: "安全檢查還在做", login: "還要先登入聊天用的 Codex" };
+const SWITCH_ENGINE_TOOL = { "claude-chat": "claude", "codex-chat": "codex", "agy-chat": "agy" };
+const SWITCH_KEEP = "名字、說明、技能和其他設定都照舊，只有用哪一家 AI 聊天會改。";
+const SWITCH_MORE = {
+  claude: "Claude Code 的員工預設會帶你存的記憶，記憶會送給 Anthropic。共用資料夾只有你打開過的才會用。",
+  codex: "Codex 的員工預設不帶記憶，共用資料夾只有你打開過的才會用；打開過的，內容之後也會送到 OpenAI。",
+  agy: "AGY 的員工預設不帶記憶，打開過才會帶，內容會送到 Google；AGY 這版不能用共用資料夾。" + CHAT_AGY_SKILLS_NOTE,
+};
+
+// The other tools this employee can be moved to, from the answer of GET /api/chats: those that can chat now, or whose next step the person can do themselves (the safety
+// check, the chat login of Codex). Held-back and unknown ones are not offered; one that is not installed is listed apart (no button). The ones that can chat come first.
+// -> { options: [{ tool, name, label, company, kind, word, ready }], missing: [{ tool, name, label, company }] }
+function chatSwitchOptions(card, data) {
+  const out = { options: [], missing: [] };
+  const here = card && typeof card === "object" && cardHas(SWITCH_ENGINE_TOOL, card.engine) ? SWITCH_ENGINE_TOOL[card.engine] : "claude";
+  if (!chatSupportGlance(data)) return out;
+  for (const v of SETUP_VENDORS) {
+    if (v.id === here) continue;
+    const sup = setupSupportOf(v.id, data);
+    if (!sup) continue;
+    let kind = "";
+    if (sup.passed) kind = "ready";
+    else if (sup.state === "unverified") kind = sup.running ? "running" : "unverified";
+    else if (v.id === "codex" && sup.state === "not_logged_in") kind = "login";
+    const item = { tool: v.id, name: v.tool, label: `${v.maker}（${v.tool}）`, company: chatCompanyOf(v.id) };
+    if (kind) out.options.push({ ...item, kind, word: SWITCH_WORD[kind], ready: kind === "ready" });
+    else if (sup.state === "not_installed") out.missing.push(item);
+  }
+  out.options.sort((a, b) => (b.ready ? 1 : 0) - (a.ready ? 1 : 0));
+  return out;
+}
+function switchFlowText(company, old) {
+  return `之後跟他說的話會送到 ${company}${old && old !== company ? `（原本設定的是 ${old}）` : ""}。`;
+}
+function switchToolUi() { return { open: "", busy: false, error: null, nodes: new Map(), refocus: "" }; }
+function switchFocusKey(ui) {
+  const a = document.activeElement;
+  for (const [k, n] of ui.nodes) if (n === a) return k;
+  return "";
+}
+function switchToolRefocus(ui) {
+  const key = ui.refocus;
+  ui.refocus = "";
+  const n = key ? ui.nodes.get(key) : null;
+  if (n && typeof n.focus === "function") n.focus();
+}
+function switchReg(ui, key, node) { ui.nodes.set(key, node); return node; }
+
+// The confirmation of one option: who, where the words go from now on, what happens to the old chats, the model; two buttons. Nothing in it is folded.
+function switchToolConfirmNode(ui, ctx, opt) {
+  const name = typeof ctx.card.name === "string" && ctx.card.name ? ctx.card.name : "這位員工";
+  const oldTool = chatToolName(ctx.card.engine);
+  return switchReg(ui, "confirm", el("div", { class: "switch-confirm", role: "group", tabindex: "-1", "aria-label": `確認改用 ${opt.label}`, "data-switch": "confirm" },
+    el("p", { "data-switch": "confirm-who" }, `${name} 之後會改用 ${opt.label} 聊天。`),
+    el("p", { "data-switch": "flow" }, switchFlowText(opt.company, chatCompanyOf(ctx.card.engine))),
+    el("p", { "data-switch": "old-chats" }, `之前用 ${oldTool} 聊的對話會留著，可以看，但不能接著聊；要聊請開新對話。`),
+    el("p", { "data-switch": "model" }, `模型：用 ${opt.name} 自己的預設（不指定）。`),
+    el("p", { class: "small muted", "data-switch": "keep" }, SWITCH_KEEP),
+    el("p", { class: "small muted", "data-switch": "more" }, SWITCH_MORE[opt.tool] || ""),
+    el("div", { class: "row" },
+      switchReg(ui, "confirm-go", el("button", { type: "button", class: "btn primary", "data-switch": "confirm-go", disabled: ui.busy, on: { click: () => switchToolConfirm(ui, ctx, opt) } }, ui.busy ? "正在改…" : `確認，改用 ${opt.name}`)),
+      switchReg(ui, "confirm-cancel", el("button", { type: "button", class: "btn", "data-switch": "confirm-cancel", disabled: ui.busy,
+        on: { click: () => { ui.open = ""; ui.error = null; ui.refocus = "pick:" + opt.tool; ctx.redraw(); } } }, "先不要")))));
+}
+
+// ctx: { card (one of GET /api/chats' cards), options, missing, lead, scope ("home" | "chat"), redraw(), done() }. Drawn again at every redraw of the page from `ui` (which the
+// page keeps), so an open confirmation and the focus survive the 5-second refresh.
+function switchToolNode(ui, ctx) {
+  ui.refocus = ui.refocus || switchFocusKey(ui);
+  ui.nodes = new Map();
+  if (ui.open && !ui.busy && !ctx.options.some((o) => o.tool === ui.open)) { ui.open = ""; ui.error = null; }
+  const name = typeof ctx.card.name === "string" && ctx.card.name ? ctx.card.name : "這位員工";
+  const items = ctx.options.map((opt) => {
+    const open = ui.open === opt.tool;
+    const pick = switchReg(ui, "pick:" + opt.tool, el("button", { type: "button", class: opt.ready ? "btn small primary" : "btn small", "data-switch": "pick", "data-switch-tool": opt.tool,
+      "aria-expanded": String(open), disabled: ui.busy, on: { click: () => { ui.open = opt.tool; ui.error = null; ui.refocus = "confirm"; ctx.redraw(); } } }, `改用 ${opt.label}`));
+    let failed = null;
+    if (open && ui.error) {
+      const e = ui.error;
+      failed = el("div", { class: "switch-error", role: "alert", "data-switch": "error" },
+        el("p", null, typeof e.status === "number" ? `沒有改成，${name} 還是用 ${chatToolName(ctx.card.engine)}。` : `沒有收到伺服器的回覆，不確定有沒有改成。重新整理看看 ${name} 現在用的是哪一家。`),
+        plainNotice("bad", e));
+    }
+    return el("li", { class: "switch-opt", "data-switch": "option", "data-switch-tool": opt.tool },
+      pick, el("span", { class: "small muted", "data-switch": "state" }, opt.word),
+      open ? switchToolConfirmNode(ui, ctx, opt) : null, failed);
+  });
+  return el("div", { class: "switch-tool", "data-switch": "box", "data-scope": ctx.scope },
+    ctx.lead ? el("p", { "data-switch": "lead" }, ctx.lead) : null,
+    el("ul", { class: "switch-list", "aria-label": "可以改用的 AI" }, items),
+    ctx.missing.map((m) => el("p", { class: "small muted switch-missing", "data-switch": "missing", "data-switch-tool": m.tool }, `${m.label}：還沒安裝，不能改用。`)));
+}
+
+// A block that keeps its own state and redraws only itself (the home page's box is not drawn again by the 5-second refresh). `sw`: { options, missing, lead }.
+function switchToolHost(card, sw, scope, done) {
+  const ui = switchToolUi();
+  const host = el("div", { class: "switch-host" });
+  const ctx = { card, options: sw.options, missing: sw.missing || [], lead: sw.lead || "", scope, done, redraw: () => { setKids(host, switchToolNode(ui, ctx)); switchToolRefocus(ui); } };
+  ctx.redraw();
+  return host;
+}
+
+// The one write. Only the click of 「確認」 gets here (guard 21a); the body is only `model` (guard 21b). Throws nothing: a refusal is kept in `ui.error` and shown.
+async function switchToolConfirm(ui, ctx, opt) {
+  if (ui.busy) return;
+  ui.busy = true; ui.error = null; ui.refocus = "confirm";
+  ctx.redraw();
+  try {
+    await api.post(`/api/agent-profiles/${encodeURIComponent(ctx.card.id)}`, { model: { tool: opt.tool, model_id: "" } });
+  } catch (e) {
+    ui.busy = false; ui.error = e; ui.refocus = "confirm";
+    ctx.redraw();
+    return;
+  }
+  ui.busy = false; ui.open = ""; ui.error = null;
+  toast(`${typeof ctx.card.name === "string" && ctx.card.name ? ctx.card.name : "這位員工"} 改用 ${opt.label} 了。`);
+  try { await ctx.done(); } catch (_) { /* the page is read again at its next refresh */ }
+}
+// ---- end of P57 switch tool ----
 
 // The page of an employee whose chat state could not be read (the read failed, or the employee is not in the list): nothing was opened or sent, the words
 // that wait under the employee's id are still kept, and one button reads the state again (R2 Q1).
@@ -15716,6 +15857,7 @@ async function viewChat(id, params) {
   const prepMode = !!pick && !!chosenCard();
   const prepBox = el("div", { class: "chat-prep", "data-chat": "prep" });
   let prepStarting = false, prepAuto = false;
+  const switchUi = switchToolUi();       // P57: the open confirmation of 「改用另一家」 lives here, so a redraw and the 5-second refresh keep it
   const prepUi = () => {
     const c = chosenCard();
     return !c ? verifyUi : c.engine === "codex-chat" ? codexUi : c.engine === "agy-chat" ? agyUi : verifyUi;
@@ -15767,14 +15909,19 @@ async function viewChat(id, params) {
       action = el("button", { type: "button", class: "btn primary", "data-chat": "prep-action", on: { click: () => prepVerify(st) } }, st.label);
     } else if (st && st.kind === "retry") {
       action = el("button", { type: "button", class: "btn primary", "data-chat": "prep-action", on: { click: () => refresh() } }, st.label);
-    } else if (st) action = el("a", { class: "btn primary", href: st.href, "data-chat": "prep-action" }, st.label);
+    } else if (st) action = el("a", { class: st.switch && st.switch.length ? "btn" : "btn primary", href: st.href, "data-chat": "prep-action" }, st.label);
+    // P57: the way out for a tool the person cannot fix (policy, a version VBear does not know)
+    const switchPart = st && st.switch && st.switch.length
+      ? switchToolNode(switchUi, { card: c, options: st.switch, missing: st.switchMissing || [], lead: st.switchLead || "", scope: "chat", redraw: () => draw(), done: () => refresh() }) : null;
     setKids(prepBox,
       el("p", { class: "lede", "data-chat": "prep-reason" }, st ? st.reason : "找不到這位員工。"),
       st && st.raw ? plainTechFold(st.raw) : null,
       lampRed ? limitReachedNotice(null, { text: "今天的用量到你設的上限了，所以現在不能開始聊天（沒有花錢）。明天 0 點會重新算；要現在繼續，可以調高上限。" }) : null,
+      switchPart,
       action,
       !running && status && typeof status.message === "string" && status.message && st && st.kind !== "start"
         ? el("p", { class: "small", "data-chat": "prep-result" }, status.message) : null);
+    if (switchPart) switchToolRefocus(switchUi);
   };
   if (prepMode) {
     const baseDraw = draw;
@@ -22086,6 +22233,9 @@ if (typeof module !== "undefined" && module.exports) {
     ceoStepShown,
     ceoPlanShaped,
     chatPrepState,
+    chatSwitchOptions,
+    switchToolNode,
+    switchToolHost,
     ceoDrafts,
     MEETING_BUBBLES,
     MEETING_ERROR_TEXT,

@@ -948,7 +948,11 @@ const hrefOf = (root, pred) => (anchors(root).find(pred) || { getAttribute: () =
 
   await test("#11 「先不要」 is 「先收起新手引導」; draft and 尚未認領 each get a sentence", () => {
     const app = fs.readFileSync(path.join(__dirname, "..", "..", "web", "app.js"), "utf8");
-    assert.ok(!app.includes('"先不要"'));
+    // P57: 「先不要」 is the cancel of the switch-tool confirmation now, so the check is on the onboarding section's own code (where the old label was)
+    const from = app.indexOf("function onboardingSection(");
+    assert.ok(from > 0);
+    const to = app.indexOf("\nfunction ", from + 10);
+    assert.ok(!app.slice(from, to).includes('"先不要"'));
     const ctx = newCtx(teamHandlers());
     const sec = ctx.onboardingSection({ mode: "steps", steps: ctx.ONBOARD_STEPS.map((s, i) => ({ ...s, n: i + 1, done: false })), next: "", firstTaskId: null }, {});
     assert.ok(buttons(sec).some((b) => b.textContent === "先收起新手引導"));
