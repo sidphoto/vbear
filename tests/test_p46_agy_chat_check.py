@@ -482,6 +482,23 @@ class RefusalTests(CheckCase):
         self.assertEqual(self.fake_log(), [])
         self.assertEqual(self.verified(), ())
 
+    def test_hooks_in_a_folder_above_the_state_folder_stop_it_before_anything_starts(self):          # R1
+        """The check's work folders are under ``<state>/agc-…``; AGY looks up from there, so a folder above the state folder counts."""
+        for root, item in (("_agent", "hooks.json"), (".agents", "plugins"), ("_agents", "plugins.json")):
+            with self.subTest(root=root, item=item):
+                path = self.tmp / root / item
+                path.parent.mkdir()
+                path.mkdir() if item == "plugins" else path.write_text("{}")
+                code, report = self.check()
+                self.assertEqual(code, 2)
+                self.assertFalse(report["checks"]["no_ancestor_hooks"]["pass"])
+                self.assertIn(f"{root}/{item}", report["error"])
+                self.assertEqual(self.fake_log(), [], "nothing was started")
+                self.assertEqual([n for n in os.listdir(self.state) if n.startswith("agc-")], [])
+                self.assertEqual(self.verified(), ())
+                path.rmdir() if item == "plugins" else path.unlink()
+                path.parent.rmdir()
+
     def test_an_administrator_policy_fails_it_and_nothing_starts(self):
         self.policy = admin_policy.PolicyCheck(False, found=("x",), problems=("p",))
         code, report = self.check()

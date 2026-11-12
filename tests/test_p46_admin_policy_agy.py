@@ -78,6 +78,29 @@ class AgyPolicyTests(unittest.TestCase):
         (self.root / APP_SUPPORT).symlink_to("/nonexistent-target")        # a dangling link is a source too
         self.assertFalse(self.agy(AGY_156).ok)
 
+    def test_the_new_place_is_said_to_be_unconfirmed_not_to_be_an_administrator_policy(self):          # R1
+        """Nothing shows what ``/Library/Application Support/Antigravity`` is, so the sentence does not claim a policy: it says the use
+        is not confirmed and that this is why the chat does not start. The confirmed sources keep their old sentence."""
+        self.make(APP_SUPPORT, directory=True)
+        r = self.agy(AGY_156)
+        self.assertFalse(r.ok)
+        self.assertEqual(r.found, ["/" + APP_SUPPORT])
+        self.assertEqual(r.unconfirmed, ["/" + APP_SUPPORT])
+        self.assertIn("/" + APP_SUPPORT, r.reason())
+        self.assertIn("還不能確認", r.reason())
+        self.assertNotIn("存在管理員政策", r.reason())
+        self.make("etc/antigravity", directory=True)
+        r = self.agy(AGY_156)
+        self.assertEqual(r.found, ["/etc/antigravity", "/" + APP_SUPPORT])
+        self.assertEqual(r.unconfirmed, ["/" + APP_SUPPORT])
+        self.assertIn("存在管理員政策或系統設定：/etc/antigravity", r.reason())
+        self.assertIn("還不能確認", r.reason())
+        self._cleanup()
+        self.root.mkdir(parents=True)
+        self.make("etc/antigravity", directory=True)
+        r = self.agy(AGY)
+        self.assertEqual((r.unconfirmed, r.reason()), ([], "存在管理員政策或系統設定：/etc/antigravity。請使用者或系統管理員處理後再啟動。"))
+
     def test_1_5_6_cannot_start_when_the_new_place_cannot_be_looked_at(self):
         support = self.make("Library/Application Support", directory=True)
         support.chmod(0o000)

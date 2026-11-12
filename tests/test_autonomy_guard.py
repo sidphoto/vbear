@@ -121,7 +121,7 @@ Never, whatever the person ticked in 「自己動手」:
   20. (P56, ADR 0018) a version in the AGY chat table is a version with evidence: VBear is willing to start an AGY version only when the tables behind it were made from that very version. Four rules on
      ``agy_chat_protocol.VERSIONS``, ``admin_policy.AGY_SOURCES`` and the files of ``docs/evidence/``, each with made-up bad tables that must fire (``AgyVersionTablesNeedEvidence``):
      20a  every version of ``VERSIONS`` has an entry in ``AGY_SOURCES`` (with at least one path) and an evidence file ``docs/evidence/agy-<version>-*.md`` that names the version (a "not added" note is not evidence for a version that is added).
-     20b  the built-in table of every version is complete: one SHA-256 (64 lower-case hex digits) for each file of ``builtin_paths``, no hash for a path that is not a file of it, no path hashed twice.
+     20b  the built-in table of every version is complete: one SHA-256 (64 lower-case hex digits) for each file of ``builtin_paths``, no hash for a path that is not a file of it, no path hashed twice, no path twice in ``builtin_paths``.
      20c  every file of a version's ``builtin_paths`` whose ending is in ``builtin_runnable`` has a hash (a file that can run is never let through without a pinned hash), whatever version wrote it.
      20d  the tables ``agy_chat_env`` takes from the newest version (settings, forbidden and created names, project entries, forbidden-anywhere and work-folder names, the closed folders) are the same in every version, so a table that starts
           to differ has to be made per version before that version can be added.
@@ -3356,6 +3356,8 @@ def agy_version_table_problems(versions: dict, sources: dict, evidence: dict) ->
         if not any(pattern.match(name) and version in text for name, text in evidence.items()):
             problems.append(f"{version}: no docs/evidence/agy-{version}-*.md that names the version (20a)")
         paths = list(consts.builtin_paths)
+        if len(set(paths)) != len(paths):
+            problems.append(f"{version}: a path is in builtin_paths twice (20b)")
         files = {p for p in paths if not any(q.startswith(p + "/") for q in paths)}
         hashes = [path for path, _ in consts.builtin_sha256]
         if not paths or not hashes:
@@ -3425,6 +3427,8 @@ class AgyVersionTablesNeedEvidence(unittest.TestCase):
                 self.assertNotEqual(agy_version_table_problems(bad, sources, evidence), [])
         bad = dict(versions, **{"1.5.6": dataclasses.replace(real, builtin_paths=real.builtin_paths + ("skills/new/SKILL.md",))})
         self.assertTrue(any("20b" in p for p in agy_version_table_problems(bad, sources, evidence)))
+        bad = dict(versions, **{"1.5.6": dataclasses.replace(real, builtin_paths=real.builtin_paths + (real.builtin_paths[0],))})          # R1: a path twice
+        self.assertTrue(any("in builtin_paths twice (20b)" in p for p in agy_version_table_problems(bad, sources, evidence)))
 
     def test_20c_a_file_that_can_run_without_a_hash_fires(self):
         dataclasses, acp, versions, sources, evidence = self.real()

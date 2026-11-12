@@ -1387,6 +1387,11 @@ def run(binary: str, version: str, out: str | None, *, tmp_root: str | None = No
         report["error"] = why
         return _stop(report, out_path, 2)
     base = Path(tmp_root) if tmp_root else real_state
+    above, why = agy_chat_env.ancestor_hooks_state(base, include_self=True)          # AGY looks for hooks and plugins up from its work folder
+    report["checks"]["no_ancestor_hooks"] = check(above == "absent", note="聊天資料夾往上的資料夾裡沒有 hooks 或外掛（只看存不存在，不讀內容）")
+    if above != "absent":
+        report["error"] = why
+        return _stop(report, out_path, 2)
     if not tmp_root and under(base, temp_dirs()):
         report["error"] = ("狀態資料夾在暫存資料夾（/tmp 或 $TMPDIR）底下：AGY 的沙盒可以寫暫存資料夾，檢查的誘餌放在那裡就分不出"
                            "「沙盒擋住了」。請把 VBEAR_HOME 設在你的家目錄底下再跑。")

@@ -32,7 +32,7 @@ permissions, sign in, move the app data or load default customizations out of ev
 |---|---|---|
 | `/etc/antigravity` (the 1.5.3 reading found `/etc/antigravity/admin_settings.json`), `admin_settings`, `AdminSettings` | 1, 7, 18 | already in the source list; same for 1.5.6 |
 | `com.google.antigravity` | 6 | already in the source list (the managed-preferences domain, a candidate); same for 1.5.6 |
-| **`/Library/Application Support/Antigravity`** | 1 | **Added to the 1.5.6 source list** (`Library/Application Support/Antigravity`, the whole folder). The 1.5.3 reading met this fragment too and left it out as unexplained (a test of `admin_policy` says so); the strings cannot show whether it is an administrator place. A new version is not allowed to be looser than the evidence leaves room for, and a Mac without that folder (this one) is not affected, so for 1.5.6 it refuses. 1.5.3's list is unchanged |
+| **`/Library/Application Support/Antigravity`** | 1 | **Added to the 1.5.6 source list** (`Library/Application Support/Antigravity`, the whole folder). The 1.5.3 reading met this fragment too and left it out as unexplained (a test of `admin_policy` says so); the strings cannot show whether it is an administrator place. A new version is not allowed to be looser than the evidence leaves room for, and a Mac without that folder (this one) is not affected, so for 1.5.6 it refuses, as an unconfirmed candidate (the sentence says its use is not confirmed, not that a policy exists). 1.5.3's list is unchanged |
 | `managed-settings`, `policy.json` | not in the extract | not added (nothing names them); the 1.5.3 list never had them |
 | `.agents/hooks.json` | 2 | project and home hooks place; see section 4 |
 | `.agents/agents`, `.agents/plugins`, `.agents/plugins.json`, `.agents/rules`, `.agents/skills`, `.agents/skills.json`, `.agents/workflows` | 2, 1, 1, 1, 6, 3, 3 | see section 4 |
@@ -63,8 +63,9 @@ checked for `~/.agents/hooks.json` only. The two spellings `_agents` and `_agent
 - `workdir_forbidden`, `forbidden_anywhere` and the file tools' protected names gain `_agents` and `_agent`;
 - the home check (`home_hooks_state`) now looks, by `lstat` and never opening anything, at `hooks.json`, `plugins.json` and `plugins` in each of `~/.agents`, `~/.agent`, `~/_agents`, `~/_agent`.
 
-Not covered, and said so: customization roots in folders **between** the work folder and `/` other than the home folder (`<state>/chat-work`, the state folder itself): they are VBear's own 0700 folders and nothing but VBear and
-the AGY process writes there; and `rules`, `skills`, `workflows` and `agents` in the home folder, which are text for the model and have been accepted since ADR 0012 (`~/.agents/teamwork`, swarm state, is not looked at either).
+- the folders **above** the chat's work folder, up to `/`, get the same twelve-place look (`ancestor_hooks_state`, R1 of the review of v0.25.2): the guide says AGY walks up to the repository root, and a `VBEAR_HOME` inside a project (`$HOME/project/.vbear`) puts the project's own `_agent/hooks.json` on that road. Before R1 these were assumed to be VBear's own 0700 folders, which is not true for such a `VBEAR_HOME`. The look goes to `/` and does not stop at a `.git` folder, which is stricter than AGY's own search.
+
+Not covered, and said so: a folder or link made above the work folder between the look and AGY's search; anything AGY finds by a rule its guide does not state (the guide was read, AGY was not run); and `rules`, `skills`, `workflows` and `agents` in the home folder, which are text for the model and have been accepted since ADR 0012 (`~/.agents/teamwork`, swarm state, is not looked at either).
 
 ## 5. The environment
 
@@ -99,7 +100,7 @@ The folder outside `builtin` had these names, all of them in `home_created` alre
 | `builtin_paths`, `builtin_runnable` | 1.5.3's | section 6: the same 62 paths, no new ending | none known |
 | `builtin_sha256` | the 41 values of the folder a real 1.5.6 wrote | section 6 | a folder AGY 1.5.6 writes after a long use may hold more; that is refused by name until a run shows it |
 | `admin_policy.AGY_SOURCES["1.5.6"]` | `etc/antigravity`, `Library/Application Support/Antigravity`, domain `com.google.antigravity` | section 3 | the list is a reading of strings, not vendor documentation, as for 1.5.3 |
-| work folder, file tools, home hooks | `_agents`, `_agent` and the home places added for every version | section 4 | roots between the work folder and `/` other than the home folder |
+| work folder, file tools, home hooks | `_agents`, `_agent` and the home places added for every version; the same places in every folder above the work folder | section 4 | rules that the guide does not state; a change between the look and AGY's search |
 | environment | six variables, unchanged | section 5 | none |
 
 ## 8. Not shown, on purpose

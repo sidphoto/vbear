@@ -108,6 +108,7 @@ HOOKS_FILE = ".agents/hooks.json"             # under the person's HOME; looked 
 # only looked at (``lstat``), never opened, for these three names (P56-2).
 HOOKS_ROOTS = (".agents", ".agent", "_agents", "_agent")
 HOOKS_ITEMS = ("hooks.json", "plugins.json", "plugins")
+CHAT_WORK_NAME = "chat-work"                  # ``chat_store.WORK``: the folder of the chats' work folders in the state folder (a test holds them equal)
 HOOKS_PLACES = tuple(f"{root}/{item}" for root in HOOKS_ROOTS for item in HOOKS_ITEMS)
 
 # Versions this code knows how to run: the protocol table's keys. The binary's version is matched against this list.
@@ -680,6 +681,68 @@ def home_hooks_state(home=None) -> tuple[str, str]:
     return "absent", ""
 
 
+def _folders_above(path, include_self: bool = False) -> list[str]:
+    """The folders above ``path`` (nearest first, up to ``/``), as the path is written and then as the file system has it (AGY's own
+    working folder is the real one), without a repeat. ``path`` itself only with ``include_self``."""
+    out: list[str] = []
+    for form in (os.path.abspath(os.fspath(path)), os.path.realpath(os.fspath(path))):
+        current = form if include_self else os.path.dirname(form)
+        while True:
+            if current not in out:
+                out.append(current)
+            parent = os.path.dirname(current)
+            if parent == current:
+                break
+            current = parent
+    return out
+
+
+def _shown(path: str, homes) -> str:
+    """``path`` for a sentence: the person's home written as ``~``; any other folder as it is (it is the person's own, and the sentence
+    has to say which one to move)."""
+    for home in homes:
+        if home and home != "/" and (path == home or path.startswith(home.rstrip("/") + "/")):
+            return "~" + path[len(home.rstrip("/")):]
+    return path
+
+
+def ancestor_hooks_state(path, home=None, *, include_self: bool = False) -> tuple[str, str]:
+    """("absent" | "present" | "unreadable", why): the same twelve places as ``home_hooks_state`` (``hooks.json``, ``plugins.json`` and
+    ``plugins`` in ``.agents``, ``.agent``, ``_agents`` and ``_agent``), looked at by ``lstat`` in every folder above ``path`` up to the
+    file system root, and nothing else; nothing is opened or listed. AGY looks for its customization roots from the folder it starts
+    in up to the repository root (its own guide, the same in 1.5.3 and 1.5.6), so ``$HOME/project/_agent/hooks.json`` is loaded by
+    a chat whose state folder is ``$HOME/project/.vbear``. The person's HOME is left to ``home_hooks_state`` (not counted twice).
+    Anything there is a refusal, and so is every failure to tell except "there is no such name" (a file where a root folder would be
+    has no ``hooks.json`` in it). ``include_self``: ``path`` itself too (a folder that is not a work folder, like the state folder)."""
+    home_root = os.fspath(home) if home else str(Path.home())
+    homes = {h for h in (os.path.abspath(home_root), os.path.realpath(home_root)) if h}
+    for folder in _folders_above(path, include_self):
+        if folder in homes:
+            continue
+        for place in HOOKS_PLACES:
+            where = os.path.join(folder, place)
+            shown = _shown(where, homes)
+            if len(shown) > 110:
+                shown = "…" + shown[-109:]
+            try:
+                os.lstat(where)
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            except OSError as exc:
+                return "unreadable", f"無法確認 {shown} 存不存在（{exc.strerror or type(exc).__name__}），所以不啟動 AGY 聊天。"
+            return "present", (f"AGY 會從聊天的工作資料夾往上找設定，在 {shown} 找到 hooks 或外掛（會自動執行的指令或程式），VBear 管不到，所以不啟動 AGY 聊天。"
+                               "請把它移走，或把 VBear 的資料夾（VBEAR_HOME）放到別處。")
+    return "absent", ""
+
+
+def check_ancestors(path, home=None, *, include_self: bool = False, code: str = "agy_hooks"):
+    """``path`` unchanged when ``ancestor_hooks_state`` finds nothing above it; AgyRefused (``code``) with its sentence otherwise."""
+    state, why = ancestor_hooks_state(path, home, include_self=include_self)
+    if state != "absent":
+        raise AgyRefused(code, why)
+    return path
+
+
 # ---- the work folder -------------------------------------------------------------------------------------------------
 
 def check_workdir(path, *, code: str = "agy_workdir", label: str = "工作資料夾") -> Path:
@@ -909,7 +972,7 @@ def status(base, *, home=None, root: str | None = None, search_path: str | None 
     (the first that does not hold, in the order of the checks: binary and version, then the policy, the hooks, the folder)
     installed / version (the one AGY printed, when it was read) / verified / shared_verified (the shared-folder part of the
     check passed too) / admin_policy_ok and hooks_ok (None until they were asked) / why (the sentence for a person; "" when
-    ready) / verified_versions. Not logged in is not a state here: the chat check needs the real login, and "not logged in"
+    ready; the hooks sentence names the folder it found, the home written as ``~``) / verified_versions. Not logged in is not a state here: the chat check needs the real login, and "not logged in"
     shows when a chat starts (``not_logged_in``). Nothing is made on disk. ``home`` is the person's HOME (the hooks), ``root``
     where the administrator policy is looked for, ``search_path`` where ``agy`` is looked for (all three are given by tests)."""
     root = POLICY_ROOT if root is None else root
@@ -946,6 +1009,8 @@ def _look(base, home, root, search_path) -> dict:
         out.update(state="policy", why=policy.reason())
         return out
     hooks, why = home_hooks_state(home)
+    if hooks == "absent":                          # the folders above the work folders (<state>/chat-work/…) up to the root: AGY looks there too
+        hooks, why = ancestor_hooks_state(os.path.join(os.fspath(base), CHAT_WORK_NAME), home, include_self=True)
     out["hooks_ok"] = hooks == "absent"
     if hooks != "absent":
         out.update(state="hooks", why=why)

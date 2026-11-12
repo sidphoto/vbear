@@ -637,8 +637,10 @@ class ChatOps:
             return _store_err(rid, exc)
         try:
             agy_chat_env.check_workdir(workdir)
+            agy_chat_env.check_ancestors(workdir)              # AGY looks for hooks and plugins from here up to the file system root
             if shared is not None:
                 agy_chat_env.check_workdir(shared, code="shared_unsafe", label="共用資料夾")
+                agy_chat_env.check_ancestors(shared)            # (--add-dir: the folders above it too)
             agy_chat_env.ensure_chat_home(self.base, version=version)      # (checked against this AGY version's built-in table)
             agy_chat_env.write_settings(self.base, version=version)          # AGY reads its settings from here: written before every process
         except agy_chat_env.AgyRefused as exc:

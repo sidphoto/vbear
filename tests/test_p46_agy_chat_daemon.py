@@ -757,6 +757,30 @@ class BeforeAnythingStartsTests(AgyCase):
         self.refused("agy_hooks")
         self.assertEqual((hooks.stat().st_mtime_ns, hooks.read_bytes()), before)
 
+    def test_hooks_or_plugins_in_a_folder_above_the_state_folder_refuse_the_start(self):          # R1: AGY looks up from where it starts
+        """The state folder is ``tmp/st`` here, so ``tmp`` is a folder above the chat's work folder, as ``$HOME/project`` is for a
+        ``VBEAR_HOME=$HOME/project/.vbear``. Nothing is started, moved or deleted."""
+        self.configure("text")
+        for root, item, kind in (("_agent", "hooks.json", "file"), ("_agents", "plugins", "dir"), (".agent", "plugins.json", "file"),
+                                 (".agents", "hooks.json", "file")):
+            with self.subTest(root=root, item=item):
+                path = self.tmp / root / item
+                path.parent.mkdir()
+                path.mkdir() if kind == "dir" else path.write_text("{}")
+                before = path.stat().st_mtime_ns
+                chat_id = self.open_chat()
+                r = self.send(chat_id)
+                self.assertEqual(r["error"]["code"], "agy_hooks", r)
+                self.assertIn(f"{root}/{item}", r["error"]["message"], "it says which one")
+                self.assertEqual(self.starts(), [])
+                self.assertEqual(self.kinds(chat_id), ["chat_created"])
+                self.assertEqual(path.stat().st_mtime_ns, before)
+                path.rmdir() if kind == "dir" else path.unlink()
+                path.parent.rmdir()
+        chat_id = self.open_chat()
+        self.assertTrue(self.send(chat_id)["ok"], "and a start with nothing above goes on as before")
+        self.wait_turn(chat_id, 1)
+
     def test_the_person_has_a_plugin_in_another_customization_root(self):          # P56-2
         plugins = self.home / "_agents" / "plugins"
         plugins.mkdir(parents=True)

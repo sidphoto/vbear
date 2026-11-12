@@ -1057,6 +1057,9 @@ const PLAIN_ERRORS = [
     swaps: [[/[（(]\s*manual_review\s*[）)]/g, ""], [/manual_review/g, "要你檢查"], [/(?:等待|需要|待)人工處理/g, "要你檢查"]] },
   { key: "chat_unverified", re: /聊天模式還沒有(?:在這台 Mac 上)?通過驗證/,
     text: "這個 AI 工具還沒做過聊天用的安全檢查，所以現在不能聊天。", next: "到這位員工的準備頁，做一次安全檢查，通過後就能聊。" },
+  // R1 (v0.25.2): a folder that only might be an administrator source (AGY 1.5.6's /Library/Application Support/Antigravity): the server says its use is not confirmed; this comes before the rule below, which says "has administrator settings".
+  { key: "chat_admin_unconfirmed", re: /這個位置的用途 VBear 還不能確認/,
+    text: "這台電腦上有一個 AI 工具的系統資料夾，VBear 還不能確認它是不是管理員設定，為了安全先不能用它聊天。", next: "可以到「AI 工具」看看有沒有別的工具能用。" },
   { key: "chat_admin_policy", re: /這台 Mac 上有管理員政策或系統設定，可能蓋過 VBear 的設定，所以不啟動聊天/,
     text: "這台電腦的 AI 工具有管理員設定，VBear 不能用它聊天。", next: "可以到「AI 工具」看看有沒有別的工具能用。" },
   // P52-2: the tool updated itself and VBear does not know that version. The tool and the version are taken out of the server's own sentence (never looked up); `build` says it.
@@ -15440,7 +15443,7 @@ const CHAT_AGY_WORD = {
   unverified: ["還沒通過聊天驗證", "b-warn"], policy: ["被管理員政策擋住", "b-bad"], hooks: ["你的 AGY 設定讓聊天不能用", "b-bad"],
   folder: ["聊天用的 AGY 資料夾不能用", "b-bad"], version_unreadable: ["讀不到 AGY 的版本", "b-warn"],
 };
-const CHAT_AGY_HOOKS_NOTE = "你自己的 AGY 設了會在聊天時自動執行的 hooks，VBear 不能保證每個指令都先問你，所以聊天先不開。VBear 不會幫你改它；要用 AGY 聊天，請先自己把那些 hooks 拿掉。";
+const CHAT_AGY_HOOKS_NOTE = "你自己的 AGY 設定，或 VBear 資料夾往上的資料夾裡，有會在聊天時自動執行的 hooks 或外掛，VBear 不能保證每個指令都先問你，所以聊天先不開。VBear 不會幫你改它；要用 AGY 聊天，請先自己把它拿掉（上面寫了是哪一個），或把 VBear 的資料夾（VBEAR_HOME）放到別處。";
 const CHAT_AGY_SKILLS_NOTE = "AGY 員工會用到你自己裝的 AGY 技能。";
 const CHAT_VERIFY_COST_CLAUDE = "驗證會用這個 Claude Code 真的跑一段對話：約 6 次小呼叫（Haiku），用你自己的登入，會用掉一點點額度（預期不到 US$0.05，實際金額以 Claude Code 回報為準），"
   + "要幾分鐘。它會試：員工回話、每個指令都先問你、你拒絕或改內容、接續舊對話、保護範圍（沙盒）擋住資料夾外的寫入。全部通過，才會記下這個版本。";
