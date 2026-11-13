@@ -1,4 +1,4 @@
-"""P46-2 / P56-2: the administrator policy sources of AGY 1.5.3 and 1.5.6 (vbear/admin_policy.py). Every check runs against a temporary root; the real
+"""P46-2 / P56-2 / P60: the administrator policy sources of AGY 1.5.3, 1.5.6 and 1.5.7 (vbear/admin_policy.py). Every check runs against a temporary root; the real
 /etc and /Library are never looked at, and no AGY is started."""
 
 import os
@@ -12,6 +12,7 @@ from vbear import admin_policy as ap
 
 AGY = "1.5.3"
 AGY_156 = "1.5.6"
+AGY_157 = "1.5.7"
 APP_SUPPORT = "Library/Application Support/Antigravity"
 PREFS = "Library/Managed Preferences"
 
@@ -43,7 +44,7 @@ class AgyPolicyTests(unittest.TestCase):
         return ap.check_agy(version, str(self.root))
 
     def test_the_list_is_the_one_the_plan_names(self):
-        self.assertEqual(set(ap.AGY_SOURCES), {AGY, AGY_156})       # (v0.25.2 added 1.5.6; 1.5.3's entry below is unchanged)
+        self.assertEqual(set(ap.AGY_SOURCES), {AGY, AGY_156, AGY_157})       # (v0.25.2 added 1.5.6, v0.25.5 added 1.5.7; 1.5.3's entry below is unchanged)
         spec = ap.AGY_SOURCES[AGY]
         self.assertEqual(tuple(spec["paths"]), ("etc/antigravity",))
         self.assertEqual(spec["domain"], "com.google.antigravity")
@@ -57,6 +58,40 @@ class AgyPolicyTests(unittest.TestCase):
         self.assertTrue(set(old["paths"]) < set(new["paths"]), "a later version never has fewer sources than the earlier one")
         self.assertEqual(new["domain"], old["domain"])
         self.assertEqual(tuple(new["home_paths"]), tuple(old["home_paths"]))
+
+    def test_1_5_7_has_exactly_the_list_of_1_5_6(self):
+        """v0.25.5: the strings of the real 1.5.7 hold the same two places (/etc/antigravity/admin_settings.json and /Library/Application Support/Antigravity) and
+        the same domain (docs/evidence/agy-1.5.7-chat.md), so the list is 1.5.6's, the unconfirmed place included; 1.5.3's list does not change."""
+        new, old = ap.AGY_SOURCES[AGY_157], ap.AGY_SOURCES[AGY_156]
+        self.assertEqual(new, old)
+        self.assertEqual(tuple(new["paths"]), ("etc/antigravity", APP_SUPPORT))
+        self.assertEqual(new["domain"], "com.google.antigravity")
+        self.assertEqual(tuple(new["unconfirmed"]), (APP_SUPPORT,))
+        self.assertEqual(tuple(ap.AGY_SOURCES[AGY]["paths"]), ("etc/antigravity",))
+
+    def test_1_5_7_refuses_on_every_source_and_passes_a_clean_root(self):
+        self.assertTrue(self.agy(AGY_157).ok)
+        for rel, directory in (("etc/antigravity", True), ("etc/antigravity/admin_settings.json", False), (APP_SUPPORT, True),
+                               (f"{APP_SUPPORT}/anything.json", False), (f"{PREFS}/com.google.antigravity.plist", False),
+                               (f"{PREFS}/alice/com.google.antigravity.plist", False)):
+            with self.subTest(source=rel):
+                self._cleanup()
+                self.root.mkdir(parents=True)
+                self.make(rel, directory=directory)
+                self.assertFalse(self.agy(AGY_157).ok)
+
+    def test_1_5_7_says_the_new_place_is_unconfirmed_like_1_5_6(self):
+        self.make(APP_SUPPORT, directory=True)
+        r = self.agy(AGY_157)
+        self.assertEqual((r.found, r.unconfirmed), (["/" + APP_SUPPORT], ["/" + APP_SUPPORT]))
+        self.assertIn("還不能確認", r.reason())
+
+    def test_a_version_after_1_5_7_has_no_list_and_cannot_start(self):
+        for version in ("1.5.8", "1.6.0", "1.5.5", "1.5.4"):
+            with self.subTest(version=version):
+                r = self.agy(version)
+                self.assertFalse(r.ok)
+                self.assertTrue(r.problems)
 
     def test_1_5_6_refuses_on_the_new_place_and_1_5_3_does_not(self):
         self.assertTrue(self.agy(AGY_156).ok)

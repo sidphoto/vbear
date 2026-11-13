@@ -3510,9 +3510,34 @@ class AgyVersionTablesNeedEvidence(unittest.TestCase):
 
     def test_20_every_version_of_the_table_passes(self):
         _, acp, versions, sources, evidence = self.real()
-        self.assertEqual(sorted(versions), ["1.5.3", "1.5.6"])
+        self.assertEqual(sorted(versions), ["1.5.3", "1.5.6", "1.5.7"])          # (v0.25.5 added 1.5.7)
         self.assertEqual(agy_version_table_problems(versions, sources, evidence), [])
         self.assertIn("agy-1.5.6-chat.md", evidence)
+        self.assertIn("agy-1.5.7-chat.md", evidence)
+
+    def test_20_the_scan_reaches_the_newest_version_and_fires_for_it_alone(self):
+        """v0.25.5: the rule reads every version of the table, so 1.5.7 is held to it; each of its own failures is caught on its own."""
+        dataclasses, acp, versions, sources, evidence = self.real()
+        real = versions["1.5.7"]
+        self.assertTrue(any(p for p in real.builtin_sha256), "1.5.7 has a built-in table")
+        problems = agy_version_table_problems(versions, {k: v for k, v in sources.items() if k != "1.5.7"}, evidence)
+        self.assertTrue(any(p.startswith("1.5.7: no administrator-source") for p in problems), problems)
+        problems = agy_version_table_problems(versions, sources, {k: v for k, v in evidence.items() if "1.5.7" not in k})
+        self.assertTrue(any(p.startswith("1.5.7: no docs/evidence/agy-1.5.7-*.md") for p in problems), problems)
+        problems = agy_version_table_problems(versions, sources, dict(evidence, **{"agy-1.5.7-chat.md": "about 1.5.6 only"}))
+        self.assertTrue(any(p.startswith("1.5.7: no docs/evidence") for p in problems), problems)
+        bad = dict(versions, **{"1.5.7": dataclasses.replace(real, builtin_sha256=real.builtin_sha256[1:])})
+        self.assertTrue(any(p.startswith("1.5.7:") and "(20b)" in p for p in agy_version_table_problems(bad, sources, evidence)))
+        new_file = "skills/mcp-app-development/SKILL.md"
+        bad = dict(versions, **{"1.5.7": dataclasses.replace(real, builtin_sha256=tuple(x for x in real.builtin_sha256 if x[0] != new_file))})
+        self.assertTrue(any(p.startswith("1.5.7: the hashed paths are not the files") and "(20b)" in p for p in agy_version_table_problems(bad, sources, evidence)),
+                        "the new skill's file needs its hash")
+        bad = dict(versions, **{"1.5.7": dataclasses.replace(real, builtin_paths=real.builtin_paths + ("skills/another-new/SKILL.md",))})
+        self.assertTrue(any(p.startswith("1.5.7:") and "(20b)" in p for p in agy_version_table_problems(bad, sources, evidence)), "a new path without a hash")
+        bad = dict(versions, **{"1.5.7": dataclasses.replace(real, builtin_sha256=tuple(x for x in real.builtin_sha256 if x[0] != "plugins/swarm/sidecars/swarm_board/hive.js"))})
+        self.assertTrue(any(p.startswith("1.5.7:") and "(20c)" in p for p in agy_version_table_problems(bad, sources, evidence)))
+        bad = dict(versions, **{"1.5.7": dataclasses.replace(real, workdir_forbidden=real.workdir_forbidden[1:])})
+        self.assertTrue(any("(20d)" in p for p in agy_version_table_problems(bad, sources, evidence)), "the newest version's shared table must stay the others'")
 
     def test_20_the_not_added_note_of_1_5_5_is_not_evidence_for_a_version(self):
         _, acp, versions, sources, evidence = self.real()

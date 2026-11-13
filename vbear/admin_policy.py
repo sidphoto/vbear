@@ -104,9 +104,15 @@ CODEX_SOURCES = {"0.160.0": _CODEX, "0.163.0": _CODEX, "0.167.0": _CODEX}
 # is there the launch is refused (only stricter than 1.5.3, and a Mac without that folder is not affected). 1.5.3's entry did not
 # change. It is a candidate only ("unconfirmed"): the refusal sentence says its use is not confirmed, not that a policy exists.
 # Method and result: docs/evidence/agy-1.5.6-chat.md, section 3.
+# 1.5.7 (v0.25.5): the 1.5.6 list, unchanged. The strings of the real 1.5.7 (counted on 2026-11-13, the program was not run for them) still hold
+# /etc/antigravity/admin_settings.json (once), /Library/Application Support/Antigravity (once), admin_settings (6), AdminSettings (18), and nothing named
+# managed-settings or policy.json. They also list three longer names that begin with com.google.antigravity (".companion", ".dev", ".insiders"), which sit
+# in the program beside other applications' bundle identifiers; they are not shown to be managed-preference domains, the table holds one domain per
+# version, and the counting of 1.5.6 cannot tell whether they are new, so they are not added (docs/evidence/agy-1.5.7-chat.md, section 3).
+_AGY_1_5_6 = {"paths": ("etc/antigravity", "Library/Application Support/Antigravity"), "domain": "com.google.antigravity",
+              "home_paths": (), "unconfirmed": ("Library/Application Support/Antigravity",)}
 AGY_SOURCES = {"1.5.3": {"paths": ("etc/antigravity",), "domain": "com.google.antigravity", "home_paths": ()},
-               "1.5.6": {"paths": ("etc/antigravity", "Library/Application Support/Antigravity"), "domain": "com.google.antigravity",
-                         "home_paths": (), "unconfirmed": ("Library/Application Support/Antigravity",)}}
+               "1.5.6": _AGY_1_5_6, "1.5.7": dict(_AGY_1_5_6)}
 
 
 @dataclass
