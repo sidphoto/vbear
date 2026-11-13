@@ -149,6 +149,16 @@ Never, whatever the person ticked in 「自己動手」:
      22c  the paragraph is a fixed string: ``identity_block`` builds it only from the ``IDENTITY_*`` constants with ``.format`` (no f-string, no ``%``, no other concatenation), and those constants take
           only the four fields ``name``, ``position``, ``tool`` and ``label``; nothing a person writes can bring its own wording.
 
+  23. (P59, v0.25.4) the chat list and the start-up page may show a kept reading of an AI tool's version; nothing that starts a program may read it. Two rules on the source
+      (this file, ``DisplayVersionCacheRules``, with a bad sample for each way out; the behaviour is tested in tests/test_p59_display_versions.py; docs/SECURITY-MODEL.md,
+      "Display-only version cache (v0.25.4)"):
+     23a  the display function and the cache are named only where a page shows a version: ``check_cli_version_for_display``, ``_display_cache``, ``_display_key``, ``_display_lock``, ``claude_display``
+          and ``_default_claude_for_display`` appear in no module of ``vbear/`` but ``cli_versions.py`` and ``chat_service.py``; in ``cli_versions.py`` only in the display function, its key function and
+          ``invalidate_display_cache`` (never in ``check_cli_version``, ``assert_cli_version``, ``ensure_binary_unchanged``, ``_run_probe``); in ``chat_service.py`` only in ``__init__`` (it stores the argument), ``claude_display``,
+          ``support``, ``_tool_version`` and ``_default_claude_for_display`` (never in ``_claude_fields``, ``_verify_claude`` or ``send``).
+     23b  the key of the cache holds the file's identity read just now: ``_display_key`` calls ``_file_identity`` on the resolved path and puts the result in the tuple it returns, the display function
+          reads and writes the cache only under that key, and ``_file_identity`` still returns the device, inode, mode, size, modification time and change time.
+
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
 ``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py``, ``vbear/skillbook*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
 staff, of dispatch, of groups and of memory (the suggestions, P42-4) are held to it the day they are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
@@ -3956,6 +3966,189 @@ class EmployeeNameRules(unittest.TestCase):
         self.assertIn("class ClaudeIdentityTests", spec)
         self.assertIn("class CodexIdentityTests", spec)
         self.assertIn("class AgyIdentityTests", spec)
+
+
+# ---- 23: a kept reading of a version is for showing only (P59, v0.25.4) ----------------------------------------------------------------------------------------
+
+DISPLAY_NAMES = frozenset({"check_cli_version_for_display", "_display_cache", "_display_key", "_display_lock", "claude_display",
+                           "_default_claude_for_display"})
+# the functions that may name them, by file (a name used at the top of a module is "<module>", which no file may do)
+DISPLAY_ALLOWED = {
+    "runtime/cli_versions.py": {"check_cli_version_for_display", "_display_key", "invalidate_display_cache"},
+    "chat_service.py": {"__init__", "claude_display", "support", "_tool_version", "_default_claude_for_display"},
+}
+IDENTITY_FIELDS = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns")
+
+
+def _names_in(node, defining=False):
+    """The display names a tree mentions. ``defining``: a plain assignment of a module-level name (the definition itself) is not a mention."""
+    for n in ast.walk(node):
+        if isinstance(n, ast.Name) and n.id in DISPLAY_NAMES and not (defining and isinstance(n.ctx, ast.Store)):
+            yield n.id
+        elif isinstance(n, ast.Attribute) and n.attr in DISPLAY_NAMES:
+            yield n.attr
+        elif isinstance(n, (ast.arg, ast.keyword)) and n.arg in DISPLAY_NAMES:
+            yield n.arg
+        elif isinstance(n, ast.ImportFrom):
+            yield from (a.name for a in n.names if a.name in DISPLAY_NAMES)
+
+
+def display_use_problems(sources: dict) -> list[str]:
+    """23a: ``sources`` is {path under vbear/: source}. A display name outside the allowed functions of the allowed files is a problem
+    (a name at module level, in a class body, a decorator or a default argument counts as outside every function)."""
+    found = []
+    for path, source in sorted(sources.items()):
+        allowed = DISPLAY_ALLOWED.get(path)
+        tree = ast.parse(source)
+        funcs, loose = [], []
+        for node in tree.body:
+            members = node.body if isinstance(node, ast.ClassDef) else [node]
+            if isinstance(node, ast.ClassDef):
+                loose += node.decorator_list + node.bases
+            for member in members:
+                if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    funcs.append(member)
+                    loose += member.decorator_list + member.args.defaults + [d for d in member.args.kw_defaults if d is not None]
+                elif member is not node or not isinstance(node, ast.ClassDef):
+                    loose.append(member)
+        for func in funcs:
+            names = set(_names_in(func))
+            if names and (allowed is None or func.name not in allowed):
+                found.append(f"{path}: {func.name} names {', '.join(sorted(names))}")
+        names = {name for part in loose for name in _names_in(part, defining=path == "runtime/cli_versions.py")}
+        if names:
+            found.append(f"{path}: <module> names {', '.join(sorted(names))}")
+    return found
+
+
+def display_key_problems(source: str) -> list[str]:
+    """23b, on the source of ``cli_versions.py``: the key has the identity, the display function uses only that key, and the identity is the whole stat."""
+    found = []
+    tree = ast.parse(source)
+    key_fn, show_fn, identity_fn = (_function(tree, name) for name in ("_display_key", "check_cli_version_for_display", "_file_identity"))
+    if key_fn is None or show_fn is None or identity_fn is None:
+        return ["_display_key, check_cli_version_for_display or _file_identity is not there exactly once"]
+    # the identity: read in _display_key from _file_identity, bound to a name, and that name is in the returned tuple
+    bound = {t.id for a in ast.walk(key_fn) if isinstance(a, ast.Assign) and isinstance(a.value, ast.Call) and _call_name(a.value) == "_file_identity"
+             for t in a.targets if isinstance(t, ast.Name)}
+    returns = [r.value for r in ast.walk(key_fn) if isinstance(r, ast.Return) and isinstance(r.value, ast.Tuple)]
+    if not bound:
+        found.append("_display_key does not read the file's identity with _file_identity")
+    if not returns or not all(any(isinstance(e, ast.Name) and e.id in bound for e in r.elts) for r in returns):
+        found.append("the tuple _display_key returns does not hold the identity")
+    # the display function reads and writes the cache only with the key _display_key made
+    key_names = {t.id for a in ast.walk(show_fn) if isinstance(a, ast.Assign) and isinstance(a.value, ast.Call) and _call_name(a.value) == "_display_key"
+                 for t in a.targets if isinstance(t, ast.Name)}
+    uses = [n for n in ast.walk(show_fn) if isinstance(n, ast.Name) and n.id == "_display_cache"]
+    if not key_names:
+        found.append("check_cli_version_for_display does not take its key from _display_key")
+    reads = [n for n in ast.walk(show_fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "get"
+             and isinstance(n.func.value, ast.Name) and n.func.value.id == "_display_cache"]
+    writes = [n for n in ast.walk(show_fn) if isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name) and n.value.id == "_display_cache"
+              and isinstance(n.ctx, ast.Store)]
+    if not reads or not writes or len(uses) < 2:
+        found.append("check_cli_version_for_display does not read and write the cache")
+    for node in reads:
+        if not (len(node.args) == 1 and isinstance(node.args[0], ast.Name) and node.args[0].id in key_names):
+            found.append("the cache is read with something other than the key from _display_key")
+    for node in writes:
+        if not (isinstance(node.slice, ast.Name) and node.slice.id in key_names):
+            found.append("the cache is written under something other than the key from _display_key")
+    # the identity is the whole stat
+    text = ast.unparse(identity_fn)
+    for field_name in IDENTITY_FIELDS:
+        if f"info.{field_name}" not in text:
+            found.append(f"_file_identity no longer returns {field_name}")
+    return found
+
+
+class DisplayVersionCacheRules(unittest.TestCase):
+    """23: the real sources keep the two rules, and each way out is caught on a made-up bad source."""
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    GOOD_CV = (
+        "import os, stat\n"
+        "_display_cache = {}\n_display_lock = None\n"
+        "def _file_identity(path):\n    info = os.stat(path)\n"
+        "    return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)\n"
+        "def check_cli_version(engine):\n    return _file_identity(engine)\n"
+        "def assert_cli_version(engine):\n    return check_cli_version(engine)\n"
+        "def invalidate_display_cache():\n    _display_cache.clear()\n"
+        "def _display_key(engine, binary):\n    identity = _file_identity(binary)\n    return (engine, binary, identity)\n"
+        "def check_cli_version_for_display(engine, binary):\n    key = _display_key(engine, binary)\n"
+        "    kept = _display_cache.get(key)\n    if kept:\n        return kept\n    result = check_cli_version(engine)\n"
+        "    _display_cache[key] = result\n    return result\n")
+    GOOD_SERVICE = (
+        "def _default_claude_for_display():\n    return cv.check_cli_version_for_display('claude')\n"
+        "class ChatService:\n"
+        "    def claude_display(self):\n        return _default_claude_for_display()\n"
+        "    def support(self):\n        return self.claude_display()\n"
+        "    def _tool_version(self, engine):\n        return self.claude_display()[1]\n"
+        "    def _claude_fields(self):\n        return self.claude()\n")
+    GOOD = {"runtime/cli_versions.py": GOOD_CV, "chat_service.py": GOOD_SERVICE, "runtime/native.py": "def launch():\n    return cv.assert_cli_version('claude')\n"}
+
+    def real_sources(self):
+        return {str(p.relative_to(PACKAGE)): p.read_text(encoding="utf-8") for p in sorted(PACKAGE.rglob("*.py")) if "__pycache__" not in p.parts}
+
+    def test_23_the_real_sources_keep_both_rules(self):
+        sources = self.real_sources()
+        self.assertIn("runtime/cli_versions.py", sources)
+        self.assertEqual(display_use_problems(sources), [])
+        self.assertEqual(display_key_problems(sources["runtime/cli_versions.py"]), [])
+
+    def test_23_the_scan_sees_the_places_that_use_the_display_function(self):
+        """The scan is not blind: the real chat service does name the display names where it is allowed to."""
+        names = {n for n in _names_in(ast.parse(self.real_sources()["chat_service.py"]))}
+        self.assertEqual(names, {"claude_display", "_default_claude_for_display", "check_cli_version_for_display"})
+
+    def test_23_the_good_samples_pass(self):
+        self.assertEqual(display_use_problems(self.GOOD), [])
+        self.assertEqual(display_key_problems(self.GOOD_CV), [])
+
+    def test_23a_catches_each_way_a_launch_path_could_read_the_cache(self):
+        bad = {
+            "a launch module calls the display function": ("runtime/native.py", "def launch():\n    return cv.check_cli_version_for_display('claude')\n"),
+            "a launch module reads the cache": ("runtime/native.py", "def launch():\n    return cv._display_cache.get(1)\n"),
+            "a launch module imports it": ("runtime/native.py", "from .cli_versions import check_cli_version_for_display\n"),
+            "the daemon names the service's display function": ("runtime/daemon_chat.py", "def send(svc):\n    return svc.claude_display()\n"),
+            "an agent launch module": ("agent_launch.py", "def go(cv):\n    return cv.check_cli_version_for_display('codex')\n"),
+            "the chat's start": ("chat_service.py", self.GOOD_SERVICE.replace("return self.claude()", "return self.claude_display()")),
+            "the chat check": ("chat_service.py", self.GOOD_SERVICE + "    def _verify_claude(self):\n        return self.claude_display()\n"),
+            "a module level use": ("chat_service.py", self.GOOD_SERVICE + "KEPT = _default_claude_for_display\n"),
+            "a default argument": ("chat_service.py", self.GOOD_SERVICE + "def start(x=_default_claude_for_display):\n    return x\n"),
+            "assert_cli_version reads the cache": ("runtime/cli_versions.py", self.GOOD_CV.replace("def assert_cli_version(engine):\n    return check_cli_version(engine)",
+                                                                                                    "def assert_cli_version(engine):\n    return _display_cache.get(engine)")),
+            "check_cli_version calls the display function": ("runtime/cli_versions.py", self.GOOD_CV.replace("def check_cli_version(engine):\n    return _file_identity(engine)",
+                                                                                                           "def check_cli_version(engine):\n    return check_cli_version_for_display(engine, engine)")),
+        }
+        for what, (path, source) in bad.items():
+            sources = {**self.GOOD, path: source}
+            self.assertNotEqual(display_use_problems(sources), [], what)
+
+    def test_23b_catches_each_way_the_key_could_lose_the_identity(self):
+        bad = {
+            "no identity in the key": self.GOOD_CV.replace("return (engine, binary, identity)", "return (engine, binary)"),
+            "identity read but not in the key": self.GOOD_CV.replace("return (engine, binary, identity)", "return (engine, binary, 1)"),
+            "identity not read": self.GOOD_CV.replace("identity = _file_identity(binary)", "identity = os.path.getmtime(binary)"),
+            "cache read by another key": self.GOOD_CV.replace("_display_cache.get(key)", "_display_cache.get(engine)"),
+            "cache written under another key": self.GOOD_CV.replace("_display_cache[key] = result", "_display_cache[binary] = result"),
+            "key not from _display_key": self.GOOD_CV.replace("key = _display_key(engine, binary)", "key = (engine, binary)"),
+            "the identity dropped the modification time": self.GOOD_CV.replace("info.st_mtime_ns, ", ""),
+            "the identity dropped the inode": self.GOOD_CV.replace("info.st_ino, ", ""),
+            "the identity dropped the change time": self.GOOD_CV.replace(", info.st_ctime_ns", ""),
+            "no cache use": self.GOOD_CV.replace("    kept = _display_cache.get(key)\n    if kept:\n        return kept\n", "").replace("    _display_cache[key] = result\n", ""),
+            "a function gone": self.GOOD_CV.replace("def _display_key(", "def _other_key("),
+        }
+        for what, source in bad.items():
+            self.assertNotEqual(display_key_problems(source), [], what)
+
+    def test_23_the_description_and_the_tests_are_there(self):
+        text = (self.ROOT / "tests" / "test_autonomy_guard.py").read_text(encoding="utf-8")
+        for rule in "ab":
+            self.assertIn(f"     23{rule}  ", text, rule)
+        self.assertIn("class DisplayVersionCacheRules", text)
+        self.assertTrue((self.ROOT / "tests" / "test_p59_display_versions.py").is_file())
 
 
 if __name__ == "__main__":

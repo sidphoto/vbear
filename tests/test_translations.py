@@ -402,3 +402,18 @@ class TranslationTests(unittest.TestCase):
             manager.start({"s": record()}, "claude")
         self.assertEqual(cm.exception.code, "process_unconfirmed")
         self.assertTrue((cfg.state_dir() / "translation-worker.blocked").exists())
+
+
+class CodexArgvOrder(unittest.TestCase):
+    """P59-1: Codex takes --ask-for-approval only before ``exec``. Looks at the list only; nothing is run."""
+
+    def test_ask_for_approval_comes_before_exec(self):
+        argv = tr.translation_argv("codex", "/fake/codex", "/fake/scratch")
+        self.assertEqual(argv[:4], ["/fake/codex", "--ask-for-approval", "never", "exec"])
+        self.assertEqual(argv.count("--ask-for-approval"), 1)
+        self.assertGreater(argv.index("exec"), argv.index("--ask-for-approval"))
+
+    def test_no_global_option_after_exec(self):
+        argv = tr.translation_argv("codex", "/fake/codex", "/fake/scratch")
+        self.assertNotIn("--ask-for-approval", argv[argv.index("exec") + 1:])
+        self.assertEqual(argv[argv.index("--sandbox") + 1], "read-only")

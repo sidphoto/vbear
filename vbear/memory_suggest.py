@@ -38,7 +38,7 @@ from . import config as cfg, meetings as mt, strictjson
 from .chief import CHAT_ID_RE, select_messages
 from .jsonstore import GuardedJsonStore, StoreError
 from .runtime import memory_rules as rules
-from .translations import SIMPLIFIED
+from .zh_simplified import SIMPLIFIED
 
 DIR = "memory/suggest"
 MAX_RECORDS = 200

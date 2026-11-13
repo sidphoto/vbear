@@ -23,6 +23,7 @@ from . import config as cfg, headless_cli, strictjson
 from .jsonstore import GuardedJsonStore, StoreError
 from .runtime import daemon
 from .scan.document import redact, redact_value
+from .zh_simplified import SIMPLIFIED
 
 FIELDS = ("name", "description", "when_to_use", "inputs", "outputs", "dependencies")
 MODELS = {"claude": "claude-haiku-5-5", "codex": "gpt-6-luna"}
@@ -40,8 +41,6 @@ ROLE_RESULT_SCHEMA = {
 }
 ROLE_NAME_MAX = 30
 ROLE_WHAT_MAX = 50
-# Only distinct simplified forms; shared forms such as 查/入/程 are excluded.
-SIMPLIFIED = frozenset("这个们审门时发说对为开关读写数据软档应该过还进选项页网络认证设计统务组详细输无问题状态线码")
 PROBE_PROMPT = "請以繁體中文（台灣用語，不得使用簡體字）回傳固定文字：what、when、needs、description_zh 均為「驗證」。不得執行其他操作。"
 MAX_CACHE = 2 * 1024 * 1024
 MAX_INPUT = 32 * 1024
@@ -319,8 +318,9 @@ def translation_argv(engine, binary, scratch, schema=RESULT_SCHEMA):
                 "--no-session-persistence"]
     # A candidate only: read-only alone does NOT mean no tools. Production
     # resolution refuses this provider until no-tool capability is evidenced.
-    return [binary, "exec", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check",
-            "--sandbox", "read-only", "--ask-for-approval", "never", "--model", MODELS[engine],
+    # --ask-for-approval is a global Codex option: it is only accepted before ``exec``.
+    return [binary, "--ask-for-approval", "never", "exec", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check",
+            "--sandbox", "read-only", "--model", MODELS[engine],
             "-c", 'web_search="disabled"', "--disable", "shell_tool", "--disable", "mcp",
             "--cd", scratch, "-"]
 

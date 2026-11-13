@@ -1996,6 +1996,29 @@ only where the settings page's route writes it. `tools/qa_p44.py` is the coordin
 The chat process in the runtime adds up the day's spending in `_chat_day_spent` (`vbear/runtime/daemon_chat.py`) from a fixed list of kinds (the chief of staff, memory suggestions and the meetings). It **does not include** what 「整理成技能」 (`skill_suggest`) spent: the guard rules forbid the runtime to know about skills, and this release does not change the launch boundary. The result is one-sided:
 the per-turn check of a chat can allow up to US$0.10 more for each 「整理成技能」 run that day than the daily limit says, while 「整理成技能」 itself checks the day including the chats, and the ledger counts it. To be settled in a later release.
 
+**Checked again in v0.25.4 (the code was not changed; this is what it does today).**
+
+- *Where it is recorded.* Each press of 「整理成技能」 is one record, `<state>/skillbook/suggest/ks-<12 hex>.json` (kind `skill_suggest`, one turn, the cost in the turn's `evidence.cost_usd`; a record deleted the same day keeps its cost
+  for two days in `spend-keep/`, like the other kinds). The ledger (`GET /api/meetings/ledger`, `includes` ends in `"skill_suggest"`) and the check of the day made by every other board count it: the meetings, the staffing meetings,
+  the chief of staff and the memory suggestions all list `skillbook_suggest.spend_kind()` in their `spend_kinds()`.
+- *What limits it.* (1) At its start `SkillSuggestRunner.start` adds up the day of all seven kinds (the chats and the tries included) and refuses (`budget`) when the day plus the reserve would pass `daily_usd` or the lamp is red; the preview shows
+  the same blockers. (2) One call costs at most `CALL_USD` = US$0.10, or what the day has left in whole cents when that is less (`cap_usd`; none left means no call), and `TOTAL_USD` is the same number: one press, one call, no retry.
+  (3) At most 200 records (`MAX_RECORDS`, `too_many`). (4) One headless call at a time, on the worker lock the meetings, the staffing meetings, the chief of staff and the memory suggestions share. So it is **not** without a limit: a person who
+  presses again and again is stopped by the daily limit as the ledger counts it, and no single press can pass US$0.10.
+- *What does not see it.* The check a chat turn makes in the runtime (`_chat_day_spent`: the chats, deleted ones included, the meetings, the staffing meetings, the tries, the chief of staff and the memory suggestions) has no `skill_suggest`
+  in it, and the per-turn limit (`chat_limits.per_turn_usd`) is the chat's own. There is no separate daily limit for chats: `meeting_limits.daily_usd` is the one day for everything. So after 「整理成技能」 has spent, the ledger can read
+  above `daily_usd` (red lamp) while a chat turn is still allowed what the day would have left without it: the overshoot is at most what 「整理成技能」 spent that day (US$0.10 a press). This is the gap above, unchanged; a later release
+  decides whether the runtime may learn the kind. `tests/test_p59_spend_notes.py` holds the code to this note (the runtime list has no `skill_suggest`; every board's list has it), so a change in either place has to change the note.
+
+### The chief of staff reads before it looks at the day's money (checked in v0.25.4)
+
+The order in `ChiefRunner` (`vbear/chief_runner.py`), the same in `preview`, `start` and `retry`, and in the skill suggestions' `start`: **first** `_context`, "the scan": it reads the chat's messages (`chief.select_messages`), checks the CEO card and its
+tool, and builds the list of cards the proposal would be told about (`chief.candidates`). It is local: nothing is sent, no model is called, nothing is spent. **Then** the check that there is room for another record (`_check_count`) and the check of the no-tool Claude Code (in this order in
+`preview`, where `_provider_state` writes its answer as a blocker; the other way round in `start`, where `_resolve` raises), and **then** the day's money: `_day()`, `cap_usd` and `_blockers` (the reserve against the proposal's own room and against `daily_usd`, the red lamp, the worker lock). Only after those pass does `start`
+take the worker lock, write the record and `_launch` the one call, the only step that spends. So a refusal for money (`budget`) always comes after the local read, never before it, and a day that is full does not skip the scan; and in `start` the
+preview is taken first, the chat and the list are read again and compared by hash with the preview (`stale_preview`), and only then is the day looked at. `tests/test_p59_spend_notes.py` holds the order (the first `_context` call
+comes on an earlier line than the first `_day` or `_blockers` call).
+
 ### Residual risks of skills and routines
 
 1. **A saved line of an employee becomes the person's order.** 「存成技能」 on an employee's line keeps words the employee wrote, and later 「用技能」 sends them as the person's message. What stands in the way is the tick 「我確定」 and the sentence at save time, the box where the person reads and may change the words before sending, and that every command and every file change is still a card.
@@ -2570,3 +2593,42 @@ boundary on purpose: `vbear/runtime/daemon_chat.py` (the three engines build the
 - **The cards did not change.** Nothing is written to a card: the sentence is made from the card when a chat starts, it is not stored in the card's instructions, and the instructions a person wrote are sent exactly as before, after the sentence.
 - **Not verified.** Everything here was tested with the fake Claude Code, Codex app-server and AGY (what each is handed, in what order); no real tool was run. That a real model then uses the name, and whether a real AGY or Codex takes the
   sentence at `session/new`/`thread/start` as it takes a card's instructions (they are the same field), was not seen. The chat safety checks do not send a name and were not changed.
+
+
+## Display-only version cache (v0.25.4)
+
+v0.25.4 stops the chat list from starting Claude Code with `--version` on every read. It touches the start-up boundary on purpose, because it adds a cache next to `vbear/runtime/cli_versions.py`
+(`check_cli_version_for_display`, `invalidate_display_cache`), changes how `vbear/chat_service.py` reads the version for a page, and adds an invalidation call to `vbear/claude_verify.py`. **No program is
+started that was not started before, no check that starts something got weaker, and no route, setting, limit, record kind or browser key moved.**
+
+- **Before.** `GET /api/chats` and `GET /api/chat-support` call `ChatService.support()`, which called `_default_claude()` -> `cli_versions.check_cli_version("claude", ...)` on every read: one `claude --safe-mode --version` per read
+  (the page reads the list about every 30 seconds while it is open, and the chief of staff's tool list reads `support()` too). Codex and AGY already keep their whole state for 10 seconds (`codex_chat_env.status`, `agy_chat_env.status`),
+  so they were started about once per 10 seconds of reading. Nothing in `/api/chats` starts Grok or MCODE; those two are only looked at by the start-up page's `ai_tool_status`, which has its own 30-second look.
+- **What is kept.** Only the **display** reading of Claude Code's version: `cli_versions.check_cli_version_for_display` returns what `check_cli_version` returns (the same argv, the same environment, the same limits), kept for
+  `DISPLAY_CACHE_TTL_S` = 30 seconds (the same number as `ai_tool_status.CACHE_TTL_S`; a test holds them equal), at most `DISPLAY_CACHE_MAX` = 16 readings, behind a lock, in memory only. `ChatService.claude_display()` is the only
+  caller outside `cli_versions.py`, and only `support()` and `_tool_version()` (the shared folder page's "is this version checked") call that.
+- **What is not kept.** A reading that did not find a version (a timeout, too much output, no output the pattern reads, a non-zero exit, a file that changed while it was read, a program that cannot be found) is never stored, so the next
+  read tries again. The result that comes out of the display function has its file identity removed (`_binary_identity=None`), so it cannot be handed to `ensure_binary_unchanged`, which refuses it (`version_assertion_missing`).
+- **Why it does not touch the checks that start things.** `check_cli_version`, `assert_cli_version`, `assert_agent_version` and `ensure_binary_unchanged` do not read or write the cache and are called exactly where they were:
+  `native.create_checked_agent_session`, `prepare_managed_*_launch`, the verification starts (`server._claude_verify_start`), `risk_acceptance`, the chat check. In `ChatService` the **start** (`_claude_fields`, which hands the daemon the
+  binary, the version and the file identity of the program it just read) and the **chat check** (`_verify_claude`) still call `self.claude()`, which is `_default_claude`: a fresh `--version` every time, whatever the display
+  holds. This matters because the daemon does **not** run `--version` itself: `_chat_precheck` refuses (`drift`) when the file's identity differs from the one the console took right after its own fresh reading, and then trusts the version
+  string that came with it (the chat-mode constants, the verified list and the policy are looked up by that string). A cached version string next to a fresh identity would let a replaced program start under the old version's rules; so the
+  version in a start is always read fresh, and a chat therefore never starts on a version that only the cache vouches for. `ChatService.claude_display()` uses the
+  default kept reading **only** when `self.claude` is still the default function; a `claude` that was given to the constructor or replaced afterwards (a test's) is used for showing too, so a test's fake is never skipped.
+- **Why a replaced program is always read again.** The key is `(engine, resolved path, file identity, working folder, the versions the engine recognizes now, allow_unverified)`. The file identity is `(device, inode, mode, size,
+  mtime_ns, ctime_ns)` from `_file_identity` (the same tuple the launch checks compare), and it is read with `stat` **on every call, before the cache is looked at**. An automatic update that moves a new file over the old name, or
+  rewrites it, or changes its mode, changes the identity, so the old reading is not found. A reading is stored only when the identity the probe saw is the identity read just before it. The versions the engine recognizes (the built-in
+  list plus the local record `claude-verified.json`) are in the key, so a version that has just been verified is not shown with the old answer.
+- **When it is forgotten at once.** `ai_tool_status.invalidate()` (a mark changed, an install or login terminal opened, a tool tried), `ai_tool_status.report(force=True)` (the 「重新檢查」 button), and the end of every chat check and
+  boundary check (`ClaudeVerifier._finish`, `ChatVerifier._finish`, which the Codex and AGY checks inherit) call `invalidate_display_cache()`. Otherwise a reading ends after 30 seconds.
+- **Not changed on purpose.** The 10-second caches of `codex_chat_env.status` and `agy_chat_env.status` (their keys do not carry a file identity; `ChatService` reads them for display and also before it starts a chat, and the daemon
+  checks again at launch). They are older than this release and were not part of the measurement.
+- **Guard rules 23a and 23b** (`tests/test_autonomy_guard.py`, `DisplayVersionCacheRules`, each with a bad source that must fire): **23a** the display function, the cache and `claude_display` are named in no module of `vbear/` but
+  `cli_versions.py` and `chat_service.py`, and there only in the functions that show (not in `check_cli_version`, `assert_cli_version`, `ensure_binary_unchanged`, `_claude_fields`, `_verify_claude`, a module level or a default
+  argument); **23b** the key holds the file identity read just now, the cache is read and written only under that key, and `_file_identity` still returns all six fields. The behaviour (two reads one start, a replaced program read
+  again, 30 seconds, a failure not kept, a chat start and a chat check start the program whatever is kept, `invalidate`) is in `tests/test_p59_display_versions.py`, with fake programs and a clock the test gives.
+- **Going back to v0.25.3.** Nothing is written to disk by the cache; nothing needs converting.
+- **Residual risk and not verified.** For up to 30 seconds the chat list can show the version a program had before it was replaced by a program that keeps the same device, inode, mode, size, modification time and change time (it
+  cannot be done with ordinary file writes: any write changes the change time). A person who updated Claude Code and wants the list to say so before then can press 「重新檢查」. Everything was tested with fake programs; the real
+  Claude Code, Codex and AGY were not started by the tests, and a real Mac was not tried.

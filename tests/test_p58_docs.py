@@ -49,9 +49,10 @@ class DocumentsTests(unittest.TestCase):
 
     def test_the_changelog_has_this_release_and_the_version_is_the_release(self):
         import vbear
-        self.assertTrue(self.changelog.startswith("# Changelog\n\n## v0.25.3 — "), self.changelog[:60])
+        self.assertTrue(self.changelog.startswith("# Changelog\n\n## v0.25.4 — "), self.changelog[:60])
+        self.assertLess(self.changelog.index("## v0.25.4"), self.changelog.index("## v0.25.3"))
         self.assertLess(self.changelog.index("## v0.25.3"), self.changelog.index("## v0.25.2"))
-        self.assertEqual(vbear.__version__, "0.25.3")
+        self.assertEqual(vbear.__version__, "0.25.4")      # (it was 0.25.3 before v0.25.4 was put in front of it)
         self.assertNotIn("Unreleased", self.first)
         self.assertEqual(problems(self.first, "CHANGELOG v0.25.3"), [])
 
@@ -72,7 +73,9 @@ class DocumentsTests(unittest.TestCase):
                      "The chat record did not change", "guard rule 15b is as it was in v0.25.2", "Going back to v0.25.2", "Residual risk", "Not verified", "Meetings, the chief of staff"):
             self.assertIn(part, self.model, part)
         self.assertEqual(problems(self.model, "SECURITY-MODEL v0.25.3"), [])
-        self.assertNotIn("\n## ", self.security[self.security.index("## An employee knows its own name (v0.25.3)") + 5:], "v0.25.3's is the last section")
+        after = self.security[self.security.index("## An employee knows its own name (v0.25.3)") + 5:]
+        self.assertEqual(after.count("\n## "), 1, "v0.25.3's is followed by v0.25.4's section only")       # (v0.25.4 added 「Display-only version cache (v0.25.4)」)
+        self.assertIn("\n## Display-only version cache (v0.25.4)", after)
 
     def test_the_glossary_has_the_new_word(self):
         self.assertIn("**身分段**：", self.glossary)

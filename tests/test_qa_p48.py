@@ -65,7 +65,11 @@ class FakePage:
         self.the_logo = logo if logo is not None else {"mode": "image", "complete": True, "decoded": True, "tries": 1, "retried": False}
         self.installed = None
 
+    picked = False                  # a tool was picked and the page remembers it: the setup page then has no picker (the test sets this)
+
     def _el(self, sel):
+        if self.picked and self.where == "#/setup" and sel == qa.PICK_CLAUDE:
+            return None
         return (self.pages.get(self.where) or {}).get(sel)
 
     def _note(self, *what):
@@ -88,6 +92,10 @@ class FakePage:
         self.fresh = True
         self.where, self.offset = hash_, 0
         self._note("goto", hash_)
+
+    def forget_pick(self):
+        self._note("forget_pick")
+        self.picked = False
 
     def route(self):
         return self.where
@@ -864,6 +872,91 @@ class RunTests(unittest.TestCase):
         run.phone_walk()
         self.assertEqual(run.phone["first_action_px"], 380)
         self.assertEqual(page.size, q47.DESKTOP)
+
+    def test_the_phone_walk_forgets_the_pick_of_the_walk_before_it_and_loads_the_page_for_real_before_looking_for_the_picker(self):
+        """P59-3: after the first task pressed 「選這個」 the setup page has no picker, so the phone walk used to find nothing."""
+        run, page, console, check = self.walk(label="after", tasks=("title",))
+        page.pages["#/setup"] = {qa.PICK_CLAUDE: {"top": 380, "at": 50}, "_text": "開始設定"}
+        page.picked = True
+        self.events.clear()
+        run.phone_walk()
+        self.assertEqual(run.phone["first_action_px"], 380)
+        mine = [e[1:] for e in self.events if e[0] == "page" and e[1] in ("forget_pick", "open", "goto")]
+        self.assertEqual(mine[:3], [("forget_pick",), ("open", "token"), ("goto", "#/setup")])
+
+    def test_without_forgetting_the_pick_the_phone_walk_would_find_nothing(self):
+        """The fake page is faithful to the bug: a remembered pick hides the picker, so the old walk read None."""
+        run, page, console, check = self.walk(label="after", tasks=("title",))
+        page.pages["#/setup"] = {qa.PICK_CLAUDE: {"top": 380, "at": 50}, "_text": "開始設定"}
+        page.picked = True
+        page.goto("#/setup")
+        self.assertIsNone(page.box_top(qa.PICK_CLAUDE))
+
+    def test_the_home_task_after_other_tasks_loads_the_page_for_real(self):
+        """P59-3: with a task before it the tab is already on the console, so ``open`` has to be a load (see the real Page below), not a change after the #."""
+        run, page, console, check = self.walk(label="after", tasks=("title", "home"))
+        opens = [e for e in self.events if e[:2] == ("page", "open")]
+        self.assertEqual(len(opens), 2)                             # the start's load, then the home page's own
+        self.assertFalse(run.tasks["home"]["cold"])
+        self.assertIsNotNone(run.tasks["home"]["h1_s"])
+
+
+class FakeBrowser:
+    """What ``Page`` talks to: it writes down each command and answers just enough for a page to settle. No Chrome is started."""
+
+    def __init__(self):
+        self.calls: list = []
+        self.now = 0.0
+
+    def clock(self):
+        self.now += 0.5
+        return self.now
+
+    def call(self, method, params=None, session=None, wait=None):
+        self.calls.append((method, params or {}))
+        if method == "Target.createTarget":
+            return {"targetId": "t-1"}
+        if method == "Target.attachToTarget":
+            return {"sessionId": "s-1"}
+        if method == "Runtime.evaluate":
+            return {"result": {"value": "same"}}
+        return {}
+
+
+class RealPageTests(unittest.TestCase):
+    """P59-3, the real ``Page`` over a browser that only writes things down."""
+
+    def make(self):
+        browser = FakeBrowser()
+        return qa.Page(browser, "http://127.0.0.1:7803", lambda s: None), browser
+
+    def test_a_load_goes_through_a_blank_page_so_a_change_after_the_hash_is_a_real_load(self):
+        page, browser = self.make()
+        url = "http://127.0.0.1:7803/#auth=synthetic"
+        page.open(url)
+        navigated = [p["url"] for m, p in browser.calls if m == "Page.navigate"]
+        self.assertEqual(navigated, ["about:blank", url])
+        self.assertTrue(page.fresh)
+        browser.calls.clear()
+        page.open(url)                                              # the same address again, and again: still a blank page first
+        self.assertEqual([p["url"] for m, p in browser.calls if m == "Page.navigate"], ["about:blank", url])
+
+    def test_goto_is_still_a_change_of_the_hash_only(self):
+        page, browser = self.make()
+        page.goto("#/settings")
+        self.assertEqual([p["url"] for m, p in browser.calls if m == "Page.navigate"], [])
+
+    def test_forgetting_the_pick_removes_that_one_key_and_reads_nothing(self):
+        page, browser = self.make()
+        browser.calls.clear()
+        page.forget_pick()
+        expressions = [p["expression"] for m, p in browser.calls if m == "Runtime.evaluate"]
+        self.assertEqual(len(expressions), 1)
+        self.assertIn("localStorage.removeItem", expressions[0])
+        self.assertIn(json.dumps("vbear-setup-pick"), expressions[0])
+        self.assertNotIn("getItem", expressions[0])
+        self.assertNotIn("clear()", expressions[0])
+        self.assertEqual(qa.SETUP_PICK_KEY, "vbear-setup-pick")
 
 
 # ---- the command line ------------------------------------------------------------------------------------------------------------------
