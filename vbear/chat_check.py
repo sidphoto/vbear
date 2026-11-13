@@ -477,9 +477,11 @@ def _finish(report: dict, out_path: Path, code: int, finish, record=None) -> int
 
 
 def _record_pass(state: Path, version: str, binary: str, report_path: Path, *,
-                 file: str = cli_versions.LOCAL_CHAT_VERIFIED_FILE, tool: str = "vbear.boundary_check --mode chat") -> None:
+                 file: str = cli_versions.LOCAL_CHAT_VERIFIED_FILE, tool: str = "vbear.boundary_check --mode chat",
+                 extra: dict | None = None) -> None:
     """Add ``version`` to ``<state>/claude-chat-verified.json`` (``file``: the Codex chat check's record is another).
-    The report was written first; the list is read back through its report by cli_versions."""
+    The report was written first; the list is read back through its report by cli_versions. ``extra`` (P62: the AGY check's
+    ``sha256`` and ``size`` of the file it checked) is added to the record's entry."""
     path = state / file
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -488,7 +490,7 @@ def _record_pass(state: Path, version: str, binary: str, report_path: Path, *,
         versions = None
     versions = dict(versions) if isinstance(versions, dict) else {}
     versions[version] = {"passed": True, "verified_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "binary": binary,
-                         "report": str(report_path), "tool": tool}
+                         "report": str(report_path), "tool": tool, **(extra or {})}
     saved = os.environ.get("VBEAR_HOME")
     os.environ["VBEAR_HOME"] = str(state)
     try:

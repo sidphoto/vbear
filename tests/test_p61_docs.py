@@ -76,12 +76,13 @@ class ChangelogAndModelTests(unittest.TestCase):
         cls.changelog = raw("CHANGELOG.md")
         cls.first = flat(section(cls.changelog, "## v0.25.6", "## v0.25.5"))
         cls.security = raw("docs", "SECURITY-MODEL.md")
-        cls.model = flat(cls.security[cls.security.index(SECTION):])
+        cls.model = flat(cls.security[cls.security.index(SECTION):cls.security.index("## Keeping the verified AGY (v0.26.0)")])          # (v0.26.0's section follows)
 
     def test_the_release_is_first_and_the_version_is_the_release(self):
-        self.assertTrue(self.changelog.startswith("# Changelog\n\n## v0.25.6 — VBear knows AGY 1.5.8\n"), self.changelog[:70])
+        self.assertIn("\n## v0.25.6 — VBear knows AGY 1.5.8\n", self.changelog)          # (v0.26.0 put itself in front of it)
+        self.assertTrue(self.changelog.startswith("# Changelog\n\n## v0.26.0 — "), self.changelog[:70])
         self.assertLess(self.changelog.index("## v0.25.6"), self.changelog.index("## v0.25.5"))
-        self.assertEqual(vbear.__version__, "0.25.6")
+        self.assertEqual(vbear.__version__, "0.26.0")
         self.assertNotIn("Unreleased", self.first)
         self.assertEqual(problems(self.first, "CHANGELOG v0.25.6"), [])
 
@@ -102,7 +103,7 @@ class ChangelogAndModelTests(unittest.TestCase):
                      "Going back to v0.25.5", "`docs/evidence/agy-1.5.8-chat.md`"):
             self.assertIn(word, self.model, word)
         self.assertEqual(problems(self.model, "SECURITY-MODEL v0.25.6"), [])
-        self.assertNotIn("\n## ", self.security[self.security.index(SECTION) + 5:], "v0.25.6's is the last section")
+        self.assertEqual(self.security[self.security.index(SECTION) + 5:].count("\n## "), 1, "only v0.26.0's section follows v0.25.6's")
         self.assertLess(self.security.index("## New versions of Claude Code and AGY (v0.25.5)"), self.security.index(SECTION))
 
     def test_the_older_statements_about_the_tables_name_the_new_version(self):

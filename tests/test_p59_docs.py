@@ -23,10 +23,10 @@ class DocumentsTests(unittest.TestCase):
 
     def test_the_changelog_has_this_release_and_the_version_is_the_release(self):
         import vbear
-        self.assertIn("\n## v0.25.4 — small fixes\n", self.changelog)          # (v0.25.5 and v0.25.6 put themselves in front of it)
-        self.assertTrue(self.changelog.startswith("# Changelog\n\n## v0.25.6 — "), self.changelog[:60])
+        self.assertIn("\n## v0.25.4 — small fixes\n", self.changelog)          # (v0.25.5, v0.25.6 and v0.26.0 put themselves in front of it)
+        self.assertTrue(self.changelog.startswith("# Changelog\n\n## v0.26.0 — "), self.changelog[:60])
         self.assertLess(self.changelog.index("## v0.25.4"), self.changelog.index("## v0.25.3"))
-        self.assertEqual(vbear.__version__, "0.25.6")          # (it was 0.25.4 before v0.25.5 was put in front of it, and 0.25.5 before v0.25.6)
+        self.assertEqual(vbear.__version__, "0.26.0")          # (it was 0.25.4 before v0.25.5 was put in front of it, and 0.25.5 before v0.25.6)
         self.assertNotIn("Unreleased", self.first)
         self.assertEqual(problems(self.first, "CHANGELOG v0.25.4"), [])
 
@@ -49,7 +49,7 @@ class DocumentsTests(unittest.TestCase):
         self.assertEqual(cv.DISPLAY_CACHE_TTL_S, 30.0)
         self.assertEqual(cv.DISPLAY_CACHE_MAX, 16)
         self.assertEqual(problems(self.model, "SECURITY-MODEL v0.25.4"), [])
-        self.assertEqual(self.security[self.security.index("## Display-only version cache (v0.25.4)") + 5:].count("\n## "), 2, "only v0.25.5's and v0.25.6's sections follow v0.25.4's")          # (v0.25.5 added 「New versions of Claude Code and AGY (v0.25.5)」)
+        self.assertEqual(self.security[self.security.index("## Display-only version cache (v0.25.4)") + 5:].count("\n## "), 3, "only v0.25.5's, v0.25.6's and v0.26.0's sections follow v0.25.4's")          # (v0.25.5 added 「New versions of Claude Code and AGY (v0.25.5)」)
         self.assertIn("## An employee knows its own name (v0.25.3)", self.security)
         self.assertLess(self.security.index("## An employee knows its own name (v0.25.3)"), self.security.index("## Display-only version cache (v0.25.4)"))
 

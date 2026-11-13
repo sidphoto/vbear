@@ -556,6 +556,42 @@ test("the start-up page says whether AGY chat has been checked, with no login bu
   assert.strictEqual(app.setupToolView({ id: "claude", state: "ready", installed: true }).note.includes("聊天："), false);
 });
 
+test("v0.26.0: while the chat runs the AGY VBear kept, the notice says so with the server's versions, offers the check only for a version VBear knows, and posts the installed version", async () => {
+  const ui = { confirm: false, pending: false, ask() {}, go() {}, cancel() {} };
+  const ONE = "1.5.7";                 // made-up versions: the page must say whatever the server gave
+  const TWO = "1.9.41";
+  const kept = (state) => ({ using: ONE, installed: TWO, installed_state: state });
+  const unsupported = app.chatAgySupportNode(agySupport({ version: ONE, kept: kept("unsupported") }), ui);
+  const note = text(q(unsupported, "kept-note"));
+  assert(note.includes(TWO) && note.includes(ONE) && note.includes("VBear 先用之前驗證過的") && note.includes("等 VBear 認得"), note);
+  assert.strictEqual(q(unsupported, "verify"), null, "a version VBear does not know cannot be checked");
+  assert(text(unsupported).includes("可以聊天") && q(unsupported, "skills-note"));
+  const unverified = app.chatAgySupportNode(agySupport({ version: ONE, kept: kept("unverified") }), ui);
+  assert(text(q(unverified, "kept-note")).includes("做一次聊天安全檢查後就會換成 " + TWO));
+  assert(q(unverified, "verify-cost") && q(unverified, "verify"), "the check is offered");
+  assert.strictEqual(q(app.chatAgySupportNode(agySupport(), ui), "kept-note"), null, "no kept: no note");
+  for (const bad of [null, undefined, "x", {}, { using: ONE }, { installed: TWO }, { using: 1, installed: TWO }, { using: "", installed: TWO }]) assert.strictEqual(app.agyKeptWords(bad), "", JSON.stringify(bad));
+  const evil = app.chatAgySupportNode(agySupport({ version: EVIL, kept: { using: EVIL, installed: EVIL, installed_state: "unsupported" } }), ui);
+  noMarkup(evil);
+  setPage({ list: listing({ support: support({ agy: agySupport({ version: ONE, kept: kept("unverified") }) }) }) });
+  const main = await open("#/chat?profile=emp-5");
+  q(main, "verify").click();
+  await settle();
+  q(h.dom().mainEl, "verify-go").click();
+  await settle();
+  assert.deepStrictEqual(posts("/api/chat-support/verify").map((c) => c.body), [{ engine: "agy", version: TWO }]);
+});
+
+test("v0.26.0: the start-up page's line for a ready AGY adds the kept sentence only when the server sent a kept", () => {
+  const tools = { tools: [{ id: "agy", installed: true, state: "ready", login: "logged_in", version: "1.5.7" }] };
+  const sup = (agy) => ({ support: { engine: "claude-chat", state: "verified", verify: { running: false }, agy: { verify: { running: false }, why: "", ...agy } } });
+  const plain = app.setupVendorStatus(app.SETUP_VENDORS[2], tools, sup({ state: "ready", version: "1.5.7" }));
+  assert.strictEqual(plain.text, "可以聊天了");
+  const withKept = app.setupVendorStatus(app.SETUP_VENDORS[2], tools, sup({ state: "ready", version: "1.5.7", kept: { using: "1.5.7", installed: "1.9.41", installed_state: "unsupported" } }));
+  assert.strictEqual(withKept.kind, "ready");
+  assert(withKept.text.startsWith("可以聊天了。") && withKept.text.includes("1.9.41") && withKept.text.includes("1.5.7"), withKept.text);
+});
+
 test("the whole of the new code has no innerHTML, no emoji and no external address", () => {
   const source = fs.readFileSync(path.join(root, "app.js"), "utf8");
   assert(!/\.innerHTML\s*=|insertAdjacentHTML\s*\(/.test(source));

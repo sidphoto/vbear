@@ -157,12 +157,14 @@ LOCAL_CHAT_VERIFIED_FILE = "claude-chat-verified.json"
 SHARED_PASSED = "passed"          # what a chat-check report says of its shared-folder part when it went well (P43-2)
 
 
-def _local_chat_record(file_name: str, mode: str, version_key: str, shared: bool = False) -> dict:
+def _local_chat_record(file_name: str, mode: str, version_key: str, shared: bool = False, *, state=None, with_report: bool = False) -> dict:
     """{version: record} of a chat-check record file in the state folder: each entry passed, names its report and a time,
     and the report (read again, owned by this user) is of ``mode``, passed, and names the same version under ``version_key``.
-    ``shared`` (P43-2) also wants the report to say ``"shared": "passed"`` (the part of the check made with the shared folder)."""
+    ``shared`` (P43-2) also wants the report to say ``"shared": "passed"`` (the part of the check made with the shared folder).
+    ``state`` is another state folder than the configured one (P62: the kept AGY is looked for in the folder it is kept in);
+    ``with_report`` makes each value ``(record, report)``."""
     from .. import config as cfg, strictjson
-    rec = strictjson.load_owned_object(cfg.state_dir() / file_name, strictjson.MANIFEST)
+    rec = strictjson.load_owned_object((cfg.state_dir() if state is None else Path(state)) / file_name, strictjson.MANIFEST)
     versions = rec.value.get("versions") if rec.ok else None
     if not isinstance(versions, dict):
         return {}
@@ -177,7 +179,7 @@ def _local_chat_record(file_name: str, mode: str, version_key: str, shared: bool
         if data.get("mode") == mode and data.get("passed") is True and data.get(version_key) == v:
             if shared and data.get("shared") != SHARED_PASSED:
                 continue
-            out[v] = r
+            out[v] = (r, data) if with_report else r
     return out
 
 
@@ -254,6 +256,24 @@ LOCAL_AGY_CHAT_VERIFIED_FILE = "agy-chat-verified.json"
 def local_agy_chat_verified_versions() -> dict:
     """{version: record} whose AGY chat check passed here, each backed by its report, re-read every time."""
     return _local_chat_record(LOCAL_AGY_CHAT_VERIFIED_FILE, "agy-chat", "agy_version")
+
+
+_SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def local_agy_chat_kept_records(state=None) -> dict:
+    """{version: {"sha256", "size"}} of the AGY versions whose pass says WHICH file was checked (P62, ADR 0021): the record has a SHA-256 (64
+    lower-case hex digits) and a size, and the report it names says the same two (``agy_sha256``, ``agy_size``). A pass recorded before
+    v0.26.0, or one whose record and report disagree, is not here: it says a version and no file. ``state`` is the state folder the kept
+    copies are in (the configured one when None). Re-read every time."""
+    out = {}
+    for version, (record, report) in _local_chat_record(LOCAL_AGY_CHAT_VERIFIED_FILE, "agy-chat", "agy_version", state=state,
+                                                        with_report=True).items():
+        sha, size = record.get("sha256"), record.get("size")
+        if (isinstance(sha, str) and _SHA256_RE.match(sha) and isinstance(size, int) and not isinstance(size, bool) and size > 0
+                and report.get("agy_sha256") == sha and report.get("agy_size") == size):
+            out[version] = {"sha256": sha, "size": size}
+    return out
 
 
 def agy_chat_verified_versions() -> tuple[str, ...]:
