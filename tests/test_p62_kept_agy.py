@@ -18,6 +18,7 @@ from pathlib import Path
 from unittest import mock
 
 from tests.test_p46_agy_chat_check import CheckCase, VERSION as CHECK_VERSION
+from tests.test_p46_agy_chat_daemon import AgyCase, VERSION as DAEMON_VERSION
 from vbear import agy_chat_check as cc, agy_verify, claude_verify, config as cfg
 from vbear.api_error import ApiError
 from vbear.runtime import agy_chat_env as env, agy_kept as kept, cli_versions
@@ -476,6 +477,423 @@ class VerifierKeepsTests(KeptCase):
 
     def test_claude_and_codex_checks_keep_nothing_and_say_nothing_more(self):
         self.assertEqual(claude_verify.ChatVerifier()._keep("x", "1"), (None, ""))
+
+
+class ChooseTests(KeptCase):
+    """The bad samples: a copy that fails any one condition is never chosen, and the refusal is the one there was without copies."""
+
+    def setUp(self):
+        super().setUp()
+        self.path = self.keep("1.5.7")
+        self.install_agy("1.5.9", folder=self.bindir)             # AGY updated itself to a version VBear does not know
+
+    def pin(self, **kw):
+        return env.pinned_binary(str(self.bindir), base=self.state, **kw)
+
+    def refused(self, code):
+        with self.assertRaises(env.AgyRefused) as ctx:
+            self.pin()
+        self.assertEqual(ctx.exception.code, code, str(ctx.exception))
+        self.assertNotIn(str(self.tmp), str(ctx.exception))
+
+    def test_the_good_copy_is_chosen_with_its_identity_and_hash(self):
+        got = kept.choose(self.state)
+        self.assertEqual((got.binary, got.version), (str(self.path), "1.5.7"))
+        self.assertEqual(got.identity, env.cli_identity(str(self.path)))
+        self.assertEqual(got.sha256, hashlib.sha256(self.path.read_bytes()).hexdigest())
+
+    def test_a_changed_file_is_not_chosen_even_when_it_has_the_same_size_mode_and_version_text(self):
+        self.tamper(self.path)
+        self.assertEqual(len(self.path.read_bytes()), json.loads((self.state / "agy-report-1.5.7.json").read_text())["agy_size"])
+        self.assertIsNone(kept.choose(self.state))
+        self.refused("unsupported")
+
+    def test_a_changed_size_is_not_chosen(self):
+        self.tamper(self.path, self.path.read_bytes() + b"# more\n")
+        self.assertIsNone(kept.choose(self.state))
+
+    def test_a_version_the_table_does_not_know_is_not_chosen(self):
+        (self.state / "agy-report-9.9.9.json").write_text("{}")
+        os.rename(Path(kept.root(self.state)) / "1.5.7", Path(kept.root(self.state)) / "9.9.9")
+        self.record_pass("9.9.9", *self._rec())
+        self.assertIsNone(kept.choose(self.state))
+        self.refused("unsupported")
+
+    def _rec(self):
+        data = self.path.read_bytes() if self.path.exists() else (Path(kept.root(self.state)) / "9.9.9" / "agy").read_bytes()
+        return hashlib.sha256(data).hexdigest(), len(data)
+
+    def test_a_copy_that_is_a_link_is_not_chosen(self):
+        real = self.tmp / "elsewhere-agy"
+        real.write_bytes(self.path.read_bytes())
+        real.chmod(0o500)
+        self.path.chmod(0o700)
+        self.path.unlink()
+        self.path.symlink_to(real)
+        self.assertIsNone(kept.choose(self.state))
+        self.refused("unsupported")
+
+    def test_a_folder_that_is_a_link_is_not_chosen(self):
+        folder = Path(kept.root(self.state)) / "1.5.7"
+        moved = self.tmp / "moved"
+        os.rename(folder, moved)
+        folder.symlink_to(moved)
+        self.assertIsNone(kept.choose(self.state))
+
+    def test_a_file_or_folder_with_the_wrong_permissions_is_not_chosen(self):
+        folder = self.path.parent
+        for mode in (0o520, 0o550, 0o504, 0o700, 0o600, 0o400, 0o555):
+            with self.subTest(file=oct(mode)):
+                self.path.chmod(mode)
+                self.assertIsNone(kept.choose(self.state))
+        self.path.chmod(0o500)
+        self.assertIsNotNone(kept.choose(self.state))
+        for mode in (0o770, 0o750, 0o705, 0o755, 0o777):
+            with self.subTest(folder=oct(mode)):
+                folder.chmod(mode)
+                self.assertIsNone(kept.choose(self.state))
+        folder.chmod(0o700)
+        self.assertIsNotNone(kept.choose(self.state))
+        root = Path(kept.root(self.state))
+        root.chmod(0o770)
+        self.assertIsNone(kept.choose(self.state))
+        root.chmod(0o700)
+        (self.state / "tools").chmod(0o777)
+        self.assertIsNone(kept.choose(self.state))
+        (self.state / "tools").chmod(0o700)
+        self.assertIsNotNone(kept.choose(self.state))
+
+    def test_a_folder_of_someone_else_is_not_chosen(self):
+        with mock.patch.object(kept.os, "getuid", return_value=os.getuid() + 1):
+            self.assertIsNone(kept.choose(self.state))
+
+    def test_a_copy_with_a_second_name_is_not_chosen(self):
+        os.link(self.path, self.tmp / "another-name")
+        self.assertIsNone(kept.choose(self.state))
+        os.unlink(self.tmp / "another-name")
+        self.assertIsNotNone(kept.choose(self.state))
+
+    def test_a_folder_that_holds_anything_besides_the_one_file_is_not_chosen(self):
+        for name in ("agy.1.old", "calls.log", ".hidden"):
+            with self.subTest(name=name):
+                extra = self.path.parent / name
+                extra.write_text("x")
+                self.assertIsNone(kept.choose(self.state))
+                extra.unlink()
+        self.assertIsNotNone(kept.choose(self.state))
+
+    def test_a_copy_that_prints_another_version_is_not_chosen(self):
+        self.tamper(self.path, fake_source("1.5.6", "same size, other version"))
+        sha, size = hashlib.sha256(self.path.read_bytes()).hexdigest(), len(self.path.read_bytes())
+        self.record_pass("1.5.7", sha, size)                      # even a record that names this file
+        self.assertIsNone(kept.choose(self.state))
+
+    def test_a_record_without_the_file_or_with_a_report_that_disagrees_is_not_used(self):
+        data = self.path.read_bytes()
+        sha, size = hashlib.sha256(data).hexdigest(), len(data)
+        for why, kw in {"no hash": dict(sha=None, size=size), "report has another hash": dict(sha=sha, size=size, report_sha="d" * 64),
+                        "report has another size": dict(sha=sha, size=size, report_size=size + 1),
+                        "report names none": dict(sha=sha, size=size, with_hash=False), "record has another hash": dict(sha="e" * 64, size=size)}.items():
+            with self.subTest(why):
+                self.record_pass("1.5.7", **kw)
+                self.assertIsNone(kept.choose(self.state))
+                self.refused("unsupported")
+        self.record_pass("1.5.7", sha, size)
+        self.assertIsNotNone(kept.choose(self.state))
+
+    def test_a_copy_with_no_pass_record_at_all_is_not_chosen(self):
+        (self.state / cli_versions.LOCAL_AGY_CHAT_VERIFIED_FILE).unlink()
+        self.assertIsNone(kept.choose(self.state))
+        self.refused("unsupported")
+
+    def test_when_the_newest_copy_fails_the_next_older_one_is_used(self):
+        newest = self.keep("1.5.8")
+        self.assertEqual(kept.choose(self.state).version, "1.5.8")
+        self.tamper(newest)
+        self.assertEqual(kept.choose(self.state).version, "1.5.7")
+        self.tamper(self.path)
+        self.assertIsNone(kept.choose(self.state))
+
+    def test_the_copy_is_looked_at_whole_every_time(self):
+        calls = []
+        real = kept._hash_fd
+
+        def counting(fd):
+            calls.append(1)
+            return real(fd)
+        with mock.patch.object(kept, "_hash_fd", counting):
+            kept.choose(self.state)
+            kept.choose(self.state)
+        self.assertEqual(len(calls), 2)
+
+
+class PinnedKeptTests(KeptCase):
+    def setUp(self):
+        super().setUp()
+        self.path = self.keep("1.5.7")
+
+    def pin(self, base="default", **kw):
+        return env.pinned_binary(str(self.bindir), base=self.state if base == "default" else base, **kw)
+
+    def refused(self, code, **kw):
+        with self.assertRaises(env.AgyRefused) as ctx:
+            self.pin(**kw)
+        self.assertEqual(ctx.exception.code, code, str(ctx.exception))
+        return ctx.exception
+
+    def test_an_agy_that_can_chat_is_used_and_the_copies_are_not_even_looked_at(self):
+        installed = self.install_agy("1.5.8")
+        self.record_pass("1.5.8", with_hash=False)
+        with mock.patch.object(kept, "choose", side_effect=AssertionError("looked")):
+            got = self.pin()
+        self.assertEqual((got.binary, got.version, got.kept, got.installed), (os.path.realpath(installed), "1.5.8", False, None))
+
+    def test_a_version_vbear_does_not_know_is_replaced_by_the_kept_copy(self):
+        self.install_agy("1.5.9")
+        got = self.pin()
+        self.assertEqual((got.binary, got.version, got.kept, got.installed), (str(self.path), "1.5.7", True, "1.5.9"))
+        self.assertEqual(got.identity, env.cli_identity(str(self.path)))
+
+    def test_a_known_version_that_never_passed_is_replaced_too(self):
+        self.install_agy("1.5.8")
+        got = self.pin()
+        self.assertEqual((got.version, got.kept, got.installed), ("1.5.7", True, "1.5.8"))
+
+    def test_without_a_state_folder_nothing_is_kept(self):
+        self.install_agy("1.5.9")
+        exc = self.refused("unsupported", base=None)
+        self.assertEqual(exc.version, "1.5.9")
+        self.install_agy("1.5.8")
+        self.refused("unverified", base=None)
+
+    def test_no_agy_an_unsafe_one_or_one_without_a_readable_version_is_never_replaced(self):
+        self.refused("not_installed")
+        agy = self.install_agy("1.5.9")
+        agy.chmod(0o722)
+        self.refused("unsafe_binary")
+        agy.chmod(0o700)
+        agy.write_text(f"#!{sys.executable}\nprint('agy 1.5.9')\n")
+        self.refused("version_unreadable")
+        self.install_agy("1.5.9")
+        self.assertEqual(self.pin().kept, True, "and with a good AGY on the path the copy is used")
+
+    def test_the_newest_good_copy_is_the_one(self):
+        self.keep("1.5.6")
+        self.keep("1.5.8")
+        self.install_agy("1.5.9")
+        self.assertEqual(self.pin().version, "1.5.8")
+
+    def test_a_bad_copy_leaves_the_original_refusal(self):
+        self.install_agy("1.5.9")
+        self.tamper(self.path)
+        exc = self.refused("unsupported")
+        self.assertEqual(exc.version, "1.5.9")
+        self.assertIn("1.5.9", str(exc))
+
+
+class StatusKeptTests(KeptCase):
+    KEYS = {"state", "installed", "version", "verified", "shared_verified", "admin_policy_ok", "hooks_ok", "why", "verified_versions"}
+
+    def status(self, **kw):
+        return env.status(self.state, search_path=str(self.bindir), **kw)
+
+    def test_ready_on_the_kept_version_with_the_installed_one_named(self):
+        self.keep("1.5.7")
+        self.install_agy("1.5.9")
+        out = self.status()
+        self.assertEqual((out["state"], out["version"], out["verified"], out["why"]), ("ready", "1.5.7", True, ""), out)
+        self.assertEqual(out["kept"], {"using": "1.5.7", "installed": "1.5.9", "installed_state": "unsupported"})
+        self.assertEqual(set(out), self.KEYS | {"kept"})
+        self.assertNotIn(str(self.tmp), json.dumps(out), "no path in the answer")
+        self.install_agy("1.5.8")
+        self.assertEqual(self.status()["kept"], {"using": "1.5.7", "installed": "1.5.8", "installed_state": "unverified"})
+
+    def test_there_is_no_kept_when_the_installed_one_chats_or_there_is_no_copy(self):
+        self.install_agy("1.5.8")
+        self.record_pass("1.5.8", with_hash=False)
+        out = self.status()
+        self.assertEqual((out["state"], out["version"]), ("ready", "1.5.8"))
+        self.assertEqual(set(out), self.KEYS)
+        self.install_agy("1.5.9")
+        out = self.status()
+        self.assertEqual((out["state"], out["version"], out["kept"] if "kept" in out else None), ("unsupported", "1.5.9", None))
+
+    def test_the_other_states_still_come_first_for_the_version_that_runs(self):
+        self.keep("1.5.7")
+        self.install_agy("1.5.9")
+        self.write_private(self.home / ".agents" / "hooks.json", "{}")
+        self.assertEqual(self.status()["state"], "hooks")
+        (self.home / ".agents" / "hooks.json").unlink()
+        (self.state / "agy-chat-home").mkdir(mode=0o700)
+        (self.state / "agy-chat-home" / "AGENTS.md").write_text("x")
+        self.assertEqual(self.status()["state"], "folder")
+
+    def test_a_caller_cannot_change_the_cached_answer(self):
+        self.keep("1.5.7")
+        self.install_agy("1.5.9")
+        with mock.patch.object(env, "CACHE_TTL_S", 30.0):
+            first = self.status()
+            first["kept"]["using"] = "9.9.9"
+            self.assertEqual(self.status()["kept"]["using"], "1.5.7")
+
+    def test_tampered_copy_means_the_plain_refusal(self):
+        path = self.keep("1.5.7")
+        self.install_agy("1.5.9")
+        self.tamper(path)
+        out = self.status()
+        self.assertEqual((out["state"], out["version"]), ("unsupported", "1.5.9"))
+        self.assertNotIn("kept", out)
+
+
+class LaunchCheckTests(KeptCase):
+    """The daemon's look before it starts a file under the kept folder."""
+
+    def setUp(self):
+        super().setUp()
+        self.path = self.keep("1.5.7")
+        self.identity = env.cli_identity(str(self.path))
+
+    def check(self, version="1.5.7", binary=None, identity="same"):
+        return kept.check_for_launch(self.state, version, binary or str(self.path), self.identity if identity == "same" else identity)
+
+    def test_the_good_copy_passes_and_a_file_elsewhere_is_not_its_business(self):
+        self.assertTrue(self.check())
+        self.assertFalse(self.check(binary=str(self.install_agy("1.5.8"))))
+        self.assertFalse(kept.is_kept_path(self.state, str(self.tmp / "tools" / "agy" / "1.5.7" / "agy")))
+        self.assertFalse(kept.is_kept_path(self.state, kept.root(self.state)), "the folder itself is not a file in it")
+
+    def test_every_way_it_can_be_wrong_is_refused(self):
+        with self.assertRaises(env.AgyRefused) as ctx:
+            self.check(version="1.5.6")                     # no record for that version
+        self.assertEqual(ctx.exception.code, "unverified")
+        self.keep("1.5.8")
+        with self.assertRaises(env.AgyRefused):
+            self.check(version="1.5.8")                     # the path of 1.5.7 with the version 1.5.8
+        with self.assertRaises(env.AgyRefused) as ctx:
+            self.check(identity=[1, 2, 3, 4, 5, 6])
+        self.assertEqual(ctx.exception.code, "drift")
+        with self.assertRaises(env.AgyRefused):
+            self.check(identity=None)
+        with self.assertRaises(env.AgyRefused):
+            self.check(binary=str(self.path) + "/../1.5.7/agy")
+        self.tamper(self.path)
+        with self.assertRaises(env.AgyRefused):
+            self.check(identity=env.cli_identity(str(self.path)))
+        (Path(kept.root(self.state)) / "1.5.7" / "other").write_text("x")
+        with self.assertRaises(env.AgyRefused):
+            self.check()
+
+    def test_a_version_check_is_not_run_by_the_daemon(self):
+        with mock.patch.object(env, "read_version", side_effect=AssertionError("ran")):
+            self.assertTrue(self.check())
+
+
+class ServiceKeptTests(KeptCase):
+    """ChatService: the AGY it hands to the daemon is the kept copy, and the check it starts is for the installed version."""
+
+    def setUp(self):
+        super().setUp()
+        from vbear import chat_service
+        self.chat_service = chat_service
+
+    def service(self, state, verifier=None):
+        svc = self.chat_service.ChatService(None, agy=lambda: state, agy_verifier=verifier, base=self.state)
+        return svc
+
+    def test_the_binary_the_service_names_is_the_kept_copy(self):
+        path = self.keep("1.5.7")
+        self.install_agy("1.5.9")
+        svc = self.chat_service.ChatService(None, base=self.state)
+        with mock.patch("vbear.runtime.daemon.cli_search_path", return_value=str(self.bindir)):
+            self.assertEqual(svc.agy_binary(), (str(path), "1.5.7"))
+        self.assertIsNone(self.chat_service._default_agy_binary())
+
+    def test_the_check_started_from_a_kept_state_is_for_the_installed_known_version(self):
+        started = []
+
+        class Stub:
+            def start(self, binary, version):
+                started.append((binary, version))
+                return {"running": True}
+
+            def status(self):
+                return {"running": False}
+        kept_state = {"state": "ready", "version": "1.5.7", "verified": True, "kept": {"using": "1.5.7", "installed": "1.5.8", "installed_state": "unverified"}}
+        svc = self.service(kept_state, Stub())
+        out = svc._verify_agy(None)
+        self.assertEqual(started, [("", "1.5.8")])
+        self.assertNotIn("already_verified", out)
+        with self.assertRaises(ApiError) as ctx:
+            svc._verify_agy("1.5.9")
+        self.assertEqual(ctx.exception.code, "version_changed")
+
+    def test_an_installed_version_vbear_does_not_know_has_nothing_to_check(self):
+        class Stub:
+            def start(self, binary, version):
+                raise AssertionError("started")
+        kept_state = {"state": "ready", "version": "1.5.7", "verified": True, "kept": {"using": "1.5.7", "installed": "1.5.9", "installed_state": "unsupported"}}
+        with self.assertRaises(ApiError) as ctx:
+            self.service(kept_state, Stub())._verify_agy(None)
+        self.assertEqual(ctx.exception.code, "agy_version")
+        self.assertIn("1.5.9", str(ctx.exception))
+
+
+class DaemonKeptTests(AgyCase):
+    """The daemon itself (a real one on its own socket, with the fake AGY of tests/fake_agy_acp.py as the kept copy): it looks at a file under
+    the kept folder again, the whole file's SHA-256 included, whatever the console says about it."""
+
+    def keep_the_fake(self):
+        staged = kept.stage(self.base, os.path.realpath(self.binary), DAEMON_VERSION)
+        report = self.base / "agy-report.json"
+        report.write_text(json.dumps({"mode": "agy-chat", "passed": True, "agy_version": DAEMON_VERSION, "agy_sha256": staged.sha256,
+                                      "agy_size": staged.size}))
+        report.chmod(0o600)
+        record = self.base / cli_versions.LOCAL_AGY_CHAT_VERIFIED_FILE
+        record.write_text(json.dumps({"versions": {DAEMON_VERSION: {
+            "passed": True, "verified_at": "2026-11-13T10:00:00+0000", "report": str(report), "sha256": staged.sha256, "size": staged.size}}}))
+        record.chmod(0o600)
+        kept.promote(self.base, staged, DAEMON_VERSION)
+        return kept.path_of(self.base, DAEMON_VERSION)
+
+    def kept_cli(self, path):
+        return self.cli(binary=path, identity=env.cli_identity(path))
+
+    def test_a_chat_runs_the_kept_copy(self):
+        self.configure("text")
+        path = self.keep_the_fake()
+        chat_id = self.open_chat()
+        r = self.send(chat_id, cli=self.kept_cli(path))
+        self.assertTrue(r["ok"], r)
+        self.wait_turn(chat_id, 1)
+        self.assertEqual(len(self.starts()), 1)
+
+    def test_a_copy_that_was_changed_is_not_started_though_the_console_names_its_new_identity(self):
+        self.configure("text")
+        path = self.keep_the_fake()
+        os.chmod(path, 0o700)
+        with open(path, "ab") as more:
+            more.write(b"# changed\n")
+        os.chmod(path, 0o500)
+        chat_id = self.open_chat()
+        r = self.send(chat_id, cli=self.kept_cli(path))
+        self.assertEqual(r["error"]["code"], "invalid_binary", r)
+        self.assertEqual(self.starts(), [])
+        self.assertEqual(self.kinds(chat_id), ["chat_created"])
+
+    def test_a_copy_with_no_record_of_its_file_is_not_started(self):
+        self.configure("text")
+        path = self.keep_the_fake()
+        (self.base / cli_versions.LOCAL_AGY_CHAT_VERIFIED_FILE).unlink()
+        chat_id = self.open_chat()
+        r = self.send(chat_id, cli=self.kept_cli(path))
+        self.assertEqual(r["error"]["code"], "unverified", r)
+        self.assertEqual(self.starts(), [])
+
+    def test_a_file_elsewhere_keeps_the_checks_it_always_had(self):
+        self.configure("text")
+        chat_id = self.open_chat()
+        r = self.send(chat_id)
+        self.assertTrue(r["ok"], r)
 
 
 class CheckNamesTheFileTests(CheckCase):

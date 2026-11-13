@@ -191,10 +191,11 @@ def _default_claude_for_display() -> tuple[str | None, str | None, str]:
     return _default_claude(cli_versions.check_cli_version_for_display)
 
 
-def _default_agy_binary():
-    """(binary, version) of the AGY that may chat, or None (not installed, not a version VBear knows, not verified...)."""
+def _default_agy_binary(base=None):
+    """(binary, version) of the AGY that may chat, or None (not installed, not a version VBear knows, not verified...). With ``base``
+    (the state folder) a version that cannot chat is replaced by the copy VBear kept of one that passed (ADR 0021): then the binary is the copy."""
     try:
-        pinned = agy_chat_env.pinned_binary()
+        pinned = agy_chat_env.pinned_binary(base=base)
     except agy_chat_env.AgyRefused:
         return None
     return pinned.binary, pinned.version
@@ -254,7 +255,7 @@ class ChatService:
         self.verifier = verifier
         self.codex_verifier = codex_verifier
         self.agy = agy or (lambda: agy_chat_env.status(self.base))
-        self.agy_binary = agy_binary or _default_agy_binary
+        self.agy_binary = agy_binary or (lambda: _default_agy_binary(self.base))
         self.agy_verifier = agy_verifier
         self.ledger = ledger
         self._profile = profile or (lambda pid: agent_profiles.get_profile_readonly(pid))
@@ -438,7 +439,15 @@ class ChatService:
             raise ApiError(503, "unavailable", "這個主控台沒有驗證功能。")
         state = self.agy()
         version = state.get("version")
-        if state.get("verified") is True and isinstance(version, str):
+        kept = state.get("kept")
+        if isinstance(kept, dict):
+            # The chat runs the copy VBear kept (ADR 0021) because the AGY that is installed cannot chat. What there is to check is that
+            # installed one, when VBear knows it; the chat check keeps what it checked, and the chat then uses it.
+            version = kept.get("installed")
+            if kept.get("installed_state") != "unverified" or not isinstance(version, str):
+                raise ApiError(409, "agy_version", f"你的 AGY 已經更新到 {version if isinstance(version, str) else '新的版本'}，VBear 還不認得它。"
+                               "聊天先用之前驗證過的版本，等 VBear 認得新版再驗證。")
+        elif state.get("verified") is True and isinstance(version, str):
             if not shared or cli_versions.shared_verified("agy-chat", version):
                 return {"already_verified": True, "version": version, "status": self.agy_verifier.status()}
             if state.get("state") != "ready":

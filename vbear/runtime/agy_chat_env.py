@@ -823,10 +823,14 @@ def _uid() -> int:
 @dataclass(frozen=True)
 class PinnedAgy:
     """The AGY that may chat: its real path, the version it printed, and ``cli_identity`` (the six numbers a launch manifest
-    keeps, so a file that changed after the check is seen at the next start)."""
+    keeps, so a file that changed after the check is seen at the next start). ``kept`` (P62, ADR 0021): it is the copy VBear kept
+    of a version that passed the chat check, chosen because the AGY on the search path is a version that cannot chat; ``installed``
+    is then the version that one printed."""
     binary: str
     version: str
     identity: list
+    kept: bool = False
+    installed: str | None = None
 
 
 def cli_identity(path: str) -> list[int]:
@@ -896,16 +900,24 @@ def locate_binary(search_path: str | None = None) -> str:
         if not stat.S_ISREG(info.st_mode) or not os.access(candidate, os.X_OK):
             continue
         real = os.path.realpath(candidate)
-        try:
-            real_info = os.lstat(real)
-        except OSError as exc:
-            raise _unsafe_binary(f"無法確認（{exc.strerror or type(exc).__name__}）") from exc
-        if not stat.S_ISREG(real_info.st_mode) or not _trusted_owner(real_info.st_uid) or real_info.st_mode & 0o022:
-            raise _unsafe_binary("不是本人的一般檔案，或別人可以改動它")
-        _check_chain(os.path.dirname(real))
+        check_binary_file(real)
         _check_chain(os.path.realpath(folder))
         return real
     raise AgyRefused("not_installed", "找不到 AGY。請到「開始設定」安裝 AGY。")
+
+
+def check_binary_file(real: str) -> None:
+    """The checks that make a file the person's own program (``locate_binary`` makes them on what it finds; the chat check makes them
+    on the AGY it is given, P62): a plain file owned by this user (or by root) that nobody else can write, in folders that nobody else
+    can change. ``real`` is the file's own path (no link on the way is followed here; the caller resolved it). AgyRefused
+    ``unsafe_binary`` otherwise."""
+    try:
+        real_info = os.lstat(real)
+    except OSError as exc:
+        raise _unsafe_binary(f"無法確認（{exc.strerror or type(exc).__name__}）") from exc
+    if not stat.S_ISREG(real_info.st_mode) or not _trusted_owner(real_info.st_uid) or real_info.st_mode & 0o022:
+        raise _unsafe_binary("不是本人的一般檔案，或別人可以改動它")
+    _check_chain(os.path.dirname(real))
 
 
 def read_version(binary: str) -> str:
@@ -932,11 +944,17 @@ def read_version(binary: str) -> str:
     return match.group(1)
 
 
-def pinned_binary(search_path: str | None = None, verified=None) -> PinnedAgy:
+def pinned_binary(search_path: str | None = None, verified=None, *, base=None) -> PinnedAgy:
     """The AGY that may chat: located (``locate_binary``), its version read (``read_version``), the version one of
     ``KNOWN_VERSIONS`` (``unsupported`` otherwise) and one that passed the chat check on this Mac (``unverified`` otherwise;
     ``verified`` is given by tests). The file must be the same one before and after the run. AgyRefused carries the version
-    when it was read."""
+    when it was read.
+
+    ``base`` (P62, ADR 0021) is the state folder the kept copies are in. Given, and the AGY found is safe and printed a version but
+    that version is ``unsupported`` or ``unverified``, the newest copy VBear kept of a version that passed the chat check is
+    pinned instead (``agy_kept.choose``: every condition, the whole file's SHA-256 included); none that holds, and the refusal is
+    the one above. An AGY that is not installed, not safe or whose version cannot be read is never replaced by a copy. Without
+    ``base`` nothing is kept (the chat check asks for the AGY on the search path itself)."""
     verified = cli_versions.agy_chat_verified_versions() if verified is None else verified
     binary = locate_binary(search_path)
     try:
@@ -947,11 +965,18 @@ def pinned_binary(search_path: str | None = None, verified=None) -> PinnedAgy:
     if not unchanged(binary, before):
         raise AgyRefused("version_unreadable", "AGY 的執行檔在檢查版本的時候被換掉了，所以不使用它。")
     if version not in KNOWN_VERSIONS:
-        raise AgyRefused("unsupported", f"AGY {version} 不是 VBear 能聊天的版本。VBear 目前能聊天的 AGY 版本："
-                         + "、".join(KNOWN_VERSIONS) + "。", version)
-    if version not in verified:
-        raise AgyRefused("unverified", cli_versions.agy_chat_unverified_text(version), version)
-    return PinnedAgy(binary, version, before)
+        refusal = AgyRefused("unsupported", f"AGY {version} 不是 VBear 能聊天的版本。VBear 目前能聊天的 AGY 版本："
+                             + "、".join(KNOWN_VERSIONS) + "。", version)
+    elif version not in verified:
+        refusal = AgyRefused("unverified", cli_versions.agy_chat_unverified_text(version), version)
+    else:
+        return PinnedAgy(binary, version, before)
+    if base is not None:
+        from . import agy_kept                               # not at import time: it imports this module
+        kept = agy_kept.choose(base)
+        if kept is not None:
+            return PinnedAgy(kept.binary, kept.version, kept.identity, True, version)
+    raise refusal
 
 
 # ---- the answer ------------------------------------------------------------------------------------------------------
@@ -972,7 +997,10 @@ def status(base, *, home=None, root: str | None = None, search_path: str | None 
     (the first that does not hold, in the order of the checks: binary and version, then the policy, the hooks, the folder)
     installed / version (the one AGY printed, when it was read) / verified / shared_verified (the shared-folder part of the
     check passed too) / admin_policy_ok and hooks_ok (None until they were asked) / why (the sentence for a person; "" when
-    ready; the hooks sentence names the folder it found, the home written as ``~``) / verified_versions. Not logged in is not a state here: the chat check needs the real login, and "not logged in"
+    ready; the hooks sentence names the folder it found, the home written as ``~``) / verified_versions. Only when the chat runs the
+    copy VBear kept of a version that passed (P62, ADR 0021, because the AGY on the search path cannot chat): ``kept`` =
+    {using, installed, installed_state}, ``version`` is then the one that runs (``using``), ``installed`` the one on the search path and
+    ``installed_state`` "unsupported" (VBear does not know it) or "unverified" (known, not checked yet). Not logged in is not a state here: the chat check needs the real login, and "not logged in"
     shows when a chat starts (``not_logged_in``). Nothing is made on disk. ``home`` is the person's HOME (the hooks), ``root``
     where the administrator policy is looked for, ``search_path`` where ``agy`` is looked for (all three are given by tests)."""
     root = POLICY_ROOT if root is None else root
@@ -981,12 +1009,20 @@ def status(base, *, home=None, root: str | None = None, search_path: str | None 
     with _cache_lock:
         hit = _cache.get(key)
         if hit and not force and CACHE_TTL_S > 0 and now - hit[0] < CACHE_TTL_S:
-            return dict(hit[1], verified_versions=list(hit[1]["verified_versions"]))
+            return _copy(hit[1])
     out = _look(base, home, root, search_path)
     with _cache_lock:
         if CACHE_TTL_S > 0:
             _cache[key] = (now, out)
-    return dict(out, verified_versions=list(out["verified_versions"]))
+    return _copy(out)
+
+
+def _copy(out: dict) -> dict:
+    """The answer as a new dict, so that a caller cannot change the cached one."""
+    copy = dict(out, verified_versions=list(out["verified_versions"]))
+    if "kept" in out:
+        copy["kept"] = dict(out["kept"])
+    return copy
 
 
 def _look(base, home, root, search_path) -> dict:
@@ -995,7 +1031,7 @@ def _look(base, home, root, search_path) -> dict:
            "admin_policy_ok": None, "hooks_ok": None, "why": "",
            "verified_versions": sorted(verified, key=cli_versions._version_key)}
     try:
-        pinned = pinned_binary(search_path, verified)
+        pinned = pinned_binary(search_path, verified, base=base)
     except AgyRefused as exc:
         out.update(installed=exc.code != "not_installed", version=exc.version, why=str(exc),
                    state={"not_installed": "not_installed", "unsupported": "unsupported",
@@ -1003,6 +1039,9 @@ def _look(base, home, root, search_path) -> dict:
         return out
     out.update(installed=True, version=pinned.version, verified=True,
                shared_verified=cli_versions.shared_verified("agy-chat", pinned.version))
+    if pinned.kept:                                  # P62: the AGY on the search path cannot chat; the copy kept of the one that passed does
+        out["kept"] = {"using": pinned.version, "installed": pinned.installed,
+                       "installed_state": "unsupported" if pinned.installed not in KNOWN_VERSIONS else "unverified"}
     policy = admin_policy.check_agy(pinned.version, root)
     out["admin_policy_ok"] = policy.ok
     if not policy.ok:
