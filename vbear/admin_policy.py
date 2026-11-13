@@ -73,8 +73,13 @@ _CLAUDE_2_1_318 = dict(_CLAUDE, home_paths=_CLAUDE["home_paths"] + (".claude/pol
 # 2.1.322 (v0.22.1): the same list again. Checked on 2026-11-11, side by side with 2.1.319, against the strings of the installed
 # 2.1.322 binary: the same /Library paths, the same /etc/claude-code place, the same managed-settings names, policy-limits.json
 # still the one more cache (docs/evidence/claude-code-2.1.322-chat.md).
+# 2.1.323 (v0.25.5): the same list again. The /Library and /etc/...claude... path lists of its binary are identical to 2.1.322's, and so are the
+# counts of the places it names (docs/evidence/claude-code-2.1.323-chat.md). It also names a managed-settings channel that is not a place on
+# disk: a host may hand the settings over in the ``initialize`` request of an SDK launch that was given a launch flag for it. A person's Mac has
+# nothing to check for that channel, because only the program that starts Claude Code can open it; VBear starts it without the flag and sends
+# no such key (guard rule 24).
 CLAUDE_SOURCES = {"2.1.292": _CLAUDE, "2.1.296": _CLAUDE, "2.1.318": _CLAUDE_2_1_318, "2.1.319": _CLAUDE_2_1_318,
-                  "2.1.322": _CLAUDE_2_1_318}
+                  "2.1.322": _CLAUDE_2_1_318, "2.1.323": _CLAUDE_2_1_318}
 # 0.163.0 (P38-2, chat mode): the same sources as 0.160.0. The Codex chat (ADR 0005) does not pass --ignore-user-config (app-server
 # has no such flag), so the system and managed layers matter as much as for the review. The list is taken over from 0.160.0 and
 # is to be checked against the installed 0.163.0 on a real Mac when the chat check is run (docs/evidence/codex-0.163.0-chat.md).

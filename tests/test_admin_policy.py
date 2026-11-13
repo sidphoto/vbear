@@ -202,7 +202,7 @@ class PolicyTests(unittest.TestCase):
         # 2.1.318 also names ~/.claude/policy-limits.json, a server-delivered cache (docs/evidence/claude-code-2.1.318-chat.md)
         v318 = dict(claude, home_paths=(".claude/remote-settings.json", ".claude/policy-limits.json"))
         self.assertEqual(ap.CLAUDE_SOURCES, {"2.1.292": claude, "2.1.296": claude, "2.1.318": v318, "2.1.319": v318,
-                                              "2.1.322": v318})
+                                              "2.1.322": v318, "2.1.323": v318})
         self.assertEqual(ap.CODEX_SOURCES, {"0.160.0": {"paths": ("etc/codex",), "domain": "com.openai.codex",
                                                         "home_paths": ()},
                                                 "0.163.0": {"paths": ("etc/codex",), "domain": "com.openai.codex",
@@ -276,6 +276,22 @@ class Claude2_1_322Tests(Claude2_1_318Tests):
     def test_the_version_has_a_list(self):
         self.assertTrue(self.claude().ok)
         self.assertEqual(ap.CLAUDE_SOURCES["2.1.322"], ap.CLAUDE_SOURCES["2.1.319"])
+
+
+class Claude2_1_323Tests(Claude2_1_318Tests):
+    """Claude Code 2.1.323 (v0.25.5): the lists of /Library and /etc paths in its binary are identical to 2.1.322's and the counts of the places it
+    names are too (docs/evidence/claude-code-2.1.323-chat.md), so it has the same list, ``policy-limits.json`` included. The managed-settings
+    channel it adds (a launch flag and a key in ``initialize``) is not a place on disk: nothing here to check, and VBear never opens it."""
+
+    def claude(self):
+        return ap.check_claude("2.1.323", str(self.root), str(self.home))
+
+    def test_the_version_has_a_list(self):
+        self.assertTrue(self.claude().ok)
+        self.assertEqual(ap.CLAUDE_SOURCES["2.1.323"], ap.CLAUDE_SOURCES["2.1.322"])
+
+    def test_a_version_it_does_not_know_still_has_no_list(self):
+        self.assertFalse(ap.check_claude("2.1.324", str(self.root), str(self.home)).ok)
 
 
 class Codex0_167_0Tests(PolicyTests):

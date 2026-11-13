@@ -82,7 +82,11 @@ def _recorded(version: str) -> ChatConstants:
 # ``cli_versions.chat_verified_versions`` (boundary_check --mode chat) decides which of them may chat.
 # 2.1.322 (v0.22.1): the same again. Its ``claude --help`` is identical to 2.1.319's, line for line, and the strings of its binary name
 # the same administrator sources (docs/evidence/claude-code-2.1.322-chat.md). A real stream recording of 2.1.322 was not made.
-VERSIONS = {v: _recorded(v) for v in ("2.1.318", "2.1.319", "2.1.322")}
+# 2.1.323 (v0.25.5): the same again. Every flag the chat's argv uses is in its ``claude --help`` and the help differs from 2.1.322's only in
+# the text of ``rm <id>``. Its binary names one new way to hand it a host's managed settings (a launch flag plus a ``managedSettings`` key
+# in the ``initialize`` request); VBear uses neither, and a guard rule (24 in tests/test_autonomy_guard.py) keeps it so: ``initialize_line`` below
+# carries only the subtype. A real stream recording of 2.1.323 was not made (docs/evidence/claude-code-2.1.323-chat.md).
+VERSIONS = {v: _recorded(v) for v in ("2.1.318", "2.1.319", "2.1.322", "2.1.323")}
 STREAM_EVENTS = frozenset({"message_start", "content_block_start", "content_block_delta", "content_block_stop",
                            "message_delta", "message_stop"})
 DELTAS = frozenset({"text_delta", "thinking_delta", "signature_delta", "input_json_delta"})
