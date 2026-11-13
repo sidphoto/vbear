@@ -26,7 +26,7 @@ from typing import Any, Callable
 from . import config as cfg, meeting_rules as rules, strictjson
 from .jsonstore import GuardedJsonStore, StoreError
 from .scan.document import redact
-from .translations import SIMPLIFIED
+from .zh_simplified import SIMPLIFIED
 
 DIR = "meetings"
 MAX_MEETINGS = 200
