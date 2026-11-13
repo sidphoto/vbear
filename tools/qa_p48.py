@@ -43,6 +43,8 @@ this script reads only ``<state>/server.token`` and starts Chrome; for ``home`` 
 writes that do not wake the background program or read the AI tools). To get the cold home number, start a fresh console on a fresh state folder
 and run ``--tasks home`` alone (the file says ``"cold": true``); ``--tasks first,title,notify,logo,...`` on another fresh one gives the cold start-up
 page. A task that is not the first load is a warm one and is written as such.
+Every load (``Page.open``) goes through ``about:blank`` first, because Chrome does not reload a page when only the part after the ``#`` differs; the phone walk forgets
+the page's one remembered choice (``vbear-setup-pick``, in the test browser's own storage) and loads the page again before it looks for the picker, which a picked tool hides.
 
 THE PAGES READ ``/api/chats``, WHICH RUNS THE AI TOOLS' ``--version``. The home page, the start-up page and the chat pages of both versions read
 ``GET /api/chats``, and the console answers it by running ``claude --version``, ``codex --version`` and ``agy --version`` on this computer (it
@@ -464,6 +466,8 @@ JS_SNAPSHOT = """(() => window.__q ? window.__q.snapshot() : null)()"""
 JS_TITLE = """(() => document.title)()"""
 JS_ATTR = """((sel, name) => { const e = document.querySelector(sel); return e ? e.getAttribute(name) : null; })(%s, %s)"""
 JS_COUNT = """((sel) => document.querySelectorAll(sel).length)(%s)"""
+JS_FORGET_PICK = """((key) => { try { localStorage.removeItem(key); return true; } catch (e) { return false; } })(%s)"""
+SETUP_PICK_KEY = "vbear-setup-pick"                       # the one key the page writes for 「選這個」 (web/app.js); only removed here, never read or written
 JS_LOGO = """(async () => {
   const mark = document.querySelector(".brand-mark");
   if (!mark) return { mode: "none" };
@@ -497,8 +501,16 @@ class Page(qa47.Page):
         self.fresh = True
 
     def open(self, url: str) -> None:
+        """A real load. The address of the console only differs from the one the tab is on after the ``#`` (``#auth=...`` against ``#/settings``), and Chrome
+        does not reload a page for that: the page measured would be the old, warm one. So the tab goes to ``about:blank`` first."""
         self.fresh = True                                # a load: the page's own clock starts at the navigation
+        self.b.call("Page.navigate", {"url": "about:blank"}, session=self.session)
         super().open(url)
+
+    def forget_pick(self) -> None:
+        """Remove the page's one remembered choice (``vbear-setup-pick``, written by 「選這個」) from the browser's own storage, the test browser's
+        profile and nothing else; the picker shows only while no tool is picked."""
+        self.ev(JS_FORGET_PICK % json.dumps(SETUP_PICK_KEY))
 
     def goto(self, hash_: str) -> None:
         self.mark()
@@ -860,6 +872,10 @@ class Run(qa47.Run):
     def phone_walk(self) -> None:
         self.page.viewport(*PHONE)
         try:
+            # The tasks before this one pressed 「選這個」, and a picked tool hides the picker the walk looks for: forget the pick, and load the page for real
+            # (a change of the address after the # would not draw the setup page again if the tab is already on it).
+            self.page.forget_pick()
+            self.page.open(self.url())
             self.page.goto("#/setup")
             self.page.settle()
             top = self.page.box_top(FIRST_TARGET[self.label])
