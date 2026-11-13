@@ -538,6 +538,7 @@ drawn with `el()` and CSS (an illustration, not a screenshot).
 
 `ai_tool_status.report` keeps each tool's row in memory for `CACHE_TTL_S` (30 seconds, keyed by search path, tool and mark);
 `GET /api/setup/tools?force=1` (with `X-VBear`), a mark, an install or login terminal and a try read the tools again.
+Claude Code's version, which the chat list's `support` shows, has a memory of its own since v0.25.4 (`cli_versions.check_cli_version_for_display`, 30 seconds, keyed by the program's file identity and cleared by the same events plus a finished chat check; `ChatService.claude_display`): it is for showing only, and the chat start and the chat check read the version fresh (SECURITY-MODEL "Display-only version cache (v0.25.4)", guard rules 23a and 23b).
 「試一下」 is `POST /api/setup/tools/<id>/try` (`vbear/setup_try.py`): one fixed sentence, headless, in a scratch folder, with a
 time limit; the answer is judged and dropped. Its cost is kept by `vbear/try_spend.py` (`setup-try.json`) and is one more kind
 of the shared day in `meeting_runner.spend_kinds`, `staffing_runner.spend_kinds` and the daemon's chat check; the ledger lists
