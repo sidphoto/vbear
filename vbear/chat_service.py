@@ -173,15 +173,22 @@ def engine_of(profile) -> str | None:
     return row.engine if row else None
 
 
-def _default_claude() -> tuple[str | None, str | None, str]:
+def _default_claude(check=None) -> tuple[str | None, str | None, str]:
     """(binary, version, why not): the Claude Code a chat would run (P40-6: one VBear has chat constants for, on disk;
-    else the one on PATH)."""
+    else the one on PATH). Starts Claude Code with ``--version`` every time: this is the one a chat start and a chat check use.
+    ``check`` is only for ``_default_claude_for_display``."""
     from .runtime import native as rt_native
-    res = cli_versions.check_cli_version("claude", rt_native._pinned_claude_chat_binary(), cwd=str(Path.home()),
-                                         allow_unverified=True)
+    res = (check or cli_versions.check_cli_version)("claude", rt_native._pinned_claude_chat_binary(), cwd=str(Path.home()),
+                                                    allow_unverified=True)
     if res.compatible and res.observed_version and res.binary_path:
         return res.binary_path, res.observed_version, ""
     return None, None, res.reason
+
+
+def _default_claude_for_display() -> tuple[str | None, str | None, str]:
+    """The same answer for a page that only shows it (``support()``): a reading that found the version is kept for 30 seconds
+    and read again at once when the program changed (cli_versions.check_cli_version_for_display). Never used to start anything."""
+    return _default_claude(cli_versions.check_cli_version_for_display)
 
 
 def _default_agy_binary():
@@ -238,9 +245,10 @@ class ChatService:
 
     def __init__(self, runtime, *, claude=None, codex=None, codex_binary=None, verifier=None, codex_verifier=None,
                  ledger=None, profile=None, profiles=None, base=None, memory=None, shared=None, shared_verified=None,
-                 agy=None, agy_binary=None, agy_verifier=None):
+                 agy=None, agy_binary=None, agy_verifier=None, claude_display=None):
         self.runtime = runtime
         self.claude = claude or _default_claude
+        self._claude_display = claude_display
         self.codex = codex or (lambda: codex_chat_env.status(self.base))
         self.codex_binary = codex_binary or (lambda: codex_chat_env.pinned_binary())
         self.verifier = verifier
@@ -307,13 +315,22 @@ class ChatService:
         pos = agent_profiles.position_of(profile)
         return memory_rules.identity_parts(profile.get("name"), POSITION_LABELS.get(pos))
 
+    def claude_display(self) -> tuple[str | None, str | None, str]:
+        """``self.claude()`` for a page that only shows the answer (``support()``, the shared folder page); never for starting anything.
+        ``claude`` starts and checks, with a fresh reading every call. Only the default ``claude`` has a kept reading to show
+        (``_default_claude_for_display``); a ``claude`` that was given or replaced (a test's) is used as it is, so it is never
+        bypassed by the default one, unless a ``claude_display`` was given too."""
+        if self._claude_display is not None:
+            return self._claude_display()
+        return _default_claude_for_display() if self.claude is _default_claude else self.claude()
+
     # ---- support: may this Claude Code chat at all ----------------------------------------------------------------
 
     def support(self) -> dict:
         """What the page says before anyone types: the detected version, whether it has been verified for chats, and
         why not otherwise. Starts nothing. ``codex`` is the same question for the Codex that chats (P38-2: its own
         login folder, its pinned and verified version, the administrator policy); the other keys are Claude Code's."""
-        binary, version, why = self.claude()
+        binary, version, why = self.claude_display()
         out = {"engine": "claude-chat", "detected": version, "verified": [], "state": "unknown", "message": "", "policy": None,
                "verify": self.verifier.status() if self.verifier else None,
                "money": "聊天用你自己的 Claude 登入，會用掉你的 Claude 額度；金額是 Claude Code 回報的估值。"}
@@ -558,7 +575,7 @@ class ChatService:
             return kept[1]
         try:
             if engine == "claude-chat":
-                version = self.claude()[1]
+                version = self.claude_display()[1]
             else:
                 getter = {"codex-chat": self.codex_binary, "agy-chat": self.agy_binary}.get(engine)
                 pinned = getter() if getter else None

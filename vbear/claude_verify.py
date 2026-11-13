@@ -104,6 +104,7 @@ class ClaudeVerifier:
                      title_failed=title["failed"])
 
     def _finish(self, result: str, message: str, **extra) -> None:
+        cli_versions.invalidate_display_cache()           # the chat list reads the version again, not from its 30-second memory
         self._set(running=False, result=result, message=message, finished_at=time.time(), **extra)
 
 
@@ -208,6 +209,7 @@ class ChatVerifier:
             self._state.update(kw)
 
     def _finish(self, result: str, message: str, **extra) -> None:
+        cli_versions.invalidate_display_cache()           # the chat list reads the version again, not from its 30-second memory
         self._set(running=False, result=result, message=message, finished_at=time.time(), **extra)
 
     def _run(self, binary: str, version: str) -> None:

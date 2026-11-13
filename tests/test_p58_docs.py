@@ -72,7 +72,9 @@ class DocumentsTests(unittest.TestCase):
                      "The chat record did not change", "guard rule 15b is as it was in v0.25.2", "Going back to v0.25.2", "Residual risk", "Not verified", "Meetings, the chief of staff"):
             self.assertIn(part, self.model, part)
         self.assertEqual(problems(self.model, "SECURITY-MODEL v0.25.3"), [])
-        self.assertNotIn("\n## ", self.security[self.security.index("## An employee knows its own name (v0.25.3)") + 5:], "v0.25.3's is the last section")
+        after = self.security[self.security.index("## An employee knows its own name (v0.25.3)") + 5:]
+        self.assertEqual(after.count("\n## "), 1, "v0.25.3's is followed by v0.25.4's section only")       # (v0.25.4 added 「Display-only version cache (v0.25.4)」)
+        self.assertIn("\n## Display-only version cache (v0.25.4)", after)
 
     def test_the_glossary_has_the_new_word(self):
         self.assertIn("**身分段**：", self.glossary)

@@ -15,8 +15,9 @@ import shutil
 import signal
 import stat
 import subprocess
+import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 
@@ -742,6 +743,77 @@ def assert_agent_version(engine: str, binary: str | os.PathLike[str] | None = No
     return assert_cli_version(engine, binary, cwd=cwd)
 
 
+# ---- the display-only version cache (v0.25.4) ----------------------------------------------------------------------------
+#
+# A page that only shows which version is installed (the chat list's ``support``, the start-up page's read of Claude Code's chat
+# state) used to start the AI tool with ``--version`` on every read. ``check_cli_version_for_display`` keeps a successful
+# reading for DISPLAY_CACHE_TTL_S seconds. It is for showing only: starting a chat, a verification, a dispatch or a terminal must
+# call ``check_cli_version`` / ``assert_cli_version`` / ``ensure_binary_unchanged`` (never this function), and those never read
+# this cache. docs/SECURITY-MODEL.md, "Display-only version cache (v0.25.4)", says why that is safe; guards 23a and 23b in
+# tests/test_autonomy_guard.py hold the two rules: no launch path names this function or the cache, and the key carries the
+# file's identity.
+DISPLAY_CACHE_TTL_S = 30.0       # the same as ai_tool_status.CACHE_TTL_S (a test holds them equal)
+DISPLAY_CACHE_MAX = 16
+_display_cache: dict = {}        # key -> (time it was read, result without the file identity)
+_display_lock = threading.Lock()
+
+
+def invalidate_display_cache() -> None:
+    """Forget every kept reading: the next display reads the tools again (the 「重新檢查」 button, a finished chat check, ...)."""
+    with _display_lock:
+        _display_cache.clear()
+
+
+def _display_key(engine, binary, cwd, allow_unverified) -> tuple | None:
+    """The cache key, or None when any part of it cannot be established (then nothing is read from or kept in the cache). The
+    file is stat'ed again on every call, so a program that was replaced (an automatic update) has another identity and another key."""
+    if not isinstance(engine, str) or engine not in VERIFIED_VERSIONS:
+        return None
+    try:
+        canonical_cwd = _canonical_cwd(cwd)
+        binary_path = _resolve_binary(binary, engine, canonical_cwd, _probe_environment())
+        identity = _file_identity(binary_path)
+    except Exception:
+        return None
+    return (engine, binary_path, identity, canonical_cwd, verified_versions(engine), bool(allow_unverified))
+
+
+def check_cli_version_for_display(
+    engine: str,
+    binary: str | os.PathLike[str] | None = None,
+    *,
+    cwd: str | os.PathLike[str],
+    timeout: float = VERSION_PROBE_TIMEOUT_SECONDS,
+    allow_unverified: bool = False,
+    clock=None,
+) -> VersionCheckResult:
+    """``check_cli_version`` for a page that only shows the version; NEVER for anything that starts a program.
+
+    A reading that found a version is kept for DISPLAY_CACHE_TTL_S seconds under (engine, resolved path, file identity, folder,
+    the versions the engine recognizes now, allow_unverified); a program that changed has another identity, so it is read again
+    at once. A reading that did not find a version (timeout, too much output, unreadable, the file changed while it was read) is
+    never kept. The result has no file identity, so it cannot be handed to ``ensure_binary_unchanged`` (that refuses it).
+    ``clock`` is a function returning seconds (tests give one); the default is ``time.monotonic``."""
+    now = (clock or time.monotonic)()
+    key = _display_key(engine, binary, cwd, allow_unverified)
+    if key is not None:
+        with _display_lock:
+            kept = _display_cache.get(key)
+            if kept is not None and 0 <= now - kept[0] < DISPLAY_CACHE_TTL_S:
+                return kept[1]
+    result = check_cli_version(engine, binary, cwd=cwd, timeout=timeout, allow_unverified=allow_unverified)
+    shown = replace(result, _binary_identity=None)
+    if (key is not None and result.observed_version is not None and result._binary_identity == key[2]
+            and result.error_code != "binary_changed_during_probe"):
+        with _display_lock:
+            _display_cache[key] = (now, shown)
+            for old in [k for k, v in _display_cache.items() if not 0 <= now - v[0] < DISPLAY_CACHE_TTL_S]:
+                del _display_cache[old]
+            while len(_display_cache) > DISPLAY_CACHE_MAX:
+                del _display_cache[min(_display_cache, key=lambda k: _display_cache[k][0])]
+    return shown
+
+
 __all__ = [
     "EXPECTED_VERSIONS",
     "VERIFIED_VERSIONS",
@@ -754,5 +826,7 @@ __all__ = [
     "assert_agent_version",
     "assert_cli_version",
     "check_cli_version",
+    "check_cli_version_for_display",
     "ensure_binary_unchanged",
+    "invalidate_display_cache",
 ]

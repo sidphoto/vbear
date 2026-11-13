@@ -2570,3 +2570,42 @@ boundary on purpose: `vbear/runtime/daemon_chat.py` (the three engines build the
 - **The cards did not change.** Nothing is written to a card: the sentence is made from the card when a chat starts, it is not stored in the card's instructions, and the instructions a person wrote are sent exactly as before, after the sentence.
 - **Not verified.** Everything here was tested with the fake Claude Code, Codex app-server and AGY (what each is handed, in what order); no real tool was run. That a real model then uses the name, and whether a real AGY or Codex takes the
   sentence at `session/new`/`thread/start` as it takes a card's instructions (they are the same field), was not seen. The chat safety checks do not send a name and were not changed.
+
+
+## Display-only version cache (v0.25.4)
+
+v0.25.4 stops the chat list from starting Claude Code with `--version` on every read. It touches the start-up boundary on purpose, because it adds a cache next to `vbear/runtime/cli_versions.py`
+(`check_cli_version_for_display`, `invalidate_display_cache`), changes how `vbear/chat_service.py` reads the version for a page, and adds an invalidation call to `vbear/claude_verify.py`. **No program is
+started that was not started before, no check that starts something got weaker, and no route, setting, limit, record kind or browser key moved.**
+
+- **Before.** `GET /api/chats` and `GET /api/chat-support` call `ChatService.support()`, which called `_default_claude()` -> `cli_versions.check_cli_version("claude", ...)` on every read: one `claude --safe-mode --version` per read
+  (the page reads the list about every 30 seconds while it is open, and the chief of staff's tool list reads `support()` too). Codex and AGY already keep their whole state for 10 seconds (`codex_chat_env.status`, `agy_chat_env.status`),
+  so they were started about once per 10 seconds of reading. Nothing in `/api/chats` starts Grok or MCODE; those two are only looked at by the start-up page's `ai_tool_status`, which has its own 30-second look.
+- **What is kept.** Only the **display** reading of Claude Code's version: `cli_versions.check_cli_version_for_display` returns what `check_cli_version` returns (the same argv, the same environment, the same limits), kept for
+  `DISPLAY_CACHE_TTL_S` = 30 seconds (the same number as `ai_tool_status.CACHE_TTL_S`; a test holds them equal), at most `DISPLAY_CACHE_MAX` = 16 readings, behind a lock, in memory only. `ChatService.claude_display()` is the only
+  caller outside `cli_versions.py`, and only `support()` and `_tool_version()` (the shared folder page's "is this version checked") call that.
+- **What is not kept.** A reading that did not find a version (a timeout, too much output, no output the pattern reads, a non-zero exit, a file that changed while it was read, a program that cannot be found) is never stored, so the next
+  read tries again. The result that comes out of the display function has its file identity removed (`_binary_identity=None`), so it cannot be handed to `ensure_binary_unchanged`, which refuses it (`version_assertion_missing`).
+- **Why it does not touch the checks that start things.** `check_cli_version`, `assert_cli_version`, `assert_agent_version` and `ensure_binary_unchanged` do not read or write the cache and are called exactly where they were:
+  `native.create_checked_agent_session`, `prepare_managed_*_launch`, the verification starts (`server._claude_verify_start`), `risk_acceptance`, the chat check. In `ChatService` the **start** (`_claude_fields`, which hands the daemon the
+  binary, the version and the file identity of the program it just read) and the **chat check** (`_verify_claude`) still call `self.claude()`, which is `_default_claude`: a fresh `--version` every time, whatever the display
+  holds. This matters because the daemon does **not** run `--version` itself: `_chat_precheck` refuses (`drift`) when the file's identity differs from the one the console took right after its own fresh reading, and then trusts the version
+  string that came with it (the chat-mode constants, the verified list and the policy are looked up by that string). A cached version string next to a fresh identity would let a replaced program start under the old version's rules; so the
+  version in a start is always read fresh, and a chat therefore never starts on a version that only the cache vouches for. `ChatService.claude_display()` uses the
+  default kept reading **only** when `self.claude` is still the default function; a `claude` that was given to the constructor or replaced afterwards (a test's) is used for showing too, so a test's fake is never skipped.
+- **Why a replaced program is always read again.** The key is `(engine, resolved path, file identity, working folder, the versions the engine recognizes now, allow_unverified)`. The file identity is `(device, inode, mode, size,
+  mtime_ns, ctime_ns)` from `_file_identity` (the same tuple the launch checks compare), and it is read with `stat` **on every call, before the cache is looked at**. An automatic update that moves a new file over the old name, or
+  rewrites it, or changes its mode, changes the identity, so the old reading is not found. A reading is stored only when the identity the probe saw is the identity read just before it. The versions the engine recognizes (the built-in
+  list plus the local record `claude-verified.json`) are in the key, so a version that has just been verified is not shown with the old answer.
+- **When it is forgotten at once.** `ai_tool_status.invalidate()` (a mark changed, an install or login terminal opened, a tool tried), `ai_tool_status.report(force=True)` (the 「重新檢查」 button), and the end of every chat check and
+  boundary check (`ClaudeVerifier._finish`, `ChatVerifier._finish`, which the Codex and AGY checks inherit) call `invalidate_display_cache()`. Otherwise a reading ends after 30 seconds.
+- **Not changed on purpose.** The 10-second caches of `codex_chat_env.status` and `agy_chat_env.status` (their keys do not carry a file identity; `ChatService` reads them for display and also before it starts a chat, and the daemon
+  checks again at launch). They are older than this release and were not part of the measurement.
+- **Guard rules 23a and 23b** (`tests/test_autonomy_guard.py`, `DisplayVersionCacheRules`, each with a bad source that must fire): **23a** the display function, the cache and `claude_display` are named in no module of `vbear/` but
+  `cli_versions.py` and `chat_service.py`, and there only in the functions that show (not in `check_cli_version`, `assert_cli_version`, `ensure_binary_unchanged`, `_claude_fields`, `_verify_claude`, a module level or a default
+  argument); **23b** the key holds the file identity read just now, the cache is read and written only under that key, and `_file_identity` still returns all six fields. The behaviour (two reads one start, a replaced program read
+  again, 30 seconds, a failure not kept, a chat start and a chat check start the program whatever is kept, `invalidate`) is in `tests/test_p59_display_versions.py`, with fake programs and a clock the test gives.
+- **Going back to v0.25.3.** Nothing is written to disk by the cache; nothing needs converting.
+- **Residual risk and not verified.** For up to 30 seconds the chat list can show the version a program had before it was replaced by a program that keeps the same device, inode, mode, size, modification time and change time (it
+  cannot be done with ordinary file writes: any write changes the change time). A person who updated Claude Code and wants the list to say so before then can press 「重新檢查」. Everything was tested with fake programs; the real
+  Claude Code, Codex and AGY were not started by the tests, and a real Mac was not tried.

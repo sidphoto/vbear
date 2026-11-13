@@ -155,18 +155,19 @@ class SecurityModelTests(unittest.TestCase):
         self.assertEqual(self.model.count("## Easy start 2 (v0.22)"), 1)
         self.assertNotIn(" ## ", self.section[len("## Easy start 2 (v0.22)"):])
         after = self.model[self.model.index("## New versions of the AI tools (v0.22.1)") + 3:]
-        self.assertEqual(after.count(" ## "), 6, "v0.22.1's section is followed by six sections only: v0.23's, v0.24's, v0.25's, v0.25.1's, v0.25.2's and v0.25.3's")        # (v0.23.0 added 「Chat-first home (v0.23)」, v0.24.0 「Chat reads like text (v0.24)」, v0.25.0 「First run on one page (v0.25)」, v0.25.1 「Switch the AI tool of a held-back employee (v0.25.1)」, v0.25.2 「A new version of AGY (v0.25.2)」)
+        self.assertEqual(after.count(" ## "), 7, "v0.22.1's section is followed by seven sections only: v0.23's, v0.24's, v0.25's, v0.25.1's, v0.25.2's, v0.25.3's and v0.25.4's")        # (v0.23.0 added 「Chat-first home (v0.23)」, v0.24.0 「Chat reads like text (v0.24)」, v0.25.0 「First run on one page (v0.25)」, v0.25.1 「Switch the AI tool of a held-back employee (v0.25.1)」, v0.25.2 「A new version of AGY (v0.25.2)」)
         self.assertIn(" ## Chat-first home (v0.23) ", after)
         self.assertIn(" ## Chat reads like text (v0.24)", after)
         self.assertIn(" ## First run on one page (v0.25)", after)
         self.assertIn(" ## Switch the AI tool of a held-back employee (v0.25.1)", after)
         self.assertIn(" ## A new version of AGY (v0.25.2)", after)
-        self.assertEqual(after[after.index("## First run on one page (v0.25)") + 3:].count(" ## "), 3, "only v0.25.1's, v0.25.2's and v0.25.3's sections follow v0.25's")
+        self.assertEqual(after[after.index("## First run on one page (v0.25)") + 3:].count(" ## "), 4, "only v0.25.1's, v0.25.2's, v0.25.3's and v0.25.4's sections follow v0.25's")
         self.assertLess(after.index("## Switch the AI tool of a held-back employee (v0.25.1)"), after.index("## A new version of AGY (v0.25.2)"))
-        self.assertEqual(after[after.index("## Switch the AI tool of a held-back employee (v0.25.1)") + 3:].count(" ## "), 2, "only v0.25.2's and v0.25.3's sections follow v0.25.1's")
-        self.assertEqual(after[after.index("## A new version of AGY (v0.25.2)") + 3:].count(" ## "), 1, "only v0.25.3's section follows v0.25.2's")
+        self.assertEqual(after[after.index("## Switch the AI tool of a held-back employee (v0.25.1)") + 3:].count(" ## "), 3, "only v0.25.2's, v0.25.3's and v0.25.4's sections follow v0.25.1's")
+        self.assertEqual(after[after.index("## A new version of AGY (v0.25.2)") + 3:].count(" ## "), 2, "only v0.25.3's and v0.25.4's sections follow v0.25.2's")
         self.assertIn(" ## An employee knows its own name (v0.25.3)", after)
-        self.assertNotIn(" ## ", after[after.index("## An employee knows its own name (v0.25.3)") + 3:])          # v0.25.3's is the last one
+        self.assertEqual(after[after.index("## An employee knows its own name (v0.25.3)") + 3:].count(" ## "), 1, "only v0.25.4's section follows v0.25.3's")          # v0.25.4's is the last one
+        self.assertNotIn(" ## ", after[after.index("## Display-only version cache (v0.25.4)") + 3:])
         for word in ("does not move any start-up boundary", "`vbear/agent_launch.py`", "`vbear/cli_versions.py`", "`vbear/admin_policy.py`", "No route (API path), no key of `config.json` and no kind of chat event",
                      "`vbear-setup-pick` and `vbear-notify`", "rule 16", "rules 1 to 15 were not loosened", "Residual risks", "Going back to v0.21.0"):
             self.assertIn(word, self.section, word)

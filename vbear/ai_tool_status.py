@@ -65,6 +65,7 @@ def invalidate() -> None:
     """Forget every kept look: the next look reads the tools again."""
     with _cache_lock:
         _cache.clear()
+    cli_versions.invalidate_display_cache()     # the chat list's kept reading of Claude Code's version goes with it (v0.25.4)
 
 
 store = GuardedJsonStore("setup_marks.json", "AI 工具登入標記", _mark_problem)
@@ -176,6 +177,8 @@ def report(conf, marks: Optional[dict] = None, *, force: bool = False) -> list[d
     ``marks`` is {tool id: time}; None reads the state folder. ``force`` reads the tools again whatever was kept. The rows
     carry no command and no path."""
     marks = read_marks() if marks is None else marks
+    if force:
+        cli_versions.invalidate_display_cache()
     shown = set(ai_tools.visible_ids(conf))
     tools = [t for t in ai_tools.REGISTRY if t.id in ai_tools.setup_ids() and t.id in shown]
     if not tools:
