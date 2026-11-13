@@ -23,9 +23,10 @@ class DocumentsTests(unittest.TestCase):
 
     def test_the_changelog_has_this_release_and_the_version_is_the_release(self):
         import vbear
-        self.assertTrue(self.changelog.startswith("# Changelog\n\n## v0.25.4 — small fixes"), self.changelog[:60])
+        self.assertIn("\n## v0.25.4 — small fixes\n", self.changelog)          # (v0.25.5 put itself in front of it)
+        self.assertTrue(self.changelog.startswith("# Changelog\n\n## v0.25.5 — "), self.changelog[:60])
         self.assertLess(self.changelog.index("## v0.25.4"), self.changelog.index("## v0.25.3"))
-        self.assertEqual(vbear.__version__, "0.25.4")
+        self.assertEqual(vbear.__version__, "0.25.5")          # (it was 0.25.4 before v0.25.5 was put in front of it)
         self.assertNotIn("Unreleased", self.first)
         self.assertEqual(problems(self.first, "CHANGELOG v0.25.4"), [])
 
@@ -48,7 +49,7 @@ class DocumentsTests(unittest.TestCase):
         self.assertEqual(cv.DISPLAY_CACHE_TTL_S, 30.0)
         self.assertEqual(cv.DISPLAY_CACHE_MAX, 16)
         self.assertEqual(problems(self.model, "SECURITY-MODEL v0.25.4"), [])
-        self.assertNotIn("\n## ", self.security[self.security.index("## Display-only version cache (v0.25.4)") + 5:], "v0.25.4's is the last section")
+        self.assertEqual(self.security[self.security.index("## Display-only version cache (v0.25.4)") + 5:].count("\n## "), 1, "only v0.25.5's section follows v0.25.4's")          # (v0.25.5 added 「New versions of Claude Code and AGY (v0.25.5)」)
         self.assertIn("## An employee knows its own name (v0.25.3)", self.security)
         self.assertLess(self.security.index("## An employee knows its own name (v0.25.3)"), self.security.index("## Display-only version cache (v0.25.4)"))
 

@@ -69,7 +69,7 @@ class ConstantsTests(unittest.TestCase):
         self.assertEqual(new.version, "2.1.319")
         self.assertEqual(dataclasses.replace(new, version="2.1.318"), old)
         self.assertIs(cp.constants_for("2.1.319"), new)
-        self.assertEqual(sorted(cp.VERSIONS), ["2.1.318", "2.1.319", "2.1.322"])
+        self.assertEqual(sorted(cp.VERSIONS), ["2.1.318", "2.1.319", "2.1.322", "2.1.323"])          # (v0.25.5 added 2.1.323)
 
     def test_2_1_322_has_the_same_constants_as_2_1_319(self):
         """v0.22.1: the --help of 2.1.322 is identical to 2.1.319's (docs/evidence/claude-code-2.1.322-chat.md), so the chat's
@@ -79,6 +79,18 @@ class ConstantsTests(unittest.TestCase):
         self.assertEqual(dataclasses.replace(new, version="2.1.319"), old)
         self.assertIs(cp.constants_for("2.1.322"), new)
         self.assertNotIn("2.1.322", cli_versions.CHAT_VERIFIED_VERSIONS)
+
+    def test_2_1_323_has_the_same_constants_as_2_1_322(self):
+        """v0.25.5: the chat's flags are all in the --help of 2.1.323, which differs from 2.1.322's only in the text of ``rm <id>``
+        (docs/evidence/claude-code-2.1.323-chat.md), so the constants are the same; only the version differs. Not in any verified list: that
+        needs boundary_check --mode chat on the Mac."""
+        new, old = cp.VERSIONS["2.1.323"], cp.VERSIONS["2.1.322"]
+        self.assertEqual(new.version, "2.1.323")
+        self.assertEqual(dataclasses.replace(new, version="2.1.322"), old)
+        self.assertIs(cp.constants_for("2.1.323"), new)
+        self.assertNotIn("2.1.323", cli_versions.CHAT_VERIFIED_VERSIONS)
+        self.assertNotIn("2.1.324", cp.VERSIONS)                       # the next one is not guessed
+        self.assertIsNone(cp.constants_for("2.1.324"))
 
     def test_every_recorded_event_kind_is_known(self):
         for name in ("ask", "text"):

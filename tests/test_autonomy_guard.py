@@ -159,6 +159,16 @@ Never, whatever the person ticked in 「自己動手」:
      23b  the key of the cache holds the file's identity read just now: ``_display_key`` calls ``_file_identity`` on the resolved path and puts the result in the tuple it returns, the display function
           reads and writes the cache only under that key, and ``_file_identity`` still returns the device, inode, mode, size, modification time and change time.
 
+  24. (P60, v0.25.5) Claude Code 2.1.323 can be handed the managed settings of the program that starts it, in the ``initialize`` request, if it was launched with a flag for it; VBear is not that program and never hands it any.
+     The administrator-source check looks at places on disk and cannot see this channel, so the rule is on what VBear sends. Three rules on the source and on the lines VBear writes (this file, ``ManagedSettingsAreNeverSent``,
+     each with a made-up bad source that must fire; docs/SECURITY-MODEL.md, "New versions of Claude Code and AGY (v0.25.5)"):
+     24a  no module of ``vbear/`` names the launch flags ``--managed-settings`` (and ``--managed-settings-in-initialize``) or ``--await-initialize``, or the key ``managedSettings`` / ``managed_settings``, in a string, a name, an attribute or a keyword; and
+          the argv of a Claude chat and of a Claude stream run, built from a manifest, holds none of them.
+     24b  the ``initialize`` request is exactly the subtype and nothing else (``{"type": "control_request", "request_id": ..., "request": {"subtype": "initialize"}}``): the function builds it from a dict literal whose ``request`` has the one key
+          ``subtype``, and no line any builder of ``chat_protocol`` makes has a ``managedSettings`` key at any depth.
+     24c  the chat session writes to Claude Code's stdin only what ``chat_protocol`` builds: every ``_queue`` call of ``chat_session.py`` takes a ``cp.*_line(...)`` call, ``line`` or ``t.line``, and the ``line`` the daemon hands to ``start_turn`` is
+          always ``cp.user_line(...)``.
+
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
 ``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py``, ``vbear/skillbook*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
 staff, of dispatch, of groups and of memory (the suggestions, P42-4) are held to it the day they are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
@@ -3500,9 +3510,34 @@ class AgyVersionTablesNeedEvidence(unittest.TestCase):
 
     def test_20_every_version_of_the_table_passes(self):
         _, acp, versions, sources, evidence = self.real()
-        self.assertEqual(sorted(versions), ["1.5.3", "1.5.6"])
+        self.assertEqual(sorted(versions), ["1.5.3", "1.5.6", "1.5.7"])          # (v0.25.5 added 1.5.7)
         self.assertEqual(agy_version_table_problems(versions, sources, evidence), [])
         self.assertIn("agy-1.5.6-chat.md", evidence)
+        self.assertIn("agy-1.5.7-chat.md", evidence)
+
+    def test_20_the_scan_reaches_the_newest_version_and_fires_for_it_alone(self):
+        """v0.25.5: the rule reads every version of the table, so 1.5.7 is held to it; each of its own failures is caught on its own."""
+        dataclasses, acp, versions, sources, evidence = self.real()
+        real = versions["1.5.7"]
+        self.assertTrue(any(p for p in real.builtin_sha256), "1.5.7 has a built-in table")
+        problems = agy_version_table_problems(versions, {k: v for k, v in sources.items() if k != "1.5.7"}, evidence)
+        self.assertTrue(any(p.startswith("1.5.7: no administrator-source") for p in problems), problems)
+        problems = agy_version_table_problems(versions, sources, {k: v for k, v in evidence.items() if "1.5.7" not in k})
+        self.assertTrue(any(p.startswith("1.5.7: no docs/evidence/agy-1.5.7-*.md") for p in problems), problems)
+        problems = agy_version_table_problems(versions, sources, dict(evidence, **{"agy-1.5.7-chat.md": "about 1.5.6 only"}))
+        self.assertTrue(any(p.startswith("1.5.7: no docs/evidence") for p in problems), problems)
+        bad = dict(versions, **{"1.5.7": dataclasses.replace(real, builtin_sha256=real.builtin_sha256[1:])})
+        self.assertTrue(any(p.startswith("1.5.7:") and "(20b)" in p for p in agy_version_table_problems(bad, sources, evidence)))
+        new_file = "skills/mcp-app-development/SKILL.md"
+        bad = dict(versions, **{"1.5.7": dataclasses.replace(real, builtin_sha256=tuple(x for x in real.builtin_sha256 if x[0] != new_file))})
+        self.assertTrue(any(p.startswith("1.5.7: the hashed paths are not the files") and "(20b)" in p for p in agy_version_table_problems(bad, sources, evidence)),
+                        "the new skill's file needs its hash")
+        bad = dict(versions, **{"1.5.7": dataclasses.replace(real, builtin_paths=real.builtin_paths + ("skills/another-new/SKILL.md",))})
+        self.assertTrue(any(p.startswith("1.5.7:") and "(20b)" in p for p in agy_version_table_problems(bad, sources, evidence)), "a new path without a hash")
+        bad = dict(versions, **{"1.5.7": dataclasses.replace(real, builtin_sha256=tuple(x for x in real.builtin_sha256 if x[0] != "plugins/swarm/sidecars/swarm_board/hive.js"))})
+        self.assertTrue(any(p.startswith("1.5.7:") and "(20c)" in p for p in agy_version_table_problems(bad, sources, evidence)))
+        bad = dict(versions, **{"1.5.7": dataclasses.replace(real, workdir_forbidden=real.workdir_forbidden[1:])})
+        self.assertTrue(any("(20d)" in p for p in agy_version_table_problems(bad, sources, evidence)), "the newest version's shared table must stay the others'")
 
     def test_20_the_not_added_note_of_1_5_5_is_not_evidence_for_a_version(self):
         _, acp, versions, sources, evidence = self.real()
@@ -4149,6 +4184,206 @@ class DisplayVersionCacheRules(unittest.TestCase):
             self.assertIn(f"     23{rule}  ", text, rule)
         self.assertIn("class DisplayVersionCacheRules", text)
         self.assertTrue((self.ROOT / "tests" / "test_p59_display_versions.py").is_file())
+
+
+# ---- 24: nothing hands Claude Code a host's managed settings (P60, v0.25.5) ----------------------------------------------------------------------------------
+
+MANAGED_CHANNEL_WORDS = ("--managed-settings", "--await-initialize", "managedSettings", "managed_settings")
+
+
+def managed_channel_problems(sources: dict) -> list[str]:
+    """24a: ``sources`` is {path relative to vbear: source}. Every string, name, attribute, keyword and argument of every module is looked at for the flags and the key."""
+    found = []
+    for rel, source in sorted(sources.items()):
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                spoken = node.value
+            elif isinstance(node, ast.Name):
+                spoken = node.id
+            elif isinstance(node, ast.Attribute):
+                spoken = node.attr
+            elif isinstance(node, (ast.keyword, ast.arg)):
+                spoken = node.arg or ""
+            else:
+                continue
+            for word in MANAGED_CHANNEL_WORDS:
+                if word in spoken:
+                    found.append(f"{rel}:{getattr(node, 'lineno', 0)} names {word!r} (24a)")
+    return found
+
+
+def initialize_request_problems(protocol_source: str) -> list[str]:
+    """24b, the source: ``initialize_line`` is one ``return _line({...})`` of a dict literal whose ``request`` has the one key ``subtype``."""
+    fn = _function(ast.parse(protocol_source), "initialize_line")
+    if fn is None:
+        return ["chat_protocol.initialize_line is not there exactly once"]
+    body = [n for n in fn.body if not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant))]          # (the docstring, if any)
+    if len(body) != 1 or not isinstance(body[0], ast.Return) or not isinstance(body[0].value, ast.Call) or _call_name(body[0].value) != "_line":
+        return ["initialize_line is not a single return of _line(...) (24b)"]
+    args = body[0].value.args
+    if len(args) != 1 or body[0].value.keywords or not isinstance(args[0], ast.Dict):
+        return ["initialize_line does not pass one dict literal (24b)"]
+    top = {k.value: v for k, v in zip(args[0].keys, args[0].values) if isinstance(k, ast.Constant)}
+    if set(top) != {"type", "request_id", "request"} or len(args[0].keys) != 3:
+        return [f"the initialize line has the keys {sorted(map(str, top))}, not type, request_id and request (24b)"]
+    request = top["request"]
+    if not isinstance(request, ast.Dict) or len(request.keys) != 1 or not isinstance(request.keys[0], ast.Constant) or request.keys[0].value != "subtype":
+        return ["the initialize request has more than the subtype, or not a literal (24b)"]
+    return []
+
+
+def has_key_anywhere(value, key: str) -> bool:
+    if isinstance(value, dict):
+        return key in value or any(has_key_anywhere(v, key) for v in value.values())
+    if isinstance(value, list):
+        return any(has_key_anywhere(v, key) for v in value)
+    return False
+
+
+def stdin_lines_problems(lines: dict) -> list[str]:
+    """24b, the lines: {name: bytes one builder made}. None is anything but one JSON line, and none has a ``managedSettings`` key at any depth."""
+    found = []
+    for name, line in lines.items():
+        try:
+            parsed = json.loads(line)
+        except ValueError:
+            found.append(f"{name}: not JSON (24b)")
+            continue
+        for key in ("managedSettings", "managed_settings"):
+            if has_key_anywhere(parsed, key):
+                found.append(f"{name}: has the key {key} (24b)")
+    return found
+
+
+def stdin_writer_problems(session_source: str, daemon_source: str) -> list[str]:
+    """24c: only what ``chat_protocol`` builds is queued for Claude Code's stdin."""
+    found = []
+    queued = [n for n in ast.walk(ast.parse(session_source)) if isinstance(n, ast.Call) and _call_name(n) == "_queue"]
+    if len(queued) < 8:
+        found.append(f"chat_session has {len(queued)} _queue calls, fewer than the 8 the scan knows (24c)")
+    for call in queued:
+        arg = call.args[0] if len(call.args) == 1 and not call.keywords else None
+        from_cp = (isinstance(arg, ast.Call) and isinstance(arg.func, ast.Attribute) and isinstance(arg.func.value, ast.Name)
+                   and arg.func.value.id == "cp" and arg.func.attr.endswith("_line"))
+        plain = (isinstance(arg, ast.Name) and arg.id == "line") or (
+            isinstance(arg, ast.Attribute) and arg.attr == "line" and isinstance(arg.value, ast.Name) and arg.value.id == "t")
+        if not (from_cp or plain):
+            found.append(f"chat_session queues something that chat_protocol did not build (line {call.lineno}) (24c)")
+    tree = ast.parse(daemon_source)
+    handed = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and _call_name(n) == "start_turn" and len(n.args) > 2
+              and isinstance(n.args[2], ast.Name) and n.args[2].id == "line"]
+    if len(handed) < 2:
+        found.append(f"daemon_chat hands `line` to start_turn {len(handed)} times, fewer than the 2 the scan knows (24c)")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "line" for t in node.targets):
+            value = node.value
+            if not (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute) and isinstance(value.func.value, ast.Name)
+                    and value.func.value.id == "cp" and value.func.attr == "user_line"):
+                found.append(f"daemon_chat makes `line` (line {node.lineno}) from something but cp.user_line (24c)")
+    return found
+
+
+class ManagedSettingsAreNeverSent(unittest.TestCase):
+    """24: the real sources and lines keep the three rules, and each way out is caught on a made-up bad source."""
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def real_sources(self):
+        return {str(p.relative_to(PACKAGE)): p.read_text(encoding="utf-8") for p in sorted(PACKAGE.rglob("*.py")) if "__pycache__" not in p.parts}
+
+    def protocol_lines(self):
+        from vbear.runtime import chat_protocol as cp
+        return {"initialize": cp.initialize_line("init-1"), "user": cp.user_line("managedSettings", "5d1b6a52-5e7f-4a3e-8e7c-0d2b4ac1f001"),
+                "allow": cp.allow_line("r-1", {"command": "ls"}), "deny": cp.deny_line("r-1", "no"), "error": cp.error_line("r-1", "no")}
+
+    def test_24a_no_module_names_the_flags_or_the_key(self):
+        sources = self.real_sources()
+        self.assertIn("runtime/chat_protocol.py", sources)
+        self.assertIn("runtime/agent_sessions.py", sources)
+        self.assertGreater(len(sources), 100)                          # (the scan sees the package, not an empty list)
+        self.assertEqual(managed_channel_problems(sources), [])
+
+    def test_24a_the_argv_of_a_chat_and_of_a_stream_run_hold_none_of_them(self):
+        from vbear.runtime import agent_sessions as asess
+        manifest = {"cli_binary": "/x/claude", "settings_path": "/x/settings.json", "append_prompt": "be brief", "budget_usd": 0.5,
+                    "model_id": "claude-haiku-5-5", "resume": False, "claude_session_id": "5d1b6a52-5e7f-4a3e-8e7c-0d2b4ac1f001"}
+        with mock.patch.object(asess, "chat_manifest_problem", return_value=None):
+            argv = asess.chat_argv(manifest) + asess.claude_argv(manifest)
+        self.assertIn("--permission-prompt-tool", argv)                # (a real argv, not an empty one)
+        for flag in argv:
+            for word in MANAGED_CHANNEL_WORDS:
+                self.assertNotIn(word, flag)
+
+    def test_24a_catches_each_way_to_name_them(self):
+        bad = {"a flag in a list": 'ARGV = ["claude", "--managed-settings-in-initialize"]\n',
+               "the other flag": 'ARGV = ["claude", "--await-initialize"]\n',
+               "the plain flag": 'FLAG = "--managed-settings"\n',
+               "a flag inside a longer string": 'CMD = "claude -p --await-initialize --verbose"\n',
+               "the key in a dict": 'REQ = {"subtype": "initialize", "managedSettings": {}}\n',
+               "the key in an f-string": 'def f(x):\n    return f"managedSettings={x}"\n',
+               "the key as a keyword": 'def f(send):\n    return send(managedSettings={})\n',
+               "the key as a name": 'managedSettings = {}\n',
+               "the key as an attribute": 'def f(x):\n    return x.managed_settings\n',
+               "the key as an argument": 'def f(managed_settings):\n    return 1\n'}
+        for what, source in bad.items():
+            with self.subTest(what=what):
+                self.assertNotEqual(managed_channel_problems({"runtime/x.py": source}), [], what)
+        self.assertEqual(managed_channel_problems({"runtime/x.py": 'ARGV = ["claude", "--verbose"]\nNAME = "managed-settings.json"\n'}), [])
+
+    def test_24b_the_initialize_request_is_the_subtype_and_nothing_else(self):
+        text = (PACKAGE / "runtime" / "chat_protocol.py").read_text(encoding="utf-8")
+        self.assertEqual(initialize_request_problems(text), [])
+        from vbear.runtime import chat_protocol as cp
+        self.assertEqual(json.loads(cp.initialize_line("init-1")), {"type": "control_request", "request_id": "init-1", "request": {"subtype": "initialize"}})
+        self.assertEqual(stdin_lines_problems(self.protocol_lines()), [])
+
+    def test_24b_catches_a_request_with_more_than_the_subtype(self):
+        good = ('def _line(x):\n    return x\n'
+                'def initialize_line(request_id):\n    return _line({"type": "control_request", "request_id": request_id, "request": {"subtype": "initialize"}})\n')
+        self.assertEqual(initialize_request_problems(good), [])
+        bad = {"a second key in the request": good.replace('{"subtype": "initialize"}', '{"subtype": "initialize", "managedSettings": {}}'),
+               "a key beside the request": good.replace('"request": {', '"managedSettings": {}, "request": {'),
+               "a request that is not a literal": good.replace('{"subtype": "initialize"}', 'dict(subtype="initialize")'),
+               "two statements": good.replace("    return _line(", "    extra = {}\n    return _line("),
+               "another function than _line": good.replace("return _line(", "return other("),
+               "a keyword with the dict": good.replace('"initialize"}})', '"initialize"}}, extra=1)'),
+               "the function gone": good.replace("def initialize_line", "def other_line")}
+        for what, source in bad.items():
+            with self.subTest(what=what):
+                self.assertNotEqual(initialize_request_problems(source), [], what)
+
+    def test_24b_catches_a_line_with_the_key_at_any_depth(self):
+        self.assertEqual(stdin_lines_problems({"ok": b'{"request":{"subtype":"initialize"}}\n'}), [])
+        for what, line in (("top", b'{"managedSettings":{}}\n'), ("in the request", b'{"request":{"subtype":"initialize","managedSettings":{"a":1}}}\n'),
+                           ("in a list", b'{"request":[{"managed_settings":{}}]}\n'), ("not json", b"managedSettings")):
+            with self.subTest(what=what):
+                self.assertNotEqual(stdin_lines_problems({"x": line}), [], what)
+
+    def test_24c_the_chat_session_queues_only_what_the_protocol_built(self):
+        session = (PACKAGE / "runtime" / "chat_session.py").read_text(encoding="utf-8")
+        daemon = (PACKAGE / "runtime" / "daemon_chat.py").read_text(encoding="utf-8")
+        self.assertEqual(stdin_writer_problems(session, daemon), [])
+
+    def test_24c_catches_each_other_way_to_write_a_line(self):
+        session = (PACKAGE / "runtime" / "chat_session.py").read_text(encoding="utf-8")
+        daemon = (PACKAGE / "runtime" / "daemon_chat.py").read_text(encoding="utf-8")
+        for what, old, new in (("a line made here", "self._queue(cp.initialize_line(self.init_id))", 'self._queue(json.dumps({"managedSettings": {}}).encode())'),
+                               ("a literal", "self._queue(cp.initialize_line(self.init_id))", 'self._queue(b"{}")'),
+                               ("a variable of another name", "self._queue(t.line)", "self._queue(raw)"),
+                               ("another attribute", "self._queue(t.line)", "self._queue(t.other)"),
+                               ("a builder of another module", "self._queue(cp.initialize_line(self.init_id))", "self._queue(other.initialize_line(self.init_id))")):
+            with self.subTest(what=what):
+                self.assertIn(old, session)
+                self.assertNotEqual(stdin_writer_problems(session.replace(old, new, 1), daemon), [], what)
+        old = "line = cp.user_line(text, p.session_id)"
+        self.assertIn(old, daemon)
+        self.assertNotEqual(stdin_writer_problems(session, daemon.replace(old, "line = build(text)", 1)), [])
+
+    def test_24_the_description_and_the_tests_are_there(self):
+        text = (self.ROOT / "tests" / "test_autonomy_guard.py").read_text(encoding="utf-8")
+        for rule in "abc":
+            self.assertIn(f"     24{rule}  ", text, rule)
+        self.assertIn("class ManagedSettingsAreNeverSent", text)
 
 
 if __name__ == "__main__":

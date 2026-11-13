@@ -56,7 +56,7 @@ class DocumentsTests(unittest.TestCase):
         self.assertIn("## v0.25.1 — ", self.changelog)
         self.assertLess(self.changelog.index("## v0.25.1"), self.changelog.index("## v0.25.0"))
         self.assertLess(self.changelog.index("## v0.25.2"), self.changelog.index("## v0.25.1"))      # (v0.25.2, AGY 1.5.6, is put in front of it)
-        self.assertEqual(vbear.__version__, "0.25.4")      # (it was 0.25.1 before v0.25.2 was put in front of it, 0.25.2 before v0.25.3, and 0.25.3 before v0.25.4)
+        self.assertEqual(vbear.__version__, "0.25.5")      # (it was 0.25.1 before v0.25.2 was put in front of it, 0.25.2 before v0.25.3, 0.25.3 before v0.25.4, and 0.25.4 before v0.25.5)
         self.assertNotIn("Unreleased", self.first)
         self.assertEqual(problems(self.first, "CHANGELOG v0.25.1"), [])
 

@@ -73,8 +73,13 @@ _CLAUDE_2_1_318 = dict(_CLAUDE, home_paths=_CLAUDE["home_paths"] + (".claude/pol
 # 2.1.322 (v0.22.1): the same list again. Checked on 2026-11-11, side by side with 2.1.319, against the strings of the installed
 # 2.1.322 binary: the same /Library paths, the same /etc/claude-code place, the same managed-settings names, policy-limits.json
 # still the one more cache (docs/evidence/claude-code-2.1.322-chat.md).
+# 2.1.323 (v0.25.5): the same list again. The /Library and /etc/...claude... path lists of its binary are identical to 2.1.322's, and so are the
+# counts of the places it names (docs/evidence/claude-code-2.1.323-chat.md). It also names a managed-settings channel that is not a place on
+# disk: a host may hand the settings over in the ``initialize`` request of an SDK launch that was given a launch flag for it. A person's Mac has
+# nothing to check for that channel, because only the program that starts Claude Code can open it; VBear starts it without the flag and sends
+# no such key (guard rule 24).
 CLAUDE_SOURCES = {"2.1.292": _CLAUDE, "2.1.296": _CLAUDE, "2.1.318": _CLAUDE_2_1_318, "2.1.319": _CLAUDE_2_1_318,
-                  "2.1.322": _CLAUDE_2_1_318}
+                  "2.1.322": _CLAUDE_2_1_318, "2.1.323": _CLAUDE_2_1_318}
 # 0.163.0 (P38-2, chat mode): the same sources as 0.160.0. The Codex chat (ADR 0005) does not pass --ignore-user-config (app-server
 # has no such flag), so the system and managed layers matter as much as for the review. The list is taken over from 0.160.0 and
 # is to be checked against the installed 0.163.0 on a real Mac when the chat check is run (docs/evidence/codex-0.163.0-chat.md).
@@ -99,9 +104,15 @@ CODEX_SOURCES = {"0.160.0": _CODEX, "0.163.0": _CODEX, "0.167.0": _CODEX}
 # is there the launch is refused (only stricter than 1.5.3, and a Mac without that folder is not affected). 1.5.3's entry did not
 # change. It is a candidate only ("unconfirmed"): the refusal sentence says its use is not confirmed, not that a policy exists.
 # Method and result: docs/evidence/agy-1.5.6-chat.md, section 3.
+# 1.5.7 (v0.25.5): the 1.5.6 list, unchanged. The strings of the real 1.5.7 (counted on 2026-11-13, the program was not run for them) still hold
+# /etc/antigravity/admin_settings.json (once), /Library/Application Support/Antigravity (once), admin_settings (6), AdminSettings (18), and nothing named
+# managed-settings or policy.json. They also list three longer names that begin with com.google.antigravity (".companion", ".dev", ".insiders"), which sit
+# in the program beside other applications' bundle identifiers; they are not shown to be managed-preference domains, the table holds one domain per
+# version, and the counting of 1.5.6 cannot tell whether they are new, so they are not added (docs/evidence/agy-1.5.7-chat.md, section 3).
+_AGY_1_5_6 = {"paths": ("etc/antigravity", "Library/Application Support/Antigravity"), "domain": "com.google.antigravity",
+              "home_paths": (), "unconfirmed": ("Library/Application Support/Antigravity",)}
 AGY_SOURCES = {"1.5.3": {"paths": ("etc/antigravity",), "domain": "com.google.antigravity", "home_paths": ()},
-               "1.5.6": {"paths": ("etc/antigravity", "Library/Application Support/Antigravity"), "domain": "com.google.antigravity",
-                         "home_paths": (), "unconfirmed": ("Library/Application Support/Antigravity",)}}
+               "1.5.6": _AGY_1_5_6, "1.5.7": dict(_AGY_1_5_6)}
 
 
 @dataclass
