@@ -1996,6 +1996,29 @@ only where the settings page's route writes it. `tools/qa_p44.py` is the coordin
 The chat process in the runtime adds up the day's spending in `_chat_day_spent` (`vbear/runtime/daemon_chat.py`) from a fixed list of kinds (the chief of staff, memory suggestions and the meetings). It **does not include** what 「整理成技能」 (`skill_suggest`) spent: the guard rules forbid the runtime to know about skills, and this release does not change the launch boundary. The result is one-sided:
 the per-turn check of a chat can allow up to US$0.10 more for each 「整理成技能」 run that day than the daily limit says, while 「整理成技能」 itself checks the day including the chats, and the ledger counts it. To be settled in a later release.
 
+**Checked again in v0.25.4 (the code was not changed; this is what it does today).**
+
+- *Where it is recorded.* Each press of 「整理成技能」 is one record, `<state>/skillbook/suggest/ks-<12 hex>.json` (kind `skill_suggest`, one turn, the cost in the turn's `evidence.cost_usd`; a record deleted the same day keeps its cost
+  for two days in `spend-keep/`, like the other kinds). The ledger (`GET /api/meetings/ledger`, `includes` ends in `"skill_suggest"`) and the check of the day made by every other board count it: the meetings, the staffing meetings,
+  the chief of staff and the memory suggestions all list `skillbook_suggest.spend_kind()` in their `spend_kinds()`.
+- *What limits it.* (1) At its start `SkillSuggestRunner.start` adds up the day of all seven kinds (the chats and the tries included) and refuses (`budget`) when the day plus the reserve would pass `daily_usd` or the lamp is red; the preview shows
+  the same blockers. (2) One call costs at most `CALL_USD` = US$0.10, or what the day has left in whole cents when that is less (`cap_usd`; none left means no call), and `TOTAL_USD` is the same number: one press, one call, no retry.
+  (3) At most 200 records (`MAX_RECORDS`, `too_many`). (4) One headless call at a time, on the worker lock the meetings, the staffing meetings, the chief of staff and the memory suggestions share. So it is **not** without a limit: a person who
+  presses again and again is stopped by the daily limit as the ledger counts it, and no single press can pass US$0.10.
+- *What does not see it.* The check a chat turn makes in the runtime (`_chat_day_spent`: the chats, deleted ones included, the meetings, the staffing meetings, the tries, the chief of staff and the memory suggestions) has no `skill_suggest`
+  in it, and the per-turn limit (`chat_limits.per_turn_usd`) is the chat's own. There is no separate daily limit for chats: `meeting_limits.daily_usd` is the one day for everything. So after 「整理成技能」 has spent, the ledger can read
+  above `daily_usd` (red lamp) while a chat turn is still allowed what the day would have left without it: the overshoot is at most what 「整理成技能」 spent that day (US$0.10 a press). This is the gap above, unchanged; a later release
+  decides whether the runtime may learn the kind. `tests/test_p59_spend_notes.py` holds the code to this note (the runtime list has no `skill_suggest`; every board's list has it), so a change in either place has to change the note.
+
+### The chief of staff reads before it looks at the day's money (checked in v0.25.4)
+
+The order in `ChiefRunner` (`vbear/chief_runner.py`), the same in `preview`, `start` and `retry`, and in the skill suggestions' `start`: **first** `_context`, "the scan": it reads the chat's messages (`chief.select_messages`), checks the CEO card and its
+tool, and builds the list of cards the proposal would be told about (`chief.candidates`). It is local: nothing is sent, no model is called, nothing is spent. **Then** the check that there is room for another record (`_check_count`) and the check of the no-tool Claude Code (in this order in
+`preview`, where `_provider_state` writes its answer as a blocker; the other way round in `start`, where `_resolve` raises), and **then** the day's money: `_day()`, `cap_usd` and `_blockers` (the reserve against the proposal's own room and against `daily_usd`, the red lamp, the worker lock). Only after those pass does `start`
+take the worker lock, write the record and `_launch` the one call, the only step that spends. So a refusal for money (`budget`) always comes after the local read, never before it, and a day that is full does not skip the scan; and in `start` the
+preview is taken first, the chat and the list are read again and compared by hash with the preview (`stale_preview`), and only then is the day looked at. `tests/test_p59_spend_notes.py` holds the order (the first `_context` call
+comes on an earlier line than the first `_day` or `_blockers` call).
+
 ### Residual risks of skills and routines
 
 1. **A saved line of an employee becomes the person's order.** 「存成技能」 on an employee's line keeps words the employee wrote, and later 「用技能」 sends them as the person's message. What stands in the way is the tick 「我確定」 and the sentence at save time, the box where the person reads and may change the words before sending, and that every command and every file change is still a card.
