@@ -28,10 +28,10 @@ def parsed(line: bytes):
 
 
 class ConstantsTests(unittest.TestCase):
-    def test_1_5_3_1_5_6_1_5_7_and_1_5_8_are_the_versions_of_the_table(self):
+    def test_1_5_3_1_5_6_1_5_7_1_5_8_and_1_5_9_are_the_versions_of_the_table(self):
         c = acp.VERSIONS["1.5.3"]
         self.assertEqual(c.version, "1.5.3")
-        self.assertEqual(sorted(acp.VERSIONS), ["1.5.3", "1.5.6", "1.5.7", "1.5.8"])
+        self.assertEqual(sorted(acp.VERSIONS), ["1.5.3", "1.5.6", "1.5.7", "1.5.8", "1.5.9"])
         self.assertIs(acp.constants_for("1.5.3"), c)
         self.assertIsNone(acp.constants_for("1.5.2"))
         self.assertIsNone(acp.constants_for(None))
@@ -146,13 +146,13 @@ class Version156Tests(unittest.TestCase):
     SHA-256 of 15 of the 41 built-in files, read from a real 1.5.6 that wrote its folder."""
 
     def test_the_table_has_every_version_and_each_knows_its_own_number(self):
-        self.assertEqual(sorted(acp.VERSIONS), ["1.5.3", "1.5.6", "1.5.7", "1.5.8"])
+        self.assertEqual(sorted(acp.VERSIONS), ["1.5.3", "1.5.6", "1.5.7", "1.5.8", "1.5.9"])
         for version, consts in acp.VERSIONS.items():
             self.assertEqual(consts.version, version)
             self.assertIs(acp.constants_for(version), consts)
         self.assertIsNone(acp.constants_for("1.5.4"))
         self.assertIsNone(acp.constants_for("1.5.5"), "1.5.5 was not added (docs/evidence/agy-1.5.5-not-added.md)")
-        self.assertIsNone(acp.constants_for("1.5.9"), "the next version is not guessed")
+        self.assertIsNone(acp.constants_for("1.5.10"), "the next version is not guessed")
 
     def test_only_the_number_and_the_built_in_hashes_differ_from_1_5_3(self):
         import dataclasses
@@ -308,7 +308,7 @@ class Version158Tests(unittest.TestCase):
             self.assertEqual(differ, expected, other)
         self.assertEqual(new.version, "1.5.8")
         self.assertIs(acp.constants_for("1.5.8"), new)
-        self.assertIsNone(acp.constants_for("1.5.9"), "a version after 1.5.8 is not guessed")
+        self.assertIsNotNone(acp.constants_for("1.5.9"), "v0.26.1 added it")
 
     def test_the_path_table_is_1_5_7s_and_nothing_else(self):
         old, new = acp.VERSIONS["1.5.7"], acp.VERSIONS["1.5.8"]
@@ -366,6 +366,110 @@ class Version158Tests(unittest.TestCase):
 
         def tracker():
             t = acp.AgyTracker(acp.VERSIONS["1.5.8"], workdir="/w/work", shared=None, session_id=None, resumed=False)
+            t.expect(1, "initialize")
+            return t
+        self.assertEqual(tracker().on_message(answer), [("initialized", {"load_session": True})])
+        bad = json.loads(json.dumps(answer))
+        bad["result"]["protocolVersion"] = 2
+        self.assertEqual([k for k, _ in tracker().on_message(bad)], ["violation"])
+        gone = json.loads(json.dumps(answer))
+        del gone["result"]["agentCapabilities"]["sessionCapabilities"]["resume"]
+        self.assertEqual([k for k, _ in tracker().on_message(gone)], ["violation"])
+
+
+# AGY 1.5.9's built-in folder against 1.5.8's table (docs/evidence/agy-1.5.9-chat.md): 37 of the 43 files are 1.5.8's byte for byte; these are the five with new
+# bytes, and the one file that is new (path -> SHA-256 as AGY 1.5.9 wrote it in an empty folder). One skill folder was added, so the path table is its own.
+CHANGED_IN_1_5_9 = {
+    ".checksum": "8008d858ee78e1dd93b294a9bf4ed5758d88859d2ee589f6c5f82273c1747bdb",
+    ".manifest": "c81ce43b06ba8fa5f6fe970dfcf4408f554d0e733f63fbf4a65455c528f2105d",
+    "plugins/swarm/sidecars/swarm_board/app.js": "4be222865680ea64bb19510966b747815e75f29ebe82b199a0280d34822697be",
+    "plugins/swarm/sidecars/swarm_board/hive.js": "ae5308ed8040d8cd2fd74b73f3ab03d706bb872f170a7c38bd5984a8bd525116",
+    "skills/native_swarm/SKILL.md": "5232a7982b95ce5cfc3e5c7f503af08f9006218d6f86a9f751d95289dfa80f96",
+}
+NEW_IN_1_5_9 = {"skills/swarm_pane/SKILL.md": "98e5e8c7b8e062be14ccd35781204e2abae79ab4b9812613cad947712c154c4d"}
+
+
+class Version159Tests(unittest.TestCase):
+    """v0.26.1: AGY 1.5.9 has a table of its own. Every protocol constant is 1.5.8's; the built-in folder is 1.5.8's 64 paths plus one new skill folder (66 paths:
+    43 files and 23 folders), five files have new bytes and one file is new."""
+
+    def test_only_the_number_the_paths_and_the_hashes_differ_from_1_5_8(self):
+        import dataclasses
+        new = acp.VERSIONS["1.5.9"]
+        for other in ("1.5.8", "1.5.7"):
+            old = acp.VERSIONS[other]
+            differ = sorted(f.name for f in dataclasses.fields(acp.AgyConstants) if getattr(old, f.name) != getattr(new, f.name))
+            self.assertEqual(differ, ["builtin_paths", "builtin_sha256", "version"], other)
+        self.assertEqual(new.version, "1.5.9")
+        self.assertIs(acp.constants_for("1.5.9"), new)
+        self.assertIsNone(acp.constants_for("1.5.10"), "a version after 1.5.9 is not guessed")
+        self.assertIsNone(acp.constants_for("1.6.0"))
+
+    def test_the_path_table_is_1_5_8s_plus_the_new_skill_and_nothing_else(self):
+        old, new = acp.VERSIONS["1.5.8"], acp.VERSIONS["1.5.9"]
+        self.assertEqual(len(new.builtin_paths), 66)
+        self.assertEqual(len(set(new.builtin_paths)), 66, "no path twice")
+        self.assertEqual(set(new.builtin_paths) - set(old.builtin_paths), {"skills/swarm_pane", "skills/swarm_pane/SKILL.md"})
+        self.assertEqual(set(old.builtin_paths) - set(new.builtin_paths), set(), "none gone")
+        for older in ("1.5.7", "1.5.6", "1.5.3"):
+            self.assertNotIn("skills/swarm_pane/SKILL.md", acp.VERSIONS[older].builtin_paths, "the older tables are not touched")
+        self.assertNotIn("skills/swarm_pane", old.builtin_paths, "1.5.8's table is not touched")
+        self.assertEqual(new.builtin_runnable, acp.VERSIONS["1.5.3"].builtin_runnable)
+
+    def test_each_of_the_43_files_has_a_hash_and_no_folder_has_one(self):
+        new = acp.VERSIONS["1.5.9"]
+        files = {p for p in new.builtin_paths if not any(q.startswith(p + "/") for q in new.builtin_paths)}
+        self.assertEqual(len(files), 43)
+        self.assertEqual(len(new.builtin_sha256), 43)
+        self.assertEqual({p for p, _ in new.builtin_sha256}, files)
+        self.assertEqual(len({p for p in new.builtin_paths if p not in files}), 23, "23 folders")
+        for path, digest in new.builtin_sha256:
+            self.assertRegex(digest, r"^[0-9a-f]{64}$", path)
+
+    def test_five_files_have_the_hash_a_real_1_5_9_wrote_one_is_new_and_thirty_seven_keep_1_5_8s(self):
+        old, new = dict(acp.VERSIONS["1.5.8"].builtin_sha256), dict(acp.VERSIONS["1.5.9"].builtin_sha256)
+        self.assertEqual(set(new) - set(old), set(NEW_IN_1_5_9))
+        self.assertEqual(set(old) - set(new), set())
+        self.assertEqual({p for p in old if new[p] != old[p]}, set(CHANGED_IN_1_5_9))
+        for path, digest in {**CHANGED_IN_1_5_9, **NEW_IN_1_5_9}.items():
+            self.assertEqual(new[path], digest, path)
+            self.assertNotEqual(old.get(path), digest, path)
+        self.assertEqual(sum(1 for p in old if new[p] == old[p]), 37)
+        self.assertEqual(new["keep.txt"], "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "the empty file")
+
+    def test_a_runnable_built_in_file_of_1_5_9_has_a_hash_and_the_two_changed_js_files_are_pinned(self):
+        new = acp.VERSIONS["1.5.9"]
+        pinned = {p for p, _ in new.builtin_sha256}
+        runnable = [p for p in new.builtin_paths if p.casefold().endswith(new.builtin_runnable)]
+        for js in ("plugins/swarm/sidecars/swarm_board/hive.js", "plugins/swarm/sidecars/swarm_board/app.js"):
+            self.assertIn(js, runnable)
+            self.assertIn(js, pinned)
+        self.assertEqual([p for p in runnable if p not in pinned and not any(q.startswith(p + "/") for q in new.builtin_paths)], [])
+        self.assertFalse("skills/swarm_pane/SKILL.md".casefold().endswith(new.builtin_runnable), "the new skill file is a .md: it cannot run")
+
+    def test_the_older_tables_are_not_touched(self):
+        self.assertEqual(dict(acp.VERSIONS["1.5.8"].builtin_sha256)["plugins/swarm/sidecars/swarm_board/hive.js"],
+                         "bcc365aa8a8816e99ac96cf1574eac4c40c871955e87e62719feb230b4de88c9", "1.5.8 keeps its own hive.js value")
+        self.assertEqual(dict(acp.VERSIONS["1.5.8"].builtin_sha256)[".checksum"], "6d57abc259150790daf8914486b7f2172d443c8edcf9a11c06fc9eb61936ac6c")
+        self.assertEqual(len(acp.VERSIONS["1.5.8"].builtin_paths), 64)
+        self.assertEqual(acp.VERSIONS["1.5.6"].builtin_paths, acp.VERSIONS["1.5.3"].builtin_paths)
+
+    def test_the_initialize_answer_of_the_real_1_5_9_is_taken_and_a_changed_protocol_number_is_not(self):
+        """The answer a real 1.5.9 gave (shape only: no plan, no account), fed to the tracker the way a session does. It carries a ``_meta.antigravity`` object
+        that no copy of 1.5.8's answer was kept to compare with; the tracker reads only ``protocolVersion`` and ``resume`` and keeps nothing of the rest."""
+        answer = {"jsonrpc": "2.0", "id": 1, "result": {
+            "protocolVersion": 1,
+            "agentCapabilities": {"loadSession": True, "load_session": True,
+                                  "promptCapabilities": {"image": True, "audio": False, "embeddedContext": True},
+                                  "sessionCapabilities": {"resume": {}, "close": {}, "load": {}, "list": {}, "additionalDirectories": {}},
+                                  "session_capabilities": {"resume": {}, "close": {}, "load": {}, "list": {}, "additionalDirectories": {}},
+                                  "auth": {"logout": {}},
+                                  "_meta": {"antigravity": {"tier": True, "systemPrompt": {"append": True}}}},
+            "agentInfo": {"name": "Antigravity ACP Server", "version": "1.5.9"},
+            "authMethods": [{"id": "oauth-personal"}, {"id": "oauth-business"}, {"id": "gemini-api-key"}, {"id": "agent-platform"}]}}
+
+        def tracker():
+            t = acp.AgyTracker(acp.VERSIONS["1.5.9"], workdir="/w/work", shared=None, session_id=None, resumed=False)
             t.expect(1, "initialize")
             return t
         self.assertEqual(tracker().on_message(answer), [("initialized", {"load_session": True})])

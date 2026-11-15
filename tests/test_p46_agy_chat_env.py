@@ -418,13 +418,13 @@ class ChatHomeTests(FolderCase):
 
     def _the_built_in_content_of_agy_passes_only_by_the_exact_paths_of_the_table(self, version):
         env.ensure_chat_home(self.state, version=version)
-        self.assertEqual(len(env.builtin_table(version).paths), {"1.5.3": 62, "1.5.6": 62, "1.5.7": 64, "1.5.8": 64}[version],          # (1.5.7: one more skill, the folder and its SKILL.md; 1.5.8: the same paths)
+        self.assertEqual(len(env.builtin_table(version).paths), {"1.5.3": 62, "1.5.6": 62, "1.5.7": 64, "1.5.8": 64, "1.5.9": 66}[version],          # (1.5.7: one more skill, the folder and its SKILL.md; 1.5.8: the same paths; 1.5.9: one more skill, skills/swarm_pane)
                          "every path of the real AGY 1.5.3 (the fourth real run) and of the folders a real 1.5.7 wrote, one by one")
         for name in (".checksum", ".manifest", "keep.txt", "plugins/swarm/plugin.json", "plugins/swarm/sidecars/swarm_board/main.mjs",
                      "skills/agy-customizations/docs/skills.md", "skills/agy-customizations/docs/rules.md", "skills/native_swarm/logo.svg"):
             self.assertIn(name, env.builtin_table(version).paths)
         self.assertEqual(sum(1 for p in env.builtin_table(version).paths if p.startswith("skills/") and p.count("/") == 1),
-                         {"1.5.3": 13, "1.5.6": 13, "1.5.7": 14, "1.5.8": 14}[version], "13 skill folders (14 in 1.5.7 and 1.5.8)")
+                         {"1.5.3": 13, "1.5.6": 13, "1.5.7": 14, "1.5.8": 14, "1.5.9": 15}[version], "13 skill folders (14 in 1.5.7 and 1.5.8, 15 in 1.5.9)")
         self.assertFalse(any(set(p) & set("*?[") for p in env.builtin_table(version).paths), "no pattern, only names")
         self.hashed()
         for rel in sorted(env.builtin_table(version).paths):                  # all of the table, though named skills, plugins, hooks and rules
@@ -476,7 +476,7 @@ class ChatHomeTests(FolderCase):
         for version, table in env.BUILTIN_TABLES.items():
             with self.subTest(version=version):
                 files = {p for p in table.paths if p not in table.dirs}
-                count = {"1.5.3": 41, "1.5.6": 41, "1.5.7": 42, "1.5.8": 42}[version]          # (1.5.7 has one more skill; 1.5.8 the same files)
+                count = {"1.5.3": 41, "1.5.6": 41, "1.5.7": 42, "1.5.8": 42, "1.5.9": 43}[version]          # (1.5.7 has one more skill; 1.5.8 the same files; 1.5.9 one more skill)
                 self.assertEqual(len(files), count)
                 self.assertEqual(set(table.sha), files, "every file of the real AGY (the fifth real run of 1.5.3; the folders a real 1.5.6 and a real 1.5.7 wrote), not only the ones that run")
                 for rel, digest in table.sha.items():
@@ -615,8 +615,8 @@ class ChatHomeTests(FolderCase):
         self.assertEqual(old.paths - new.paths, frozenset())
         self.assertEqual(new.dirs - old.dirs, {self.NEW_SKILL})
         self.assertEqual(env.BUILTIN_TABLES["1.5.3"].paths, old.paths, "1.5.6's table is still 1.5.3's, untouched")
-        self.assertEqual(env.builtin_table().version, "1.5.8", "no version means the newest known one")          # (v0.25.6: 1.5.8)
-        self.assertEqual(env.KNOWN_VERSIONS, ("1.5.3", "1.5.6", "1.5.7", "1.5.8"))
+        self.assertEqual(env.builtin_table().version, "1.5.9", "no version means the newest known one")          # (v0.26.1: 1.5.9)
+        self.assertEqual(env.KNOWN_VERSIONS, ("1.5.3", "1.5.6", "1.5.7", "1.5.8", "1.5.9"))
 
     def test_a_folder_with_the_new_skill_passes_for_1_5_7_and_is_refused_for_1_5_6_and_1_5_3(self):
         """The path table is the one of the version about to start: the new skill is on 1.5.7's table only, so it is a stranger to the others (named in the sentence)."""
@@ -625,7 +625,8 @@ class ChatHomeTests(FolderCase):
         self.make_builtin(self.NEW_SKILL_FILE)
         self.assertTrue((self.chat_home / "antigravity-cli" / "builtin" / self.NEW_SKILL / "SKILL.md").is_file())
         self.assertEqual(env.check_chat_home(self.state, version="1.5.7"), self.chat_home)
-        self.assertEqual(env.check_chat_home(self.state), self.chat_home, "the newest version is 1.5.8, which has the same paths as 1.5.7")
+        self.assertEqual(env.check_chat_home(self.state, version="1.5.8"), self.chat_home)
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home, "the newest version is 1.5.9, whose table has all of 1.5.7's paths: a folder without its new skill still passes")
         self.assertEqual(env.home_state(self.state, version="1.5.7"), ("ok", ""))
         for version in ("1.5.6", "1.5.3"):
             with self.subTest(version=version):
@@ -662,7 +663,8 @@ class ChatHomeTests(FolderCase):
         old, new = env.BUILTIN_TABLES["1.5.6"], env.BUILTIN_TABLES["1.5.7"]
         rel = "plugins/swarm/sidecars/swarm_board/hive.js"
         self.assertNotEqual(old.sha[rel], new.sha[rel])
-        self.assertEqual(env.pinned_hashes(rel), frozenset({env.BUILTIN_TABLES["1.5.3"].sha[rel], old.sha[rel], new.sha[rel]}))
+        self.assertEqual(env.pinned_hashes(rel), frozenset({env.BUILTIN_TABLES["1.5.3"].sha[rel], old.sha[rel], new.sha[rel], env.BUILTIN_TABLES["1.5.9"].sha[rel]}),
+                         "1.5.8 has 1.5.7's value; 1.5.9 changed the file again")
         self.assertNotIn(new.sha[rel], env.pinned_hashes("plugins/swarm/sidecars/swarm_board/main.mjs"), "a hash of another path is no pass")
         self.assertEqual(env.pinned_hashes("skills/mcp-app-development/SKILL.md") & env.pinned_hashes("keep.txt"), frozenset())
 
@@ -711,6 +713,57 @@ class ChatHomeTests(FolderCase):
         for rel in sorted(p for p in new.sha if p not in (".checksum", self.NEW_SKILL_FILE)):
             self.assertEqual(new.sha[rel], old.sha[rel], rel)
 
+    # ---- v0.26.1: AGY 1.5.9 has 1.5.8's paths and one more skill (skills/swarm_pane); the path table is still the one of the version about to start
+    NEW_SKILL_159 = "skills/swarm_pane"
+    NEW_SKILL_159_FILE = "skills/swarm_pane/SKILL.md"
+
+    def test_the_real_path_tables_of_1_5_8_and_1_5_9_differ_by_exactly_the_new_skill(self):
+        old, new = env.BUILTIN_TABLES["1.5.8"], env.BUILTIN_TABLES["1.5.9"]
+        self.assertEqual(new.paths - old.paths, {self.NEW_SKILL_159, self.NEW_SKILL_159_FILE})
+        self.assertEqual(old.paths - new.paths, frozenset())
+        self.assertEqual(new.dirs - old.dirs, {self.NEW_SKILL_159})
+        self.assertEqual(len(new.paths), 66)
+        self.assertEqual(env.BUILTIN_TABLES["1.5.7"].paths, old.paths, "1.5.8's table is still 1.5.7's, untouched")
+        self.assertNotIn(self.NEW_SKILL_159_FILE, env.BUILTIN_TABLES["1.5.7"].paths)
+        self.assertNotIn(self.NEW_SKILL_159_FILE, env.BUILTIN_TABLES["1.5.8"].paths)
+
+    def test_a_folder_with_the_new_skill_passes_for_1_5_9_and_is_refused_for_every_older_version(self):
+        self.make_home()
+        self.pin_hashes({})
+        self.make_builtin(self.NEW_SKILL_159_FILE, "keep.txt")
+        for version in ("1.5.9", None):
+            with self.subTest(version=version):
+                self.assertEqual(env.check_chat_home(self.state, version=version), self.chat_home)
+        for version in ("1.5.8", "1.5.7", "1.5.6", "1.5.3"):
+            with self.subTest(version=version):
+                self.assertIn("antigravity-cli/builtin/" + self.NEW_SKILL_159, self.refused(env.check_chat_home, self.state, code="foreign_settings", version=version))
+
+    def test_a_path_that_1_5_9_does_not_have_is_refused_for_it_even_though_the_hash_table_is_shared(self):
+        self.make_home()
+        self.pin_hashes({})
+        base = self.make_builtin("keep.txt")
+        self.write_private(base / "skills" / "swarm_pane" / "extra.md", "x")          # a name no table has
+        self.assertIn("extra.md", self.refused(env.check_chat_home, self.state, code="foreign_settings", version="1.5.9"))
+        shutil.rmtree(base / "skills" / "swarm_pane")
+        self.write_private(base / "skills" / "a-skill-of-1.5.10" / "SKILL.md", "x")
+        self.assertIn("a-skill-of-1.5.10", self.refused(env.check_chat_home, self.state, code="foreign_settings", version="1.5.9"))
+
+    def test_the_five_changed_files_and_the_new_one_of_1_5_9_pass_with_either_value_at_their_own_path_and_nowhere_else(self):
+        """ADR 0018: the hashes are shared among the known versions at one path. A folder 1.5.8 wrote stays fine after AGY updated itself to 1.5.9, and the reverse."""
+        old, new = env.BUILTIN_TABLES["1.5.8"], env.BUILTIN_TABLES["1.5.9"]
+        changed = sorted(p for p in old.sha if old.sha[p] != new.sha[p])
+        self.assertEqual(changed, [".checksum", ".manifest", "plugins/swarm/sidecars/swarm_board/app.js", "plugins/swarm/sidecars/swarm_board/hive.js",
+                                   "skills/native_swarm/SKILL.md"])
+        for rel in changed:
+            with self.subTest(rel=rel):
+                self.assertTrue(env.pinned_hashes(rel) >= {old.sha[rel], new.sha[rel]})
+                self.assertNotIn(new.sha[rel], env.pinned_hashes("keep.txt"))
+                self.assertNotIn(new.sha[rel], env.pinned_hashes("skills/automation/SKILL.md"), "a hash of another path is no pass")
+        self.assertEqual(env.pinned_hashes(self.NEW_SKILL_159_FILE), frozenset({new.sha[self.NEW_SKILL_159_FILE]}), "only 1.5.9 pins the new file")
+        for rel in sorted(p for p in new.sha if p not in changed and p != self.NEW_SKILL_159_FILE):
+            self.assertEqual(new.sha[rel], old.sha[rel], rel)
+        self.assertEqual(env.pinned_hashes("plugins/swarm/sidecars/swarm_board/app.js") & env.pinned_hashes("plugins/swarm/sidecars/swarm_board/hive.js"), frozenset())
+
     def test_a_version_without_a_table_checks_nothing_and_makes_nothing(self):
         for version in ("1.5.5", "1.5.4", "9.9.9", "", 5, ["1.5.3"]):
             with self.subTest(version=version):
@@ -720,7 +773,7 @@ class ChatHomeTests(FolderCase):
                 self.assertEqual(env.home_state(self.state, version=version)[0] in ("missing", "refused"), True)
         self.assertFalse(self.chat_home.exists(), "no folder was made for a version without a table")
         self.assertEqual(env.builtin_table().version, env.NEWEST_VERSION, "no version means the newest known one")
-        self.assertEqual(env.NEWEST_VERSION, "1.5.8")
+        self.assertEqual(env.NEWEST_VERSION, "1.5.9")
 
     def test_the_real_tables_of_both_versions_let_the_empty_file_pass_and_refuse_other_bytes_by_path(self):
         self.make_home()
@@ -742,7 +795,7 @@ class ChatHomeTests(FolderCase):
         differ = sorted(p for p in old.sha if old.sha[p] != new.sha[p])
         self.assertEqual(len(differ), 15)
         for rel in differ:
-            self.assertEqual(env.pinned_hashes(rel), frozenset({old.sha[rel], new.sha[rel], newest.sha[rel], env.BUILTIN_TABLES["1.5.8"].sha[rel]}), rel)          # (1.5.7 pins its own value, or 1.5.6's again; 1.5.8 pins 1.5.7's, or its own for the one file it changed)
+            self.assertEqual(env.pinned_hashes(rel), frozenset({old.sha[rel], new.sha[rel], newest.sha[rel], env.BUILTIN_TABLES["1.5.8"].sha[rel], env.BUILTIN_TABLES["1.5.9"].sha[rel]}), rel)          # (1.5.7 pins its own value, or 1.5.6's again; 1.5.8 pins 1.5.7's, or its own for the one file it changed)
         self.assertTrue(env.pinned_hashes(differ[0]) >= {old.sha[differ[0]], new.sha[differ[0]]})
         self.assertEqual(env.pinned_hashes("keep.txt"), frozenset({hashlib.sha256(b"").hexdigest()}))
         self.assertEqual(env.pinned_hashes("not/a/file"), frozenset())
@@ -1536,7 +1589,7 @@ class PinnedTests(BinaryCase):
                 exc = self.refused(self.pin, code="unsupported")
                 self.assertEqual(exc.version, version)
                 self.assertIn(version, str(exc))
-                self.assertIn("1.5.3、1.5.6、1.5.7、1.5.8。", str(exc), "the sentence lists the known versions in order")
+                self.assertIn("1.5.3、1.5.6、1.5.7、1.5.8、1.5.9。", str(exc), "the sentence lists the known versions in order")
 
     def test_a_known_version_that_never_passed_the_check_is_unverified(self):
         self.install_agy()
@@ -1557,7 +1610,7 @@ class PinnedTests(BinaryCase):
         self.assertEqual(path.read_text().count("1.5.4"), 1)
 
     def test_the_known_versions_are_the_ones_the_plan_names(self):
-        self.assertEqual(env.KNOWN_VERSIONS, ("1.5.3", "1.5.6", "1.5.7", "1.5.8"))
+        self.assertEqual(env.KNOWN_VERSIONS, ("1.5.3", "1.5.6", "1.5.7", "1.5.8", "1.5.9"))
         with mock.patch.object(env, "KNOWN_VERSIONS", ("1.5.3", "1.5.4")):
             self.install_agy("1.5.4")
             self.record_pass("1.5.4")
@@ -1628,7 +1681,7 @@ class PinnedTests(BinaryCase):
         self.assertNotIn("1.5.8", cli_versions.AGY_CHAT_VERIFIED_VERSIONS, "nothing is built in: only a pass on this Mac counts")
         self.install_agy("1.5.7")                                                 # the old version is still its own record
         self.assertEqual(self.pin().version, "1.5.7")
-        self.install_agy("1.5.9")                                                 # AGY updated itself again: not known
+        self.install_agy("1.6.0")                                                 # AGY updated itself again: not known
         self.refused(self.pin, code="unsupported")
 
 
