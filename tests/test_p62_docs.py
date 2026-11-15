@@ -44,12 +44,13 @@ class ChangelogAndModelTests(unittest.TestCase):
         cls.changelog = raw("CHANGELOG.md")
         cls.first = flat(section(cls.changelog, "## v0.26.0", "## v0.25.6"))
         cls.security = raw("docs", "SECURITY-MODEL.md")
-        cls.model = flat(cls.security[cls.security.index(SECTION):])
+        cls.model = flat(cls.security[cls.security.index(SECTION):cls.security.index("## AGY 1.5.9 (v0.26.1)")])          # (v0.26.1's section follows)
 
     def test_the_release_is_first_and_the_version_is_the_release(self):
-        self.assertTrue(self.changelog.startswith("# Changelog\n\n## v0.26.0 — Chat keeps working when AGY updates itself\n"), self.changelog[:90])
+        self.assertIn("\n## v0.26.0 — Chat keeps working when AGY updates itself\n", self.changelog)          # (v0.26.1 put itself in front of it)
+        self.assertTrue(self.changelog.startswith("# Changelog\n\n## v0.26.1 — "), self.changelog[:90])
         self.assertLess(self.changelog.index("## v0.26.0"), self.changelog.index("## v0.25.6"))
-        self.assertEqual(vbear.__version__, "0.26.0")
+        self.assertEqual(vbear.__version__, "0.26.1")
         self.assertNotIn("Unreleased", self.first)
 
     def test_the_changelog_says_what_is_kept_when_it_is_used_and_what_stays(self):
@@ -64,7 +65,7 @@ class ChangelogAndModelTests(unittest.TestCase):
             self.assertIn(word, self.model, word)
 
     def test_the_security_model_is_the_last_section_and_nothing_names_a_person(self):
-        self.assertNotIn("\n## ", self.security[self.security.index(SECTION) + 5:], "v0.26.0's is the last section")
+        self.assertEqual(self.security[self.security.index(SECTION) + 5:].count("\n## "), 1, "only v0.26.1's section follows v0.26.0's")
         self.assertLess(self.security.index("## AGY 1.5.8 (v0.25.6)"), self.security.index(SECTION))
         self.assertEqual(problems(self.model, "SECURITY-MODEL v0.26.0"), [])
         self.assertEqual(problems(self.first, "CHANGELOG v0.26.0"), [])

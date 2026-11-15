@@ -65,8 +65,8 @@ class TablesTests(unittest.TestCase):
         self.assertEqual(ap.AGY_SOURCES["1.5.8"], ap.AGY_SOURCES["1.5.7"])
         self.assertEqual(ap.AGY_SOURCES["1.5.8"], ap.AGY_SOURCES["1.5.6"])
         self.assertNotIn("1.5.8", cli_versions.AGY_CHAT_VERIFIED_VERSIONS)
-        self.assertEqual(env.NEWEST_VERSION, "1.5.8")
-        self.assertEqual(env.KNOWN_VERSIONS, ("1.5.3", "1.5.6", "1.5.7", "1.5.8"))
+        self.assertEqual(env.NEWEST_VERSION, "1.5.9")          # (v0.26.1)
+        self.assertEqual(env.KNOWN_VERSIONS, ("1.5.3", "1.5.6", "1.5.7", "1.5.8", "1.5.9"))
         self.assertTrue((ROOT / "docs" / "evidence" / "agy-1.5.8-chat.md").is_file())
 
 
@@ -79,10 +79,10 @@ class ChangelogAndModelTests(unittest.TestCase):
         cls.model = flat(cls.security[cls.security.index(SECTION):cls.security.index("## Keeping the verified AGY (v0.26.0)")])          # (v0.26.0's section follows)
 
     def test_the_release_is_first_and_the_version_is_the_release(self):
-        self.assertIn("\n## v0.25.6 — VBear knows AGY 1.5.8\n", self.changelog)          # (v0.26.0 put itself in front of it)
-        self.assertTrue(self.changelog.startswith("# Changelog\n\n## v0.26.0 — "), self.changelog[:70])
+        self.assertIn("\n## v0.25.6 — VBear knows AGY 1.5.8\n", self.changelog)          # (v0.26.0 and v0.26.1 put themselves in front of it)
+        self.assertTrue(self.changelog.startswith("# Changelog\n\n## v0.26.1 — "), self.changelog[:70])
         self.assertLess(self.changelog.index("## v0.25.6"), self.changelog.index("## v0.25.5"))
-        self.assertEqual(vbear.__version__, "0.26.0")
+        self.assertEqual(vbear.__version__, "0.26.1")
         self.assertNotIn("Unreleased", self.first)
         self.assertEqual(problems(self.first, "CHANGELOG v0.25.6"), [])
 
@@ -103,13 +103,13 @@ class ChangelogAndModelTests(unittest.TestCase):
                      "Going back to v0.25.5", "`docs/evidence/agy-1.5.8-chat.md`"):
             self.assertIn(word, self.model, word)
         self.assertEqual(problems(self.model, "SECURITY-MODEL v0.25.6"), [])
-        self.assertEqual(self.security[self.security.index(SECTION) + 5:].count("\n## "), 1, "only v0.26.0's section follows v0.25.6's")
+        self.assertEqual(self.security[self.security.index(SECTION) + 5:].count("\n## "), 2, "only v0.26.0's and v0.26.1's sections follow v0.25.6's")
         self.assertLess(self.security.index("## New versions of Claude Code and AGY (v0.25.5)"), self.security.index(SECTION))
 
     def test_the_older_statements_about_the_tables_name_the_new_version(self):
-        self.assertIn("(`1.5.3`, `1.5.6`, `1.5.7` and `1.5.8`)", flat(self.security))
-        self.assertIn("認得 1.5.3、1.5.6、1.5.7 與 1.5.8", flat(raw("docs", "REFERENCE.zh-TW.md")))
-        self.assertIn("目前 1.5.3、1.5.6、1.5.7 與 1.5.8", flat(raw("GLOSSARY.md")))
+        self.assertIn("(`1.5.3`, `1.5.6`, `1.5.7`, `1.5.8` and `1.5.9`)", flat(self.security))          # (v0.26.1 added 1.5.9 to the sentence)
+        self.assertIn("認得 1.5.3、1.5.6、1.5.7、1.5.8 與 1.5.9", flat(raw("docs", "REFERENCE.zh-TW.md")))
+        self.assertIn("目前 1.5.3、1.5.6、1.5.7、1.5.8 與 1.5.9", flat(raw("GLOSSARY.md")))
         adr = flat(raw("docs", "adr", "0018-agy-version-tables.md"))
         self.assertIn("## 補記（v0.25.6：認得 AGY 1.5.8）", adr)
         self.assertIn("路徑表就是 1.5.7 的", adr)
