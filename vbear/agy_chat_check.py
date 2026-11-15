@@ -73,7 +73,7 @@ from pathlib import Path
 from . import admin_policy, chat_check, config as cfg
 from .chat_check import CheckError, check
 from .runtime import agent_sessions, agy_chat_env, chat_store as cs, cli_versions, proctrack, stream_session
-from .runtime import agy_chat_protocol as acp, agy_chat_session as acs
+from .runtime import agy_chat_protocol as acp, agy_chat_session as acs, agy_kept
 from .runtime import daemon as dmn
 
 PROFILE_ID = "agy-chat-check"
@@ -1368,6 +1368,12 @@ def run(binary: str, version: str, out: str | None, *, tmp_root: str | None = No
                   f"約 18 次模型呼叫（共用資料夾另外約 5 次），花在你自己的 Google 方案；依 VBear 的估算規則主要部分不超過 "
                   f"US${TOTAL_USD}、共用資料夾部分不超過 US${SHARED_TOTAL_USD}；不計入每日額度（檢查用的是暫時的狀態資料夾）")}
     out_path = Path(out) if out else real_state / "verifications" / f"agy-{version}-chat.json"
+    try:                                   # P62 (ADR 0021): the report and the pass record say WHICH file was checked
+        sha, size = agy_kept.hash_file(binary)
+    except OSError as exc:
+        report["error"] = f"檢查用的 AGY 讀不了（{exc.strerror or type(exc).__name__}）"
+        return _stop(report, out_path, 2)
+    report.update(agy_sha256=sha, agy_size=size)
     if consts is None:
         report["error"] = f"AGY {version} 沒有聊天模式的常數，不能驗證"
         return _stop(report, out_path, 2)
@@ -1420,11 +1426,17 @@ def run(binary: str, version: str, out: str | None, *, tmp_root: str | None = No
                                             scratch_left=left, scratch_kept_for_a_person=kept,
                                             note="暫時資料夾、AGY 程序（參數或工作資料夾指向檢查的暫時資料夾的）與暫存區都清掉了"
                                                  "（等了一小段時間讓 VBear 自己清；交給人工處理的聊天，它的暫存區由檢查移除並另外記錄）")
+    try:
+        again = agy_kept.hash_file(binary)
+    except OSError:
+        again = None
+    if again != (sha, size):                           # the file that was checked is not the file that was named
+        report["error"] = "檢查跑完之後，檢查用的 AGY 檔案和開始時不一樣（被換掉或改動），所以不算通過。"
     report["passed"] = all(c["pass"] for c in report["checks"].values()) and "error" not in report
     if not report["passed"] and code == 0:
         code = 1
     code = _scrub(report, code)
-    return _finish(report, out_path, code, record=(real_state, binary))
+    return _finish(report, out_path, code, record=(real_state, binary, {"sha256": sha, "size": size}))
 
 
 def tidy(value, home):
@@ -1483,6 +1495,7 @@ def main(agy: str | None, out: str | None, *, shared: bool = True) -> int:
     try:
         if agy:
             binary = os.path.realpath(agy)
+            agy_chat_env.check_binary_file(binary)          # the AGY it is given is held to what the one found on the search path is (P62)
             version = agy_chat_env.read_version(binary)
         else:
             pinned = agy_chat_env.pinned_binary(verified=agy_chat_env.KNOWN_VERSIONS)     # located and read; not yet verified
@@ -1505,9 +1518,9 @@ def _finish(report: dict, out_path: Path, code: int, record=None) -> int:
     chat_check._write_private(out_path, json.dumps(report, ensure_ascii=False, indent=1) + "\n")
     recorded = False
     if report.get("passed") and record is not None:
-        state, binary = record
+        state, binary, which = record
         chat_check._record_pass(state, report["agy_version"], binary, out_path, file=cli_versions.LOCAL_AGY_CHAT_VERIFIED_FILE,
-                                tool="vbear.boundary_check --mode agy-chat")
+                                tool="vbear.boundary_check --mode agy-chat", extra=which)
         recorded = True
     return _emit(report, out_path, code, recorded)
 

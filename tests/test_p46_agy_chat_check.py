@@ -14,6 +14,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -24,7 +25,7 @@ from unittest import mock
 from tests import fake_agy_acp_check as fake
 from tests import leftover
 from vbear import admin_policy, agy_chat_check as cc, agy_verify, boundary_check, claude_verify, config as cfg
-from vbear.runtime import stream_session, agy_chat_env, agy_chat_protocol as acp, chat_protocol as cp, cli_versions
+from vbear.runtime import stream_session, agy_chat_env, agy_kept, agy_chat_protocol as acp, chat_protocol as cp, cli_versions
 
 VERSION = "1.5.3"
 SCALE = 0.03                           # the fake's `sleep 60` lasts 60 x this many seconds
@@ -822,6 +823,14 @@ class VerifierTests(unittest.TestCase):
         env = mock.patch.dict(os.environ, {"VBEAR_HOME": str(self.state), "HOME": self.tmp.name})
         env.start()
         self.addCleanup(env.stop)
+        # P62: the verifier copies the AGY on the search path and runs the check on the copy, so there is one (a script that prints a version)
+        self.bindir = Path(self.tmp.name) / "bin"
+        self.bindir.mkdir(mode=0o700)
+        (self.bindir / "agy").write_text(f"#!{sys.executable}\nprint({VERSION!r})\n")
+        (self.bindir / "agy").chmod(0o700)
+        path = mock.patch("vbear.runtime.daemon.cli_search_path", return_value=str(self.bindir))
+        path.start()
+        self.addCleanup(path.stop)
 
     def run_verifier(self, rc, *, report=None, record=False):
         verifier = agy_verify.AgyChatVerifier()
@@ -831,15 +840,17 @@ class VerifierTests(unittest.TestCase):
         def fake_run(argv, **kw):
             seen["argv"], seen["kw"] = argv, kw
             out = Path(argv[argv.index("--out") + 1])
+            sha, size = agy_kept.hash_file(argv[argv.index("--agy") + 1])          # what the check does: it hashes the file it was given
             if report is not None:
-                out.write_text(json.dumps(report))
+                out.write_text(json.dumps(dict(report, agy_sha256=sha, agy_size=size)))
                 out.chmod(0o600)
             if record:
                 cfg.write_private(self.state / cli_versions.LOCAL_AGY_CHAT_VERIFIED_FILE, json.dumps({"versions": {
-                    VERSION: {"passed": True, "verified_at": "2026-11-09T00:00:00+0000", "report": str(out)}}}))
+                    VERSION: {"passed": True, "verified_at": "2026-11-09T00:00:00+0000", "report": str(out),
+                              "sha256": sha, "size": size}}}))
             return done
         with mock.patch.object(claude_verify.subprocess, "run", fake_run):
-            verifier._run("/unused/agy", VERSION)
+            verifier._run("", VERSION)
         return verifier.status(), seen
 
     def test_the_child_is_the_agy_chat_check_with_the_shared_folder_writing_to_the_reports_folder(self):
@@ -850,8 +861,12 @@ class VerifierTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--mode") + 1], "agy-chat")
         self.assertIn("--shared", argv)
         self.assertEqual(Path(argv[argv.index("--out") + 1]), claude_verify.reports_dir() / f"agy-{VERSION}-chat.json")
-        for banned in ("--claude", "--codex", "--agy"):
+        for banned in ("--claude", "--codex"):
             self.assertNotIn(banned, argv)
+        # P62: the check runs the COPY made of the AGY on the search path, never that AGY itself
+        copy = argv[argv.index("--agy") + 1]
+        self.assertTrue(copy.startswith(agy_kept.root(self.state) + "/" + agy_kept.STAGING_PREFIX), copy)
+        self.assertNotEqual(copy, str(self.bindir / "agy"))
         self.assertGreater(seen["kw"]["timeout"], claude_verify.CHAT_RUN_TIMEOUT, "AGY's turns are slow: it may run longer")
         self.assertEqual((status_["running"], status_["result"], status_["shared"]), (False, "passed", "passed"), status_)
         self.assertIn("AGY", status_["message"])

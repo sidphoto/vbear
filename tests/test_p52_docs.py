@@ -50,13 +50,13 @@ class DocumentsTests(unittest.TestCase):
 
     def test_the_changelog_starts_with_this_release_and_the_version_is_the_release(self):
         import vbear
-        self.assertTrue(self.changelog.startswith("# Changelog\n\n## v0.25.6 — "), self.changelog[:60])      # (v0.25.5 is the second now, v0.25.4 the third, v0.25.3 the fourth)
+        self.assertTrue(self.changelog.startswith("# Changelog\n\n## v0.26.0 — "), self.changelog[:60])      # (v0.25.5 is the second now, v0.25.4 the third, v0.25.3 the fourth)
         self.assertLess(self.changelog.index("## v0.25.4"), self.changelog.index("## v0.25.3"))
         self.assertLess(self.changelog.index("## v0.25.3"), self.changelog.index("## v0.25.2"))
         self.assertLess(self.changelog.index("## v0.25.2"), self.changelog.index("## v0.25.1"))
         self.assertLess(self.changelog.index("## v0.25.1"), self.changelog.index("## v0.25.0"))
         self.assertLess(self.changelog.index("## v0.25.0"), self.changelog.index("## v0.24.0"))
-        self.assertEqual(vbear.__version__, "0.25.6")
+        self.assertEqual(vbear.__version__, "0.26.0")
         self.assertNotIn("Unreleased", self.first)
         self.assertEqual(problems(self.first, "CHANGELOG v0.25.0"), [])
 

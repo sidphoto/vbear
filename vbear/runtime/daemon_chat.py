@@ -65,7 +65,7 @@ from pathlib import Path
 
 from .. import admin_policy, config as cfg, meetings as mt
 from . import agent_sessions, chat_engines, chat_protocol as cp, chat_session, chat_store as cs, cli_versions, memory_rules, proctrack, shared_rules
-from . import agy_chat_env, agy_chat_protocol as acp, agy_chat_session
+from . import agy_chat_env, agy_chat_protocol as acp, agy_chat_session, agy_kept
 from . import codex_chat_env, codex_chat_protocol as ccp, codex_chat_session
 from . import stream_session
 
@@ -636,6 +636,10 @@ class ChatOps:
             return _err(rid, "unsupported_version", f"AGY {str(version)[:32]} 沒有聊天模式的常數")
         if version not in cli_versions.agy_chat_verified_versions() and version not in self.agy_chat_probe_versions:
             return _err(rid, "unverified", cli_versions.agy_chat_unverified_text(version))
+        try:                                           # P62 (ADR 0021): a file under the folder VBear keeps AGY copies in is checked again here, whole-file SHA-256 included
+            agy_kept.check_for_launch(self.base, version, binary, identity)
+        except agy_chat_env.AgyRefused as exc:
+            return _err(rid, {"unverified": "unverified", "drift": "drift"}.get(exc.code, "invalid_binary"), str(exc))
         policy = admin_policy.check_agy(version)
         if not policy.ok:
             return _err(rid, "admin_policy", policy.reason())

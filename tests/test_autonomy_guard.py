@@ -169,6 +169,19 @@ Never, whatever the person ticked in 「自己動手」:
      24c  the chat session writes to Claude Code's stdin only what ``chat_protocol`` builds: every ``_queue`` call of ``chat_session.py`` takes a ``cp.*_line(...)`` call, ``line`` or ``t.line``, and the ``line`` the daemon hands to ``start_turn`` is
           always ``cp.user_line(...)``.
 
+  25. (P62, ADR 0021) v0.26.0 keeps the AGY that passed the chat check, so that the chat goes on when AGY updates itself. A kept copy is a file VBear runs, so it is held to rules of the source
+     (this file, ``KeptAgyRules``, each with a made-up bad source that must fire; the behaviour is tested in tests/test_p62_kept_agy.py; docs/SECURITY-MODEL.md, "Keeping the verified AGY (v0.26.0)"):
+     25a  a copy is chosen and started only after every condition: ``agy_kept._inspect`` hashes the whole file and compares it with the recorded SHA-256 (and the size, mode 0500, one name, the folder holding
+          the one file), ``_check_copy`` calls it and the version's own path (``path_of``, only versions of the protocol table), ``choose`` and ``check_for_launch`` go through ``_check_copy``;
+          the constants are mode 0500 and two copies.
+     25b  a copy replaces the AGY on the search path only in ``agy_chat_env.pinned_binary``, after it located the AGY, read its version and found it ``unsupported`` or ``unverified``, and only when
+          given a state folder; ``agy_kept.choose`` is called nowhere else.
+     25c  the daemon looks at a kept file again before it starts anything: ``_agy_spawn`` calls ``agy_kept.check_for_launch`` before ``prepare_agy_chat_launch``, in a ``try`` whose handlers return an error.
+     25d  the chat check runs the copy and keeps what it ran: the verifier passes ``--agy``, copies (``_stage``) before it runs the check, and keeps (``promote``) only a pass whose record names the SHA-256 and size
+          of the staged copy; the check hashes the file before and after it runs and records the hash.
+     25e  only the AGY chat code names ``agy_kept``; it removes a folder only in ``_remove_folder`` (one file, then the folder: never recursively), renames only in ``promote``, starts no program and imports
+          neither ``shutil`` nor ``subprocess``.
+
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
 ``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py``, ``vbear/skillbook*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
 staff, of dispatch, of groups and of memory (the suggestions, P42-4) are held to it the day they are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
@@ -4406,6 +4419,259 @@ class ManagedSettingsAreNeverSent(unittest.TestCase):
         for rule in "abc":
             self.assertIn(f"     24{rule}  ", text, rule)
         self.assertIn("class ManagedSettingsAreNeverSent", text)
+
+
+# ---- 25: the AGY that VBear keeps (P62, v0.26.0) ----------------------------------------------------------------------------------------------------------------
+
+KEPT_FILES = ("runtime/agy_kept.py", "runtime/agy_chat_env.py", "runtime/daemon_chat.py", "agy_verify.py", "agy_chat_check.py")
+KEPT_NAMERS = {"runtime/agy_chat_env.py", "runtime/daemon_chat.py", "agy_verify.py", "agy_chat_check.py", "runtime/agy_kept.py"}
+
+
+def _functions(tree) -> dict:
+    return {n.name: n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+
+
+def _called(node) -> set:
+    return {_call_name(c) for c in ast.walk(node) if isinstance(c, ast.Call)}
+
+
+def _enclosing(tree) -> dict:
+    """{id(node): name of the function it is in}"""
+    out = {}
+    for fn in ast.walk(tree):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for n in ast.walk(fn):
+                out.setdefault(id(n), fn.name)
+    return out
+
+
+def kept_problems(sources: dict) -> list[str]:
+    """25a to 25e on ``sources`` ({path relative to vbear: source}); the names of the things the rules are about."""
+    found: list[str] = []
+    missing = [f for f in KEPT_FILES if f not in sources]
+    if missing:
+        return [f"{m}: not there" for m in missing]
+    trees = {rel: ast.parse(sources[rel]) for rel in KEPT_FILES}
+    kept, kfn = trees["runtime/agy_kept.py"], _functions(trees["runtime/agy_kept.py"])
+    # 25a
+    needs = {"_check_copy": {"_inspect", "path_of", "_check_chain"}, "_inspect": {"_hash_fd", "_open_child"},
+             "choose": {"_check_copy", "local_agy_chat_kept_records"}, "check_for_launch": {"_check_copy", "path_of", "local_agy_chat_kept_records"},
+             "promote": {"_inspect", "prune", "path_of"}}
+    for name, calls in needs.items():
+        if name not in kfn:
+            found.append(f"agy_kept.{name}: gone")
+        elif calls - _called(kfn[name]):
+            found.append(f"agy_kept.{name}: does not call {', '.join(sorted(calls - _called(kfn[name])))}")
+    if "_inspect" in kfn:
+        text = ast.unparse(kfn["_inspect"])
+        for needle in ("digest != sha256", "st.st_size != size", "st.st_nlink != 1", "stat.S_IMODE(st.st_mode) != FILE_MODE", "names != [BINARY_NAME]", "st.st_uid != os.getuid()"):
+            if needle not in text:
+                found.append(f"agy_kept._inspect: no longer has `{needle}`")
+    if "path_of" in kfn:
+        text = ast.unparse(kfn["path_of"])
+        if "version in env.KNOWN_VERSIONS" not in text or "VERSION_RE.match(version)" not in text:
+            found.append("agy_kept.path_of: no longer holds the path to the versions of the table")
+    consts = {t.id: n.value.value for n in kept.body if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant)
+              for t in n.targets if isinstance(t, ast.Name)}
+    if consts.get("FILE_MODE") != 0o500:
+        found.append("agy_kept.FILE_MODE is not 0o500")
+    if consts.get("KEEP") != 2:
+        found.append("agy_kept.KEEP is not 2")
+    # 25b
+    env_tree = trees["runtime/agy_chat_env.py"]
+    efn = _functions(env_tree)
+    pinned = efn.get("pinned_binary")
+    chooses = []
+    for rel, tree in trees.items():
+        if rel == "runtime/agy_kept.py":
+            continue
+        home = _enclosing(tree)
+        chooses += [(rel, home.get(id(c))) for c in ast.walk(tree) if isinstance(c, ast.Call) and _call_name(c) == "choose"
+                    and isinstance(c.func, ast.Attribute) and isinstance(c.func.value, ast.Name) and c.func.value.id == "agy_kept"]
+    if chooses != [("runtime/agy_chat_env.py", "pinned_binary")]:
+        found.append(f"agy_kept.choose is called from {chooses}, not only from agy_chat_env.pinned_binary")
+    if pinned is None:
+        found.append("agy_chat_env.pinned_binary: gone")
+    else:
+        calls = [c for c in ast.walk(pinned) if isinstance(c, ast.Call)]
+        where = {_call_name(c): c.lineno for c in calls}
+        choose = next((c for c in calls if _call_name(c) == "choose"), None)
+        if choose is None:
+            found.append("agy_chat_env.pinned_binary: never chooses a copy")
+        else:
+            parents = _parents(pinned)
+            node, guard = choose, None
+            while node in parents:
+                node = parents[node]
+                if isinstance(node, ast.If):
+                    guard = ast.unparse(node.test)
+                    break
+            if guard != "base is not None":
+                found.append("agy_chat_env.pinned_binary: a copy is chosen without a state folder")
+            for needed in ("locate_binary", "read_version"):
+                if needed not in where or where[needed] > choose.lineno:
+                    found.append(f"agy_chat_env.pinned_binary: chooses a copy before {needed}")
+            text = ast.unparse(pinned)
+            if "refusal = AgyRefused('unsupported'" not in text or "refusal = AgyRefused('unverified'" not in text or "return PinnedAgy(binary, version, before)" not in text \
+                    or text.index("raise refusal") < text.index("agy_kept.choose"):
+                found.append("agy_chat_env.pinned_binary: the copy is not chosen only in place of an unsupported or unverified refusal")
+    # 25c
+    spawn = _functions(trees["runtime/daemon_chat.py"]).get("_agy_spawn")
+    if spawn is None:
+        found.append("daemon_chat._agy_spawn: gone")
+    else:
+        check = [c for c in ast.walk(spawn) if isinstance(c, ast.Call) and _call_name(c) == "check_for_launch"]
+        prepare = [c for c in ast.walk(spawn) if isinstance(c, ast.Call) and _call_name(c) == "prepare_agy_chat_launch"]
+        if len(check) != 1 or not prepare or check[0].lineno > min(c.lineno for c in prepare):
+            found.append("daemon_chat._agy_spawn: does not call agy_kept.check_for_launch before it prepares the launch")
+        else:
+            tries = [t for t in ast.walk(spawn) if isinstance(t, ast.Try) and any(n is check[0] for b in t.body for n in ast.walk(b))]
+            if not tries or not all(any(isinstance(n, ast.Return) for n in ast.walk(h)) for t in tries[:1] for h in t.handlers) or not tries[0].handlers:
+                found.append("daemon_chat._agy_spawn: the look at the kept file is not followed by a return on refusal")
+    for rel, tree in trees.items():
+        if rel != "runtime/daemon_chat.py" and rel != "runtime/agy_kept.py" and "check_for_launch" in _called(tree):
+            found.append(f"{rel}: calls check_for_launch")
+    # 25d
+    verify = _functions(trees["agy_verify.py"])
+    if not {"_argv", "_stage", "_run_check", "_keep"} <= set(verify):
+        found.append("agy_verify: the verifier lost a part of keeping")
+    else:
+        if "'--agy'" not in ast.unparse(verify["_argv"]):
+            found.append("agy_verify._argv: does not pass --agy")
+        run_check = ast.unparse(verify["_run_check"])
+        if "self._stage(" not in run_check or run_check.index("self._stage(") > run_check.index("super()._run_check(staged.path"):
+            found.append("agy_verify._run_check: does not copy before it runs the check on the copy")
+        keep = ast.unparse(verify["_keep"])
+        if "staged.sha256" not in keep or "staged.size" not in keep or "agy_kept.promote(" not in keep or "local_agy_chat_kept_records" not in keep:
+            found.append("agy_verify._keep: does not compare the record with the staged copy before it keeps")
+    run = _functions(trees["agy_chat_check.py"]).get("run")
+    if run is None:
+        found.append("agy_chat_check.run: gone")
+    else:
+        hashes = [c for c in ast.walk(run) if isinstance(c, ast.Call) and _call_name(c) == "hash_file"]
+        text = ast.unparse(run)
+        if len(hashes) < 2 or "agy_sha256" not in text or "'sha256': sha" not in text:
+            found.append("agy_chat_check.run: does not hash the file before and after the run and record the hash")
+    # 25e
+    for rel, source in sources.items():
+        if rel in KEPT_NAMERS:
+            continue
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, (ast.Import, ast.ImportFrom)) and any(m.split(".")[-1] == "agy_kept" for m in _module_of(node)):
+                found.append(f"{rel}:{node.lineno}: imports agy_kept")
+    home = _enclosing(kept)
+    for c in ast.walk(kept):
+        if isinstance(c, ast.Call):
+            name = _call_name(c)
+            if name in ("unlink", "rmdir", "rmtree", "remove", "removedirs", "rmtree") and home.get(id(c)) != "_remove_folder":
+                found.append(f"agy_kept:{c.lineno}: {name} outside _remove_folder")
+            if name in ("rename", "replace") and home.get(id(c)) != "promote":
+                found.append(f"agy_kept:{c.lineno}: {name} outside promote")
+            if name in ("Popen", "run", "system", "popen", "spawn", "fork", "execv") or name.startswith("exec") or name.startswith("spawn"):
+                found.append(f"agy_kept:{c.lineno}: starts a program ({name})")
+    for node in ast.walk(kept):
+        if isinstance(node, (ast.Import, ast.ImportFrom)) and any(m.split(".")[0] in ("shutil", "subprocess", "pty") for m in _module_of(node)):
+            found.append(f"agy_kept:{node.lineno}: imports a way to remove recursively or start a program")
+    return found
+
+
+class KeptAgyRules(unittest.TestCase):
+    """25: the real sources keep the rules, and each way out is caught on the real sources with one thing changed."""
+
+    def real(self):
+        return {str(p.relative_to(PACKAGE)): p.read_text(encoding="utf-8") for p in sorted(PACKAGE.rglob("*.py")) if "__pycache__" not in p.parts}
+
+    def test_25_the_real_sources_keep_all_the_rules(self):
+        self.assertEqual(kept_problems(self.real()), [])
+
+    def mutate(self, rel, old, new):
+        sources = self.real()
+        self.assertIn(old, sources[rel], f"{rel}: the sample's anchor is gone")
+        sources[rel] = sources[rel].replace(old, new, 1)
+        return kept_problems(sources)
+
+    def test_25a_catches_a_copy_that_is_not_hashed_or_not_looked_at_whole(self):
+        for what, old, new in (
+            ("the hash is not compared", "if digest != sha256:", "if False:"),
+            ("the size is not compared", "if st.st_size != size:", "if False:"),
+            ("a second name is let through", "or st.st_nlink != 1", ""),
+            ("any mode is let through", "or stat.S_IMODE(st.st_mode) != FILE_MODE", ""),
+            ("a folder with more in it is let through", "if names != [BINARY_NAME]:", "if False:"),
+            ("someone else's file is let through", "or st.st_uid != os.getuid()", ""),
+            ("a version the table lacks has a path", "version in env.KNOWN_VERSIONS", "True"),
+            ("the check of a copy skips the folder", "identity = _inspect(root_fd, version, record[\"sha256\"], record[\"size\"])", "identity = env.cli_identity(path)"),
+            ("the mode is 0700", "FILE_MODE = 0o500", "FILE_MODE = 0o700"),
+            ("three copies are kept", "KEEP = 2", "KEEP = 3"),
+            ("choose does not read the records", "cli_versions.local_agy_chat_kept_records(Path(base))\n    for version in sorted", "{}\n    for version in sorted"),
+        ):
+            with self.subTest(what):
+                self.assertNotEqual(self.mutate("runtime/agy_kept.py", old, new), [], what)
+
+    def test_25b_catches_a_copy_that_replaces_the_agy_where_it_should_not(self):
+        env_rel = "runtime/agy_chat_env.py"
+        for what, old, new in (
+            ("without a state folder", "    if base is not None:\n        from . import agy_kept", "    if True:\n        from . import agy_kept"),
+            ("before the AGY was found unfit", "    if version not in KNOWN_VERSIONS:\n        refusal", "    from . import agy_kept\n    agy_kept.choose(base)\n    if version not in KNOWN_VERSIONS:\n        refusal"),
+        ):
+            with self.subTest(what):
+                self.assertNotEqual(self.mutate(env_rel, old, new), [], what)
+        for what, rel, old, new in (
+            ("the status chooses on its own", env_rel, "def _copy(out: dict) -> dict:", "def _copy(out: dict) -> dict:\n    from . import agy_kept\n    agy_kept.choose(None)"),
+            ("the service chooses on its own", "chat_service.py", "def _default_agy_binary(base=None):", "def _default_agy_binary(base=None):\n    from .runtime import agy_kept\n    agy_kept.choose(base)"),
+        ):
+            with self.subTest(what):
+                self.assertNotEqual(self.mutate(rel, old, new), [], what)
+
+    def test_25c_catches_a_daemon_that_does_not_look_again(self):
+        rel = "runtime/daemon_chat.py"
+        for what, old, new in (
+            ("no look", "agy_kept.check_for_launch(self.base, version, binary, identity)", "pass"),
+            ("a refusal is not returned", "return _err(rid, {\"unverified\": \"unverified\", \"drift\": \"drift\"}.get(exc.code, \"invalid_binary\"), str(exc))", "pass"),
+        ):
+            with self.subTest(what):
+                self.assertNotEqual(self.mutate(rel, old, new), [], what)
+        late = self.real()
+        text = late[rel]
+        block = "        try:                                           # P62 (ADR 0021)"
+        self.assertIn(block, text)
+        start = text.index(block)
+        end = text.index("        policy = admin_policy.check_agy(version)", start)
+        moved = text[:start] + text[end:]
+        anchor = "        launch_id = m[\"launch_id\"]\n        self._log_memory("
+        self.assertIn(anchor, moved)
+        moved = moved.replace(anchor, text[start:end] + anchor, 1)
+        late[rel] = moved
+        self.assertNotEqual(kept_problems(late), [], "the look comes after the launch is prepared")
+
+    def test_25d_catches_a_check_that_does_not_run_or_keep_the_copy(self):
+        for what, rel, old, new in (
+            ("no --agy", "agy_verify.py", '"--agy", binary,', ""),
+            ("the check is run before the copy", "agy_verify.py", "staged = self._stage(base, version)", "staged = None"),
+            ("a record that names no file is kept", "agy_verify.py", "record != {\"sha256\": staged.sha256, \"size\": staged.size}", "False"),
+            ("nothing is kept", "agy_verify.py", "agy_kept.promote(base, staged, version)", "[]"),
+            ("the file is hashed once", "agy_chat_check.py", "again = agy_kept.hash_file(binary)", "again = (sha, size)"),
+            ("the hash is not recorded", "agy_chat_check.py", "{\"sha256\": sha, \"size\": size}", "{}"),
+        ):
+            with self.subTest(what):
+                self.assertNotEqual(self.mutate(rel, old, new), [], what)
+
+    def test_25e_catches_every_other_way_to_reach_or_remove_a_copy(self):
+        for what, rel, old, new in (
+            ("a feature imports it", "memory.py", "from __future__ import annotations", "from __future__ import annotations\nfrom .runtime import agy_kept"),
+            ("a removal elsewhere", "runtime/agy_kept.py", "def hash_file(path)", "def gone(path):\n    os.unlink(path)\n\n\ndef hash_file(path)"),
+            ("a rename elsewhere", "runtime/agy_kept.py", "def hash_file(path)", "def moved(a, b):\n    os.rename(a, b)\n\n\ndef hash_file(path)"),
+            ("a recursive removal", "runtime/agy_kept.py", "import hashlib\n", "import hashlib\nimport shutil\n"),
+            ("a program is started", "runtime/agy_kept.py", "def hash_file(path)", "def go(path):\n    return os.execv(path, [path])\n\n\ndef hash_file(path)"),
+        ):
+            with self.subTest(what):
+                self.assertNotEqual(self.mutate(rel, old, new), [], what)
+
+    def test_25_the_description_and_the_tests_are_there(self):
+        text = (Path(__file__).resolve().parent / "test_autonomy_guard.py").read_text(encoding="utf-8")
+        for rule in "abcde":
+            self.assertIn(f"     25{rule}  ", text, rule)
+        self.assertIn("class KeptAgyRules", text)
+        self.assertTrue((Path(__file__).resolve().parent / "test_p62_kept_agy.py").is_file())
 
 
 if __name__ == "__main__":

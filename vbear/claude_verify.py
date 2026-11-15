@@ -247,11 +247,18 @@ class ChatVerifier:
             return self._finish("failed", f"聊天驗證：{why}", report=str(out), failed=failed)
         if version not in self._verified():
             return self._finish("error", "檢查說通過了，但這個版本沒有出現在本機的已驗證清單裡，請看報告", report=str(out))
+        problem, kept_note = self._keep(binary, version)
+        if problem:
+            return self._finish("error", problem, report=str(out))
         shared, shared_failed = _shared_result(out)
         note = ("；共用資料夾也通過" if shared == "passed" else
                 "；但共用資料夾這段沒有通過（" + "、".join(shared_failed) + "），開著共用資料夾的員工還不能聊天" if shared == "failed" else "")
-        self._finish("passed", f"{self.LABEL} {version} 通過聊天驗證{note}", report=str(out),
+        self._finish("passed", f"{self.LABEL} {version} 通過聊天驗證{note}{kept_note}", report=str(out),
                      shared=shared, shared_failed=shared_failed)
+
+    def _keep(self, binary: str, version: str) -> tuple[str | None, str]:
+        """After a pass: (why the pass cannot be counted, else None; a sentence to add to the result). Nothing for Claude Code and Codex."""
+        return None, ""
 
     def _unfinished(self, report: Path) -> str:
         return "驗證沒有完成（模型可能沒有回應，或登入失效）"

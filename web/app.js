@@ -14501,9 +14501,10 @@ function setupSupportOf(id, chats) {
   const claude = id === "claude";
   const verify = part.verify && typeof part.verify === "object" ? part.verify : null;
   const version = claude ? part.detected : part.version;
+  const keptWords = id === "agy" ? agyKeptWords(part.kept) : "";
   const why = claude ? part.message : part.why;
   return {
-    state: part.state, version: typeof version === "string" ? version : "", why: typeof why === "string" ? why : "",
+    state: part.state, version: typeof version === "string" ? version : "", why: typeof why === "string" ? why : "", kept: keptWords,
     running: !!verify && verify.running === true,
     result: verify && typeof verify.result === "string" ? verify.result : "",
     resultMessage: verify && typeof verify.message === "string" ? verify.message : "",
@@ -14533,7 +14534,7 @@ function setupVendorStatus(vendor, toolsRes, chats) {
   }
   const sup = setupSupportOf(v.id, chats);
   if (!sup) return { kind: "unread", text: "已登入；聊天的狀態讀不到" };
-  if (sup.passed) return { kind: "ready", text: "可以聊天了" };
+  if (sup.passed) return { kind: "ready", text: sup.kept ? `可以聊天了。${sup.kept}` : "可以聊天了" };
   if (sup.state === "unverified") return sup.running
     ? { kind: "running", text: "已登入，聊天安全檢查還在做" }
     : { kind: "unverified", text: "已登入，第一次聊天前要做一次安全檢查" };
@@ -15496,6 +15497,14 @@ const CHAT_VERIFY_COST_CODEX = "驗證會用聊天用的 Codex 真的跑一段�
   + "它會試：員工回話、連只讀檔的指令也先問你、你拒絕或改內容再問、改檔要看 diff、資料夾外的寫入被擋住、停止、接續舊對話。全部通過，才會記下這個版本。";
 const CHAT_AGY_VERIFY_COST = "驗證會用 AGY 真的跑一段對話：約 14 次很短的呼叫，用你自己的 Google 方案，不另外收費，要幾分鐘，對話內容會送到 Google。"
   + "它會試：員工回話、每個指令都先問你、你拒絕或改內容再問、改檔要看 diff、資料夾外的讀寫被擋住、停止、接續舊對話。全部通過，才會記下這個版本。";
+// v0.26.0 (ADR 0021): the AGY on this Mac updated itself to a version that cannot chat yet, and the chat runs the copy VBear kept of the version that passed. One sentence for the
+// person; every version in it is the server's (`kept` of the AGY support answer: using, installed, installed_state), none is written here (rule 19c). "" when there is no `kept`.
+function agyKeptWords(kept) {
+  const k = kept && typeof kept === "object" ? kept : null;
+  if (!k || typeof k.using !== "string" || !k.using || typeof k.installed !== "string" || !k.installed) return "";
+  const next = k.installed_state === "unverified" ? `做一次聊天安全檢查後就會換成 ${k.installed}。` : `等 VBear 認得 ${k.installed} 就會換。`;
+  return `你的 AGY 已經自己更新到 ${k.installed}。VBear 先用之前驗證過的 ${k.using} 聊天，${next}`;
+}
 function chatAgySupportNode(agy, verifyUi) {
   const c = agy && typeof agy === "object" ? agy : null;
   if (!c) return notice("warn", "讀不到 AGY 聊天的支援狀態。");
@@ -15507,12 +15516,15 @@ function chatAgySupportNode(agy, verifyUi) {
   if (c.state !== "ready" && typeof c.why === "string" && c.why) lines.push(el("p", { class: "small", "data-chat": "support-message" }, c.why));
   if (c.state === "hooks") lines.push(el("p", { class: "small", "data-chat": "hooks-note" }, CHAT_AGY_HOOKS_NOTE));
   const toSetup = el("a", { class: "btn small", href: "#/setup", "data-chat": "setup-go" }, "到開始設定");
+  const keptWords = c.state === "ready" ? agyKeptWords(c.kept) : "";
   if (c.state === "ready") {
+    if (keptWords) lines.push(el("p", { class: "small", "data-chat": "kept-note" }, keptWords));
     if (typeof c.money === "string" && c.money) lines.push(el("p", { class: "small muted", "data-chat": "money" }, c.money));
     lines.push(el("p", { class: "small muted", "data-chat": "skills-note" }, CHAT_AGY_SKILLS_NOTE));
   }
   if (c.state === "not_installed" || c.state === "folder") lines.push(el("div", { class: "row" }, toSetup));
-  if (c.state === "unverified") {
+  // the installed AGY is a version VBear knows and has not checked, while the kept copy chats: the check is offered here too (it asks first, as for any unchecked version)
+  if (c.state === "unverified" || (keptWords && c.kept.installed_state === "unverified")) {
     lines.push(el("p", { class: "small muted", "data-chat": "verify-cost" }, CHAT_AGY_VERIFY_COST));
     if (running) lines.push(el("p", { class: "small", "data-chat": "verifying", role: "status" }, "驗證進行中，通常要幾分鐘…"));
     else if (v.confirm === true) lines.push(el("div", { class: "row" },
@@ -15878,7 +15890,8 @@ async function viewChat(id, params) {
   agyUi.cancel = () => { agyUi.confirm = false; draw(); };
   agyUi.go = async () => {
     agyUi.pending = true; agyUi.confirm = false; draw();
-    const version = cur.support && cur.support.agy && cur.support.agy.version;
+    const agyNow = cur.support && cur.support.agy;
+    const version = agyNow && agyNow.kept && typeof agyNow.kept.installed === "string" ? agyNow.kept.installed : agyNow && agyNow.version;       // kept copy in use: the check is for the installed AGY
     try { await api.post("/api/chat-support/verify", { engine: "agy", version: version || undefined }); }
     catch (e) { agyUi.pending = false; toast(e.message); }
     await refresh();
@@ -22228,6 +22241,7 @@ if (typeof module !== "undefined" && module.exports) {
     codexChatReady,
     agyChatReady,
     chatAgySupportNode,
+    agyKeptWords,
     CHAT_AGY_WORD,
     chatTurnCost,
     chatHeadLine,
