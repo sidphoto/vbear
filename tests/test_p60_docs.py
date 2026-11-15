@@ -70,7 +70,7 @@ class TablesTests(unittest.TestCase):
         self.assertEqual(len(acp.VERSIONS["1.5.7"].builtin_sha256), 42)
         self.assertEqual(len(acp.VERSIONS["1.5.7"].builtin_paths), 64)
         self.assertEqual(len(env.builtin_table("1.5.7").dirs), 22)
-        self.assertEqual(env.NEWEST_VERSION, "1.5.7")
+        self.assertEqual(env.NEWEST_VERSION, "1.5.8")          # (v0.25.6 added 1.5.8, which is now the newest)
         self.assertEqual(hashlib.sha256(b"").hexdigest(), dict(acp.VERSIONS["1.5.7"].builtin_sha256)["keep.txt"])
 
 
@@ -81,12 +81,13 @@ class ChangelogAndModelTests(unittest.TestCase):
         cls.first = flat(section(cls.changelog, "## v0.25.5", "## v0.25.4"))
         security = raw("docs", "SECURITY-MODEL.md")
         cls.security = security
-        cls.model = flat(security[security.index("## New versions of Claude Code and AGY (v0.25.5)"):])
+        cls.model = flat(security[security.index("## New versions of Claude Code and AGY (v0.25.5)"):security.index("## AGY 1.5.8 (v0.25.6)")])          # (v0.25.6's section follows)
 
     def test_the_release_is_first_and_the_version_is_the_release(self):
-        self.assertTrue(self.changelog.startswith("# Changelog\n\n## v0.25.5 — VBear knows Claude Code 2.1.323 and AGY 1.5.7\n"), self.changelog[:90])
+        self.assertIn("\n## v0.25.5 — VBear knows Claude Code 2.1.323 and AGY 1.5.7\n", self.changelog)          # (v0.25.6 put itself in front of it)
+        self.assertTrue(self.changelog.startswith("# Changelog\n\n## v0.25.6 — "), self.changelog[:90])
         self.assertLess(self.changelog.index("## v0.25.5"), self.changelog.index("## v0.25.4"))
-        self.assertEqual(vbear.__version__, "0.25.5")
+        self.assertEqual(vbear.__version__, "0.25.6")          # (it was 0.25.5 before v0.25.6 was put in front of it)
         self.assertNotIn("Unreleased", self.first)
         self.assertEqual(problems(self.first, "CHANGELOG v0.25.5"), [])
 
@@ -106,17 +107,17 @@ class ChangelogAndModelTests(unittest.TestCase):
                      "`com.google.antigravity.*`", "Guard rule 20 covers 1.5.7 by itself", "Going back to v0.25.4", "`docs/evidence/claude-code-2.1.323-chat.md`", "`docs/evidence/agy-1.5.7-chat.md`"):
             self.assertIn(word, self.model, word)
         self.assertEqual(problems(self.model, "SECURITY-MODEL v0.25.5"), [])
-        self.assertNotIn("\n## ", self.security[self.security.index("## New versions of Claude Code and AGY (v0.25.5)") + 5:], "v0.25.5's is the last section")
+        self.assertEqual(self.security[self.security.index("## New versions of Claude Code and AGY (v0.25.5)") + 5:].count("\n## "), 1, "only v0.25.6's section follows v0.25.5's")
         self.assertLess(self.security.index("## Display-only version cache (v0.25.4)"), self.security.index("## New versions of Claude Code and AGY (v0.25.5)"))
 
     def test_the_older_statements_about_the_tables_name_the_new_versions(self):
         security = flat(self.security)
         self.assertIn("For 2.1.318, 2.1.319, 2.1.322 and 2.1.323 (the same list)", security)
-        self.assertIn("(`1.5.3`, `1.5.6` and `1.5.7`)", security)
+        self.assertIn("(`1.5.3`, `1.5.6`, `1.5.7` and `1.5.8`)", security)          # (v0.25.6 added 1.5.8)
         reference = flat(raw("docs", "REFERENCE.zh-TW.md"))
         self.assertIn("2.1.318、2.1.319、2.1.322 與 2.1.323 另外把", reference)
-        self.assertIn("認得 1.5.3、1.5.6 與 1.5.7", reference)
-        self.assertIn("目前 1.5.3、1.5.6 與 1.5.7", flat(raw("GLOSSARY.md")))
+        self.assertIn("認得 1.5.3、1.5.6、1.5.7 與 1.5.8", reference)          # (v0.25.6 added 1.5.8)
+        self.assertIn("目前 1.5.3、1.5.6、1.5.7 與 1.5.8", flat(raw("GLOSSARY.md")))          # (v0.25.6 added 1.5.8)
 
     def test_the_guard_rule_and_the_test_files_exist(self):
         text = (ROOT / "tests" / "test_autonomy_guard.py").read_text(encoding="utf-8")

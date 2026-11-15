@@ -111,8 +111,16 @@ CODEX_SOURCES = {"0.160.0": _CODEX, "0.163.0": _CODEX, "0.167.0": _CODEX}
 # version, and the counting of 1.5.6 cannot tell whether they are new, so they are not added (docs/evidence/agy-1.5.7-chat.md, section 3).
 _AGY_1_5_6 = {"paths": ("etc/antigravity", "Library/Application Support/Antigravity"), "domain": "com.google.antigravity",
               "home_paths": (), "unconfirmed": ("Library/Application Support/Antigravity",)}
+# 1.5.8 (v0.25.6): the 1.5.6 list again, unchanged. The strings of the real 1.5.8 (counted on 2026-11-13, the program was not run for them) hold the same
+# two places (/etc/antigravity/admin_settings.json once, /Library/Application Support/Antigravity once), the same com.google.antigravity domain
+# (10 in the same counting as 1.5.7's; the three longer com.google.antigravity.* names of 1.5.7 are there still and are still not added), no new
+# place, no new ANTIGRAVITY_* name. What grew is what an administrator can control through those
+# same places: an ``authControls`` section of the same admin_settings.json (consumer login, the workload-identity provider, the Google Cloud project and
+# location, the licence type), a web-fetch switch, a remote-control switch and a ceiling on the permission preset, plus the controls the server hands
+# over (``FetchAdminControls``, already in 1.5.7). A local source that exists is refused whatever it contains, so a new field inside an existing
+# source needs no new entry; the server-fetched controls are the residual SECURITY-MODEL already names (docs/evidence/agy-1.5.8-chat.md, section 3).
 AGY_SOURCES = {"1.5.3": {"paths": ("etc/antigravity",), "domain": "com.google.antigravity", "home_paths": ()},
-               "1.5.6": _AGY_1_5_6, "1.5.7": dict(_AGY_1_5_6)}
+               "1.5.6": _AGY_1_5_6, "1.5.7": dict(_AGY_1_5_6), "1.5.8": dict(_AGY_1_5_6)}
 
 
 @dataclass

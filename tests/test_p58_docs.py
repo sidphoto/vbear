@@ -49,10 +49,10 @@ class DocumentsTests(unittest.TestCase):
 
     def test_the_changelog_has_this_release_and_the_version_is_the_release(self):
         import vbear
-        self.assertTrue(self.changelog.startswith("# Changelog\n\n## v0.25.5 — "), self.changelog[:60])
+        self.assertTrue(self.changelog.startswith("# Changelog\n\n## v0.25.6 — "), self.changelog[:60])
         self.assertLess(self.changelog.index("## v0.25.4"), self.changelog.index("## v0.25.3"))
         self.assertLess(self.changelog.index("## v0.25.3"), self.changelog.index("## v0.25.2"))
-        self.assertEqual(vbear.__version__, "0.25.5")      # (it was 0.25.3 before v0.25.4 was put in front of it, and 0.25.4 before v0.25.5)
+        self.assertEqual(vbear.__version__, "0.25.6")      # (it was 0.25.3 before v0.25.4 was put in front of it, 0.25.4 before v0.25.5, and 0.25.5 before v0.25.6)
         self.assertNotIn("Unreleased", self.first)
         self.assertEqual(problems(self.first, "CHANGELOG v0.25.3"), [])
 
@@ -74,9 +74,10 @@ class DocumentsTests(unittest.TestCase):
             self.assertIn(part, self.model, part)
         self.assertEqual(problems(self.model, "SECURITY-MODEL v0.25.3"), [])
         after = self.security[self.security.index("## An employee knows its own name (v0.25.3)") + 5:]
-        self.assertEqual(after.count("\n## "), 2, "v0.25.3's is followed by v0.25.4's and v0.25.5's sections only")       # (v0.25.4 added 「Display-only version cache (v0.25.4)」, v0.25.5 「New versions of Claude Code and AGY (v0.25.5)」)
+        self.assertEqual(after.count("\n## "), 3, "v0.25.3's is followed by v0.25.4's, v0.25.5's and v0.25.6's sections only")       # (v0.25.4 added 「Display-only version cache (v0.25.4)」, v0.25.5 「New versions of Claude Code and AGY (v0.25.5)」)
         self.assertIn("\n## Display-only version cache (v0.25.4)", after)
         self.assertIn("\n## New versions of Claude Code and AGY (v0.25.5)", after)
+        self.assertIn("\n## AGY 1.5.8 (v0.25.6)", after)
 
     def test_the_glossary_has_the_new_word(self):
         self.assertIn("**身分段**：", self.glossary)
