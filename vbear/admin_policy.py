@@ -119,8 +119,14 @@ _AGY_1_5_6 = {"paths": ("etc/antigravity", "Library/Application Support/Antigrav
 # location, the licence type), a web-fetch switch, a remote-control switch and a ceiling on the permission preset, plus the controls the server hands
 # over (``FetchAdminControls``, already in 1.5.7). A local source that exists is refused whatever it contains, so a new field inside an existing
 # source needs no new entry; the server-fetched controls are the residual SECURITY-MODEL already names (docs/evidence/agy-1.5.8-chat.md, section 3).
+# 1.5.9 (v0.26.1): the 1.5.6 list again, unchanged. The strings of the real 1.5.9 (counted on 2026-11-15; the program was run only to the "Authentication
+# required" answer, never signed in) hold the same two places (/etc/antigravity/admin_settings.json once, /Library/Application Support/Antigravity once), the
+# same com.google.antigravity domain (14 in the second counting of 1.5.8's file; the three longer com.google.antigravity.* names are there still and are still
+# not added), no new place and no new domain. The text that follows the /etc/antigravity path now names a ``models.list`` field of the same file: a field inside
+# an existing source, which is refused whatever it holds. The server-fetched controls are the residual SECURITY-MODEL already names (docs/evidence/agy-1.5.9-chat.md,
+# section 3).
 AGY_SOURCES = {"1.5.3": {"paths": ("etc/antigravity",), "domain": "com.google.antigravity", "home_paths": ()},
-               "1.5.6": _AGY_1_5_6, "1.5.7": dict(_AGY_1_5_6), "1.5.8": dict(_AGY_1_5_6)}
+               "1.5.6": _AGY_1_5_6, "1.5.7": dict(_AGY_1_5_6), "1.5.8": dict(_AGY_1_5_6), "1.5.9": dict(_AGY_1_5_6)}
 
 
 @dataclass

@@ -440,10 +440,10 @@ class VerifierKeepsTests(KeptCase):
         self.assertEqual(self.names(), [])
 
     def test_an_agy_that_changed_version_before_the_copy_is_not_copied(self):
-        self.install_agy("1.5.9")
+        self.install_agy("1.6.0")
         status = self.verify("1.5.8")
         self.assertEqual(status["result"], "error")
-        self.assertIn("1.5.9", status["message"])
+        self.assertIn("1.6.0", status["message"])
         self.assertEqual(self.runs, [], "no check was started")
         self.assertEqual(self.names(), [])
 
@@ -485,7 +485,7 @@ class ChooseTests(KeptCase):
     def setUp(self):
         super().setUp()
         self.path = self.keep("1.5.7")
-        self.install_agy("1.5.9", folder=self.bindir)             # AGY updated itself to a version VBear does not know
+        self.install_agy("1.6.0", folder=self.bindir)             # AGY updated itself to a version VBear does not know
 
     def pin(self, **kw):
         return env.pinned_binary(str(self.bindir), base=self.state, **kw)
@@ -649,9 +649,9 @@ class PinnedKeptTests(KeptCase):
         self.assertEqual((got.binary, got.version, got.kept, got.installed), (os.path.realpath(installed), "1.5.8", False, None))
 
     def test_a_version_vbear_does_not_know_is_replaced_by_the_kept_copy(self):
-        self.install_agy("1.5.9")
+        self.install_agy("1.6.0")
         got = self.pin()
-        self.assertEqual((got.binary, got.version, got.kept, got.installed), (str(self.path), "1.5.7", True, "1.5.9"))
+        self.assertEqual((got.binary, got.version, got.kept, got.installed), (str(self.path), "1.5.7", True, "1.6.0"))
         self.assertEqual(got.identity, env.cli_identity(str(self.path)))
 
     def test_a_known_version_that_never_passed_is_replaced_too(self):
@@ -660,35 +660,35 @@ class PinnedKeptTests(KeptCase):
         self.assertEqual((got.version, got.kept, got.installed), ("1.5.7", True, "1.5.8"))
 
     def test_without_a_state_folder_nothing_is_kept(self):
-        self.install_agy("1.5.9")
+        self.install_agy("1.6.0")
         exc = self.refused("unsupported", base=None)
-        self.assertEqual(exc.version, "1.5.9")
+        self.assertEqual(exc.version, "1.6.0")
         self.install_agy("1.5.8")
         self.refused("unverified", base=None)
 
     def test_no_agy_an_unsafe_one_or_one_without_a_readable_version_is_never_replaced(self):
         self.refused("not_installed")
-        agy = self.install_agy("1.5.9")
+        agy = self.install_agy("1.6.0")
         agy.chmod(0o722)
         self.refused("unsafe_binary")
         agy.chmod(0o700)
-        agy.write_text(f"#!{sys.executable}\nprint('agy 1.5.9')\n")
+        agy.write_text(f"#!{sys.executable}\nprint('agy 1.6.0')\n")
         self.refused("version_unreadable")
-        self.install_agy("1.5.9")
+        self.install_agy("1.6.0")
         self.assertEqual(self.pin().kept, True, "and with a good AGY on the path the copy is used")
 
     def test_the_newest_good_copy_is_the_one(self):
         self.keep("1.5.6")
         self.keep("1.5.8")
-        self.install_agy("1.5.9")
+        self.install_agy("1.6.0")
         self.assertEqual(self.pin().version, "1.5.8")
 
     def test_a_bad_copy_leaves_the_original_refusal(self):
-        self.install_agy("1.5.9")
+        self.install_agy("1.6.0")
         self.tamper(self.path)
         exc = self.refused("unsupported")
-        self.assertEqual(exc.version, "1.5.9")
-        self.assertIn("1.5.9", str(exc))
+        self.assertEqual(exc.version, "1.6.0")
+        self.assertIn("1.6.0", str(exc))
 
 
 class StatusKeptTests(KeptCase):
@@ -699,10 +699,10 @@ class StatusKeptTests(KeptCase):
 
     def test_ready_on_the_kept_version_with_the_installed_one_named(self):
         self.keep("1.5.7")
-        self.install_agy("1.5.9")
+        self.install_agy("1.6.0")
         out = self.status()
         self.assertEqual((out["state"], out["version"], out["verified"], out["why"]), ("ready", "1.5.7", True, ""), out)
-        self.assertEqual(out["kept"], {"using": "1.5.7", "installed": "1.5.9", "installed_state": "unsupported"})
+        self.assertEqual(out["kept"], {"using": "1.5.7", "installed": "1.6.0", "installed_state": "unsupported"})
         self.assertEqual(set(out), self.KEYS | {"kept"})
         self.assertNotIn(str(self.tmp), json.dumps(out), "no path in the answer")
         self.install_agy("1.5.8")
@@ -714,13 +714,13 @@ class StatusKeptTests(KeptCase):
         out = self.status()
         self.assertEqual((out["state"], out["version"]), ("ready", "1.5.8"))
         self.assertEqual(set(out), self.KEYS)
-        self.install_agy("1.5.9")
+        self.install_agy("1.6.0")
         out = self.status()
-        self.assertEqual((out["state"], out["version"], out["kept"] if "kept" in out else None), ("unsupported", "1.5.9", None))
+        self.assertEqual((out["state"], out["version"], out["kept"] if "kept" in out else None), ("unsupported", "1.6.0", None))
 
     def test_the_other_states_still_come_first_for_the_version_that_runs(self):
         self.keep("1.5.7")
-        self.install_agy("1.5.9")
+        self.install_agy("1.6.0")
         self.write_private(self.home / ".agents" / "hooks.json", "{}")
         self.assertEqual(self.status()["state"], "hooks")
         (self.home / ".agents" / "hooks.json").unlink()
@@ -730,7 +730,7 @@ class StatusKeptTests(KeptCase):
 
     def test_a_caller_cannot_change_the_cached_answer(self):
         self.keep("1.5.7")
-        self.install_agy("1.5.9")
+        self.install_agy("1.6.0")
         with mock.patch.object(env, "CACHE_TTL_S", 30.0):
             first = self.status()
             first["kept"]["using"] = "9.9.9"
@@ -738,10 +738,10 @@ class StatusKeptTests(KeptCase):
 
     def test_tampered_copy_means_the_plain_refusal(self):
         path = self.keep("1.5.7")
-        self.install_agy("1.5.9")
+        self.install_agy("1.6.0")
         self.tamper(path)
         out = self.status()
-        self.assertEqual((out["state"], out["version"]), ("unsupported", "1.5.9"))
+        self.assertEqual((out["state"], out["version"]), ("unsupported", "1.6.0"))
         self.assertNotIn("kept", out)
 
 
@@ -802,7 +802,7 @@ class ServiceKeptTests(KeptCase):
 
     def test_the_binary_the_service_names_is_the_kept_copy(self):
         path = self.keep("1.5.7")
-        self.install_agy("1.5.9")
+        self.install_agy("1.6.0")
         svc = self.chat_service.ChatService(None, base=self.state)
         with mock.patch("vbear.runtime.daemon.cli_search_path", return_value=str(self.bindir)):
             self.assertEqual(svc.agy_binary(), (str(path), "1.5.7"))
@@ -824,18 +824,18 @@ class ServiceKeptTests(KeptCase):
         self.assertEqual(started, [("", "1.5.8")])
         self.assertNotIn("already_verified", out)
         with self.assertRaises(ApiError) as ctx:
-            svc._verify_agy("1.5.9")
+            svc._verify_agy("1.6.0")
         self.assertEqual(ctx.exception.code, "version_changed")
 
     def test_an_installed_version_vbear_does_not_know_has_nothing_to_check(self):
         class Stub:
             def start(self, binary, version):
                 raise AssertionError("started")
-        kept_state = {"state": "ready", "version": "1.5.7", "verified": True, "kept": {"using": "1.5.7", "installed": "1.5.9", "installed_state": "unsupported"}}
+        kept_state = {"state": "ready", "version": "1.5.7", "verified": True, "kept": {"using": "1.5.7", "installed": "1.6.0", "installed_state": "unsupported"}}
         with self.assertRaises(ApiError) as ctx:
             self.service(kept_state, Stub())._verify_agy(None)
         self.assertEqual(ctx.exception.code, "agy_version")
-        self.assertIn("1.5.9", str(ctx.exception))
+        self.assertIn("1.6.0", str(ctx.exception))
 
 
 class DaemonKeptTests(AgyCase):

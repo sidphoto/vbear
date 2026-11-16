@@ -1571,3 +1571,111 @@ class AgyTracker:
         self.requests[rid] = {"call_id": cid, "action": action, "options": shown}
         out.append(("permission_request", data))
         return out
+
+
+# AGY 1.5.9 (v0.26.1): the protocol constants are 1.5.8's, the path table and the hash table are its own. The real 1.5.9 was looked at on 2026-11-15 without
+# logging in (docs/evidence/agy-1.5.9-chat.md): initialize answers the same fields the code reads (protocolVersion 1, resume among the session
+# capabilities), session/new says "Authentication required" as before, the flags the chat passes are all in agy acp --help, and the folder it wrote
+# is 1.5.8's 64 paths plus ONE new skill, the folder skills/swarm_pane with its SKILL.md (66 paths: 43 files and 23 folders). No copy of 1.5.8's
+# helps or of its initialize answer was kept, so those are NOT compared byte for byte (the evidence file says so). 5 of the 43 files have bytes 1.5.8
+# did not write (.checksum, .manifest, swarm_board/app.js, swarm_board/hive.js, native_swarm/SKILL.md), plus the new file; the other 37 are
+# 1.5.8's, byte for byte. The new file ends in .md, which is not in builtin_runnable, so that list stays; the two changed .js files are pinned
+# by hash like every file of the folder. The path table belongs to 1.5.9 alone (agy_chat_env.builtin_table reads it for the version about to start:
+# a 1.5.8 start refuses the new skill); only hashes are shared among known versions (ADR 0018). Not shown without a login, and left to the chat check on
+# the person's Mac: the answer of a signed-in session/new, the permission requests and tool calls, the usage fields, and what AGY makes in its folder
+# after a command ran.
+_V1_5_8 = VERSIONS["1.5.8"]
+VERSIONS["1.5.9"] = dataclasses.replace(
+    _V1_5_8,
+    version="1.5.9",
+    builtin_paths=_V1_5_8.builtin_paths[:_V1_5_8.builtin_paths.index("skills/swarm_narrator/SKILL.md") + 1]
+    + ("skills/swarm_pane", "skills/swarm_pane/SKILL.md")
+    + _V1_5_8.builtin_paths[_V1_5_8.builtin_paths.index("skills/swarm_narrator/SKILL.md") + 1:],
+    builtin_sha256=(
+        (".checksum",
+         "8008d858ee78e1dd93b294a9bf4ed5758d88859d2ee589f6c5f82273c1747bdb"),
+        (".manifest",
+         "c81ce43b06ba8fa5f6fe970dfcf4408f554d0e733f63fbf4a65455c528f2105d"),
+        ("keep.txt",
+         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+        ("plugins/swarm/README.md",
+         "c68343f0d00d128571ef601acd6e9b0704847e10fb5962512868874c5eddcb7d"),
+        ("plugins/swarm/assets/logo.svg",
+         "424d3cd0c6765a1d4cf2a7ebcd62bceb7e9ca1cbfa8429696618e708f73cf11a"),
+        ("plugins/swarm/plugin.json",
+         "376e9002b623b8040310496fd65942a256ffdfd41dbac902146d7485c21510d7"),
+        ("plugins/swarm/sidecars/swarm_board/README.md",
+         "66d43bfe5bad2576563adde2985f4c805e59b548ab9de94b732739f1a943f380"),
+        ("plugins/swarm/sidecars/swarm_board/app.js",
+         "4be222865680ea64bb19510966b747815e75f29ebe82b199a0280d34822697be"),
+        ("plugins/swarm/sidecars/swarm_board/channels.mjs",
+         "30d0a8f646ef69fa3e07a16197e95dae9f90bd4002fc2be09ef3f78ab16bfc02"),
+        ("plugins/swarm/sidecars/swarm_board/hive.css",
+         "ab7cb22e297be62a7a817a0c420cb470122c766abf44a3319b875ec754ad2f42"),
+        ("plugins/swarm/sidecars/swarm_board/hive.js",
+         "ae5308ed8040d8cd2fd74b73f3ab03d706bb872f170a7c38bd5984a8bd525116"),
+        ("plugins/swarm/sidecars/swarm_board/index.html",
+         "16faae3b703f62cebd2b226678cfec173975333e64e8b707b356e352d8fff2ec"),
+        ("plugins/swarm/sidecars/swarm_board/main.mjs",
+         "18775901de1c90b99b7bd9ba6ea4dde89bd906efc31dc17b55843e066528c424"),
+        ("plugins/swarm/sidecars/swarm_board/narrator_bootstrap.js",
+         "1a31f8c2f623a0f05eccccc588d9fabb0a6bc088ca77caf3806ce1854c41c4a7"),
+        ("plugins/swarm/sidecars/swarm_board/package.json",
+         "3fd619df42459ea6537017d4d0a67a8d1e5ebc889c2bcc82fd151dc893559d34"),
+        ("plugins/swarm/sidecars/swarm_board/sidecar.json",
+         "025741e4fcff65af30ef0be5fd823a77387d636827e9582e7ff715242a8c2ca4"),
+        ("plugins/swarm/sidecars/swarm_board/styles.css",
+         "5752c74d5aecd40945552836025a6a28e7543e7c084586bfa0acfcd045f408c3"),
+        ("skills/agy-customizations/SKILL.md",
+         "79c8885e76ce449e82016b37b53dfcc3ff5afefd90a23ea83b24148f41f33fa1"),
+        ("skills/agy-customizations/docs/hooks.md",
+         "2c3603854bcfd8e662cd44d2c1ddecb8621f2a65d5e823baace037588198df5a"),
+        ("skills/agy-customizations/docs/json_configs.md",
+         "c15221be619c411058179fb1da85195894e33502dd074eba64e6a609572488b6"),
+        ("skills/agy-customizations/docs/mcp_servers.md",
+         "7e34d5924e3574a60b75e8972d121de6923a3e7b9248c3c95434f26823fe18cf"),
+        ("skills/agy-customizations/docs/plugins.md",
+         "6dc3064ac51957d0c3ade9aa9fb62f546f0ae64334a7653fab993598b69903a4"),
+        ("skills/agy-customizations/docs/rules.md",
+         "063ab1c908fae4798d9a1f5981ed57b7570a860ceb0e5850816aefddf72b8b54"),
+        ("skills/agy-customizations/docs/skills.md",
+         "c4eba3bc9a8775928704d1b7feede20871b25f8d427c6cd6757b7edd54b3ae60"),
+        ("skills/antigravity_guide/SKILL.md",
+         "9fc5f6570e91dd792dab582d4e1cc7e7bd25b303c1583c6f118a07ec6bb3dd1d"),
+        ("skills/antigravity_guide/references/app.md",
+         "f8ee3279082ab9d0b2ef5cdc57484336994400c84f51b74cdc4b9bd04f515905"),
+        ("skills/antigravity_guide/references/cli.md",
+         "1499e0ac083227b88e74373d46672afccd1ffe31d0a5136bcc352fe72c582d2a"),
+        ("skills/antigravity_guide/references/ide.md",
+         "e3da87b168f25f229a14a4547d7833e8e49191f1a85346f463c01f886a64693d"),
+        ("skills/antigravity_guide/references/sdk.md",
+         "a20587f3cedf7b8c6f7501f71fc7985d76c64007f7581690f68c0ffdc4357560"),
+        ("skills/automation/SKILL.md",
+         "43f296abc2f206dc625669d38035be3b61a46cad1596b27dbf1134d30cf8d36b"),
+        ("skills/generative_ui/SKILL.md",
+         "d073ec25e2091c3f76fbaa4fe345e54c2ea2377a08b3a330619b075d371c5987"),
+        ("skills/mcp-app-development/SKILL.md",
+         "617266d5c4946facbf8b7197880a409df530d824231fde2a642b3db282eb0af8"),
+        ("skills/migrate-agent-settings/SKILL.md",
+         "179abf9a34f9885d45a02da91388933080cd69a5b960428a037c940936e2bf41"),
+        ("skills/migrate-workflows/SKILL.md",
+         "ee8b18d875bba52c024c609f8cbdaf5bbf60396e0f826944c38ce191590cb787"),
+        ("skills/native_swarm/SKILL.md",
+         "5232a7982b95ce5cfc3e5c7f503af08f9006218d6f86a9f751d95289dfa80f96"),
+        ("skills/native_swarm/logo.svg",
+         "424d3cd0c6765a1d4cf2a7ebcd62bceb7e9ca1cbfa8429696618e708f73cf11a"),
+        ("skills/permissioned-github/SKILL.md",
+         "5779716732c7a75681aa980c76355ae8b675f881e742b74f93e4be14b4abfc9d"),
+        ("skills/plugin/SKILL.md",
+         "61d4b73a11a2c14a88d909454f8fa435b6606b875d28b270b9267f7923866dfe"),
+        ("skills/run-workflow/SKILL.md",
+         "4a524107cb6173d75a54c2a7de3addeb413d7bdb868c8279682ded74672beb1e"),
+        ("skills/swarm_monitor/SKILL.md",
+         "eec457f3f332db4b7d472a29dc61a8140304a9058aabcceb624e3e8b12b2894f"),
+        ("skills/swarm_narrator/SKILL.md",
+         "99b3200be99796e6377d3d8f32a283439f2d42afd3f1a418f49d1222bf5b289f"),
+        ("skills/swarm_pane/SKILL.md",
+         "98e5e8c7b8e062be14ccd35781204e2abae79ab4b9812613cad947712c154c4d"),
+        ("skills/ui-plugin-navigation/SKILL.md",
+         "79ec8489d201382989061aab44dfd42ad5f586d88621b867bdca90284bd62af5"),
+    ))
